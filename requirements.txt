@@ -1,0 +1,11 @@
+# Core dependencies (none required for basic functionality)
+
+# Visualization (optional)
+plotly>=5.0.0
+
+# CUDA timing (optional)
+# torch>=2.0.0
+
+# Development
+pytest>=7.0.0
+pytest-cov>=4.0.0
