@@ -155,3 +155,7 @@ with tracer.step("gpu_compute", StepType.PREFILL):
 ## License
 
 Apache 2.0
+
+## Acknowledgement
+This project is supported by the Advanced Research and Invention
+Agency (ARIA)’s grant “Scaling Compute: AI at 1/1000th the cost. Technical Area 4 Benchmarking”.
