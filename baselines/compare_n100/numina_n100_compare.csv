@@ -1,0 +1,4 @@
+label,avg_output_tokens,avg_question_tokens,em_correct,em_mean,lat_mean_ms,lat_p50_ms,lat_p95_ms,max_output_tokens,model_id,n,tool_call_rate,tool_calls_total,trace_dir,truncated_count,workload
+no-tool,4341.6,87.44,46,0.46,26170.48565778765,13209.305115044117,101482.14201324736,16384.0,Qwen/Qwen3-30B-A3B,100,0.0,0,baselines/numina_no-tool_n100_runs,6,numina split=test (n=100) | mode=no-tool | skeleton=0ms
+tool-auto,4074.58,87.44,50,0.5,24876.120574373053,12062.813255004585,93184.16533555718,32768.0,Qwen/Qwen3-30B-A3B,100,0.28,163,baselines/numina_auto_tool_n100_runs,3,numina split=test (n=100) | mode=tool | skeleton=0ms
+tool-required,4633.85,87.44,24,0.24,28207.499111237703,12143.741744454019,102017.17875894974,16413.0,Qwen/Qwen3-30B-A3B,100,0.89,89,baselines/numina_tool_required_n100_runs,11,numina split=test (n=100) | mode=tool | skeleton=0ms

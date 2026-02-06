@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "24cc544a",
+  "start_time": "2026-02-05T03:06:02.613227",
+  "end_time": "2026-02-05T03:06:30.758915",
+  "total_duration_ms": 28145.674995030276,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.2440024875104427e-05,
+      "end_time": 1.592002809047699e-05,
+      "duration_ms": 0.0034800032153725624,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.004997804760933e-05,
+      "end_time": 2.291100099682808e-05,
+      "duration_ms": 0.00286102294921875,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.637098077684641e-05,
+      "end_time": 2.9471004381775856e-05,
+      "duration_ms": 0.003100023604929447,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.28009482473135e-05,
+      "end_time": 3.537104930728674e-05,
+      "duration_ms": 0.00257010105997324,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0005852309986948967,
+      "end_time": 0.30487398302648216,
+      "duration_ms": 304.28875202778727,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 510,
+        "completion_tokens": 41,
+        "total_tokens": 551,
+        "elapsed_ms": 304.27062103990465,
+        "tool_calls_n": 1
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 0.3048897930420935,
+      "end_time": 0.30500348494388163,
+      "duration_ms": 0.1136919017881155,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.10428205132484436
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 0.3050093549536541,
+      "end_time": 28.145404380047694,
+      "duration_ms": 27840.39502509404,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 563,
+        "completion_tokens": 4732,
+        "total_tokens": 5295,
+        "elapsed_ms": 27840.377434971742
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 28.145658134948462,
+      "end_time": 28.145668635028414,
+      "duration_ms": 0.010500079952180386,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 28.145673215040006,
+      "end_time": 28.145676465006545,
+      "duration_ms": 0.003249966539442539,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "24cc544a-1",
+      "step_id": "24cc544a-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 5.749985575675964e-06,
+      "end_time": 28.145680745015852,
+      "duration_ms": 28145.674995030276,
+      "metadata": {
+        "sample_id": 94,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 115,
+        "raw_output": "<think>\nOkay, let's try to solve this problem step by step. The question is about finding the minimum value of m (m > 0) such that when the graph of y = \u221a3 cos x + sin x is shifted left by m units, the resulting graph is symmetric about the y-axis. The options are given, but I need to figure it out.\n\nFirst, I remember that shifting a function left by m units means replacing x with x + m in the function. So the new function after shifting would be y = \u221a3 cos(x + m) + sin(x + m). For this new function to be symmetric about the y-axis, it must satisfy the condition f(-x) = f(x) for all x. That's the definition of an even function.\n\nSo, let's write that condition. The original function after shifting is f(x) = \u221a3 cos(x + m) + sin(x + m). Then, f(-x) should equal f(x). Let's compute f(-x):\n\nf(-x) = \u221a3 cos(-x + m) + sin(-x + m). \n\nBut cosine is even, so cos(-x + m) = cos(x - m), and sine is odd, so sin(-x + m) = sin(m - x) = sin(-(x - m)) = -sin(x - m). Therefore, f(-x) becomes \u221a3 cos(x - m) - sin(x - m).\n\nFor f(-x) to equal f(x), we need:\n\n\u221a3 cos(x - m) - sin(x - m) = \u221a3 cos(x + m) + sin(x + m).\n\nThis equation must hold for all x. Let's try to simplify this equation. Maybe we can use trigonometric identities to combine the terms.\n\nAlternatively, perhaps we can express the original function as a single sine or cosine function. That might make it easier. Let me recall that any expression of the form A cos x + B sin x can be written as C cos(x - \u03c6) or C sin(x + \u03c6), where C is the amplitude and \u03c6 is the phase shift.\n\nLet's try that. The original function is y = \u221a3 cos x + sin x. Let's find its amplitude and phase shift.\n\nThe amplitude C is \u221a( (\u221a3)^2 + 1^2 ) = \u221a(3 + 1) = \u221a4 = 2. So, the function can be written as 2 cos(x - \u03c6) or 2 sin(x + \u03c6). Let's find \u03c6.\n\nUsing the identity: A cos x + B sin x = C cos(x - \u03c6), where C = \u221a(A\u00b2 + B\u00b2), and tan \u03c6 = B/A. Wait, or is it tan \u03c6 = B/A? Let me check. Let's expand C cos(x - \u03c6) = C cos x cos \u03c6 + C sin x sin \u03c6. Comparing with A cos x + B sin x, we have A = C cos \u03c6 and B = C sin \u03c6. Therefore, tan \u03c6 = B/A. So here, A is \u221a3, B is 1. So tan \u03c6 = 1/\u221a3, which means \u03c6 = \u03c0/6. Therefore, the original function can be written as 2 cos(x - \u03c0/6). Let me verify:\n\n2 cos(x - \u03c0/6) = 2 [cos x cos(\u03c0/6) + sin x sin(\u03c0/6)] = 2 [cos x (\u221a3/2) + sin x (1/2)] = \u221a3 cos x + sin x. Yes, that's correct.\n\nSo the original function is y = 2 cos(x - \u03c0/6). Now, when we shift it left by m units, the new function becomes y = 2 cos( (x + m) - \u03c0/6 ) = 2 cos(x + m - \u03c0/6).\n\nFor this new function to be symmetric about the y-axis, it must be even. So, 2 cos(x + m - \u03c0/6) must be even. The cosine function is even, so cos(-x + m - \u03c0/6) should equal cos(x + m - \u03c0/6). Wait, but the function is 2 cos(x + m - \u03c0/6). For this to be even, we need:\n\ncos(-x + m - \u03c0/6) = cos(x + m - \u03c0/6) for all x.\n\nBut cos is even, so cos(-x + m - \u03c0/6) = cos(x - m + \u03c0/6). So we need:\n\ncos(x - m + \u03c0/6) = cos(x + m - \u03c0/6) for all x.\n\nWhen is cos(\u03b1) = cos(\u03b2) for all x? Well, the cosine function is equal when their arguments differ by a multiple of 2\u03c0 or are negatives of each other plus multiples of 2\u03c0. However, since this must hold for all x, the only way this can be true is if the arguments are equal up to a multiple of 2\u03c0, but since x is arbitrary, the coefficients of x must match, and the constants must differ by a multiple of 2\u03c0.\n\nWait, let's think. Let me denote \u03b1 = x - m + \u03c0/6 and \u03b2 = x + m - \u03c0/6. For cos(\u03b1) = cos(\u03b2) for all x, we need that \u03b1 = \u03b2 + 2\u03c0k or \u03b1 = -\u03b2 + 2\u03c0k for some integer k, for all x. But since this must hold for all x, the coefficients of x must be equal.\n\nLooking at \u03b1 = x - m + \u03c0/6 and \u03b2 = x + m - \u03c0/6.\n\nCase 1: \u03b1 = \u03b2 + 2\u03c0k. Then:\n\nx - m + \u03c0/6 = x + m - \u03c0/6 + 2\u03c0k.\n\nSimplify: -m + \u03c0/6 = m - \u03c0/6 + 2\u03c0k.\n\nBring terms together: -2m + \u03c0/3 = 2\u03c0k.\n\nSo, -2m = 2\u03c0k - \u03c0/3 \u2192 m = (\u03c0/3 - 2\u03c0k)/2 = \u03c0/6 - \u03c0k.\n\nSince m > 0, we need \u03c0/6 - \u03c0k > 0 \u2192 \u03c0k < \u03c0/6 \u2192 k < 1/6. Since k is an integer, the possible k values are k \u2264 0. Let's take k=0: m = \u03c0/6. For k=-1: m = \u03c0/6 - (-\u03c0) = \u03c0/6 + \u03c0 = 7\u03c0/6, which is larger. So the minimal positive m here is \u03c0/6.\n\nCase 2: \u03b1 = -\u03b2 + 2\u03c0k. Then:\n\nx - m + \u03c0/6 = -x - m + \u03c0/6 + 2\u03c0k.\n\nSimplify: x - m + \u03c0/6 = -x - m + \u03c0/6 + 2\u03c0k.\n\nBring like terms: x + x = 2\u03c0k \u2192 2x = 2\u03c0k \u2192 x = \u03c0k. But this must hold for all x, which is only possible if k=0 and x=0, but since it's supposed to hold for all x, this case is impossible. Therefore, only Case 1 is valid.\n\nTherefore, the minimal m is \u03c0/6. But wait, the options include A: \u03c0/6, which would be the answer. However, let me check if there's a mistake here.\n\nWait, but the original function after shifting is 2 cos(x + m - \u03c0/6). For this to be even, it must satisfy 2 cos(-x + m - \u03c0/6) = 2 cos(x + m - \u03c0/6). Which simplifies to cos(-x + m - \u03c0/6) = cos(x + m - \u03c0/6). Which is equivalent to cos(x - m + \u03c0/6) = cos(x + m - \u03c0/6). So the same as before.\n\nBut another way to think about it is that the function 2 cos(x + m - \u03c0/6) is even if the argument is symmetric around x=0. The cosine function is even, so if the argument is an even function, then the whole function is even. But the argument here is x + (m - \u03c0/6). For this to be even, the argument must be an even function. But x + c is even only if c=0, which would require m - \u03c0/6 = 0 \u2192 m = \u03c0/6. Wait, that's another way to see it. Because if the argument is x + c, then for cos(x + c) to be even, we need cos(-x + c) = cos(x + c). Which implies that cos(-x + c) = cos(x + c). Which would require that -x + c = x + c + 2\u03c0k or -x + c = -x - c + 2\u03c0k. The first case: -x + c = x + c + 2\u03c0k \u2192 -2x = 2\u03c0k \u2192 x = -\u03c0k. Which must hold for all x, impossible. The second case: -x + c = -x - c + 2\u03c0k \u2192 2c = 2\u03c0k \u2192 c = \u03c0k. So c must be a multiple of \u03c0. Therefore, m - \u03c0/6 = \u03c0k \u2192 m = \u03c0k + \u03c0/6. Since m > 0, the smallest positive m is when k=0: m=\u03c0/6. So that's the same result as before. Therefore, the answer should be A: \u03c0/6.\n\nBut wait, the options given are A: \u03c0/6, B: \u03c0/12, C: \u03c0/3, D: 5\u03c0/6. So according to this, the answer is A. But I need to check if there's a mistake in my reasoning.\n\nAlternatively, maybe I made a mistake in converting the original function. Let me recheck that step. The original function is \u221a3 cos x + sin x. Let me confirm that it's 2 cos(x - \u03c0/6). Let's compute 2 cos(x - \u03c0/6):\n\ncos(x - \u03c0/6) = cos x cos \u03c0/6 + sin x sin \u03c0/6 = cos x (\u221a3/2) + sin x (1/2). Multiply by 2: \u221a3 cos x + sin x. Correct. So that's right.\n\nThen shifting left by m units gives 2 cos(x + m - \u03c0/6). For this to be even, as we saw, m must be \u03c0/6. So the answer is A. But let me check the options again. The options are A: \u03c0/6, which is 30 degrees. But maybe there's a different approach.\n\nAlternatively, maybe the problem is about the function after shifting being symmetric about the y-axis. So the function f(x) = \u221a3 cos(x + m) + sin(x + m) must satisfy f(-x) = f(x). Let's compute f(-x):\n\nf(-x) = \u221a3 cos(-x + m) + sin(-x + m) = \u221a3 cos(x - m) - sin(x - m). \n\nSet this equal to f(x) = \u221a3 cos(x + m) + sin(x + m). So:\n\n\u221a3 cos(x - m) - sin(x - m) = \u221a3 cos(x + m) + sin(x + m).\n\nLet me expand both sides using trigonometric identities.\n\nLeft side: \u221a3 [cos x cos m + sin x sin m] - [sin x cos m - cos x sin m] \n\n= \u221a3 cos x cos m + \u221a3 sin x sin m - sin x cos m + cos x sin m.\n\nRight side: \u221a3 [cos x cos m - sin x sin m] + [sin x cos m + cos x sin m]\n\n= \u221a3 cos x cos m - \u221a3 sin x sin m + sin x cos m + cos x sin m.\n\nNow, set left side equal to right side:\n\n\u221a3 cos x cos m + \u221a3 sin x sin m - sin x cos m + cos x sin m = \u221a3 cos x cos m - \u221a3 sin x sin m + sin x cos m + cos x sin m.\n\nSubtract \u221a3 cos x cos m and cos x sin m from both sides:\n\n\u221a3 sin x sin m - sin x cos m = -\u221a3 sin x sin m + sin x cos m.\n\nBring all terms to the left:\n\n\u221a3 sin x sin m - sin x cos m + \u221a3 sin x sin m - sin x cos m = 0.\n\nCombine like terms:\n\n(\u221a3 sin x sin m + \u221a3 sin x sin m) + (- sin x cos m - sin x cos m) = 0\n\n\u2192 2\u221a3 sin x sin m - 2 sin x cos m = 0.\n\nFactor out 2 sin x:\n\n2 sin x [\u221a3 sin m - cos m] = 0.\n\nThis equation must hold for all x. The only way this is true is if the coefficient of sin x is zero. So:\n\n\u221a3 sin m - cos m = 0 \u2192 \u221a3 sin m = cos m \u2192 tan m = 1/\u221a3 \u2192 m = \u03c0/6 + k\u03c0.\n\nSince m > 0, the smallest positive solution is m = \u03c0/6. So this confirms the previous result. Therefore, the answer is A: \u03c0/6.\n\nBut wait, the options include B: \u03c0/12. Maybe I made a mistake here. Let me check the calculation again.\n\nThe equation after expanding both sides led to 2 sin x [\u221a3 sin m - cos m] = 0. For this to be true for all x, the term in brackets must be zero. So \u221a3 sin m - cos m = 0 \u2192 \u221a3 sin m = cos m \u2192 tan m = 1/\u221a3. The solutions to tan m = 1/\u221a3 are m = \u03c0/6 + k\u03c0. The smallest positive m is \u03c0/6, which is option A. So the answer should be A. But maybe the problem is in the initial step of shifting?\n\nWait, the problem says the graph is shifted to the left by m units. So the function becomes y = \u221a3 cos(x + m) + sin(x + m). That's correct. Then the condition for symmetry about the y-axis is f(-x) = f(x). Which we did. So the calculation seems correct. Therefore, the answer is A. But I need to check if the options are correct. The options given are A: \u03c0/6, which is 30 degrees, and the answer is A. So why is there an option B: \u03c0/12? Maybe there's a mistake in the problem or in my reasoning.\n\nAlternatively, perhaps I should check with m = \u03c0/6. Let's test m = \u03c0/6. Then the function becomes \u221a3 cos(x + \u03c0/6) + sin(x + \u03c0/6). Let's compute this:\n\ncos(x + \u03c0/6) = cos x cos \u03c0/6 - sin x sin \u03c0/6 = (\u221a3/2 cos x - 1/2 sin x)\n\nsin(x + \u03c0/6) = sin x cos \u03c0/6 + cos x sin \u03c0/6 = (\u221a3/2 sin x + 1/2 cos x)\n\nMultiply by \u221a3 and 1 respectively:\n\n\u221a3 cos(x + \u03c0/6) = \u221a3*(\u221a3/2 cos x - 1/2 sin x) = (3/2 cos x - \u221a3/2 sin x)\n\nsin(x + \u03c0/6) = \u221a3/2 sin x + 1/2 cos x\n\nAdding them together:\n\n(3/2 cos x - \u221a3/2 sin x) + (\u221a3/2 sin x + 1/2 cos x) = (3/2 + 1/2) cos x + (-\u221a3/2 + \u221a3/2) sin x = 2 cos x + 0 = 2 cos x.\n\nSo the function becomes 2 cos x, which is indeed even, symmetric about the y-axis. So m = \u03c0/6 works. Therefore, the answer is A.\n\nBut why is there an option B? Maybe there's a different approach. Let me think again. Suppose I made a mistake in the phase shift. Let me try another method.\n\nAnother approach: The original function is y = \u221a3 cos x + sin x. We can write this as y = 2 cos(x - \u03c0/6) as before. Shifting left by m units gives y = 2 cos(x + m - \u03c0/6). For this to be even, it must satisfy 2 cos(x + m - \u03c0/6) = 2 cos(-x + m - \u03c0/6). Which simplifies to cos(x + m - \u03c0/6) = cos(-x + m - \u03c0/6). Which implies that x + m - \u03c0/6 = -x + m - \u03c0/6 + 2\u03c0k or x + m - \u03c0/6 = -(-x + m - \u03c0/6) + 2\u03c0k.\n\nFirst case: x + m - \u03c0/6 = -x + m - \u03c0/6 + 2\u03c0k \u2192 2x = 2\u03c0k \u2192 x = \u03c0k. This must hold for all x, which is only possible if k=0 and x=0, which isn't valid for all x. So no solution here.\n\nSecond case: x + m - \u03c0/6 = x - m + \u03c0/6 + 2\u03c0k \u2192 m - \u03c0/6 = -m + \u03c0/6 + 2\u03c0k \u2192 2m = \u03c0/3 + 2\u03c0k \u2192 m = \u03c0/6 + \u03c0k. Since m > 0, the smallest positive m is \u03c0/6 when k=0. So again, the answer is \u03c0/6. So this confirms it.\n\nTherefore, the correct answer is A: \u03c0/6. But I need to check the options again. The options given are A: \u03c0/6, B: \u03c0/12, C: \u03c0/3, D: 5\u03c0/6. So the answer should be A. However, sometimes there might be a mistake in the problem or in the options. But according to the calculations, A is correct.\n</think>\n\nTo determine the minimum value of $ m $ such that the graph of the function $ y = \\sqrt{3} \\cos x + \\sin x $, when shifted to the left by $ m $ units, becomes symmetric about the y-axis, we proceed as follows:\n\n---\n\n### Step 1: Express the Original Function in a Simplified Form\n\nWe start by rewriting the original function using a trigonometric identity:\n\n$$\ny = \\sqrt{3} \\cos x + \\sin x\n$$\n\nThis is of the form $ A \\cos x + B \\sin x $, which can be expressed as a single cosine function:\n\n$$\ny = R \\cos(x - \\phi)\n$$\n\nwhere:\n\n- $ R = \\sqrt{A^2 + B^2} = \\sqrt{(\\sqrt{3})^2 + 1^2} = \\sqrt{3 + 1} = 2 $\n- $ \\tan \\phi = \\frac{B}{A} = \\frac{1}{\\sqrt{3}} \\Rightarrow \\phi = \\frac{\\pi}{6} $\n\nSo the function becomes:\n\n$$\ny = 2 \\cos\\left(x - \\frac{\\pi}{6}\\right)\n$$\n\n---\n\n### Step 2: Apply the Left Shift\n\nShifting the graph to the left by $ m $ units means replacing $ x $ with $ x + m $, so the new function is:\n\n$$\nf(x) = 2 \\cos\\left(x + m - \\frac{\\pi}{6}\\right)\n$$\n\nFor the graph to be symmetric about the y-axis, the function must be **even**, i.e.,\n\n$$\nf(-x) = f(x)\n$$\n\nSo we require:\n\n$$\n2 \\cos\\left(-x + m - \\frac{\\pi}{6}\\right) = 2 \\cos\\left(x + m - \\frac{\\pi}{6}\\right)\n$$\n\nUsing the identity $ \\cos(-x) = \\cos x $, this simplifies to:\n\n$$\n\\cos\\left(x - m + \\frac{\\pi}{6}\\right) = \\cos\\left(x + m - \\frac{\\pi}{6}\\right)\n$$\n\n---\n\n### Step 3: Solve the Equation\n\nFor the equality $ \\cos A = \\cos B $ to hold for all $ x $, the arguments must differ by a multiple of $ 2\\pi $, or be negatives of each other plus a multiple of $ 2\\pi $. However, since the equality must hold for **all** $ x $, the only possibility is that the arguments are equal (up to a multiple of $ 2\\pi $):\n\n$$\nx - m + \\frac{\\pi}{6} = x + m - \\frac{\\pi}{6} + 2\\pi k\n$$\n\nSimplify:\n\n$$\n-2m + \\frac{\\pi}{3} = 2\\pi k\n\\Rightarrow m = \\frac{\\pi}{6} - \\pi k\n$$\n\nTo ensure $ m > 0 $, the smallest positive value occurs when $ k = 0 $, giving:\n\n$$\nm = \\frac{\\pi}{6}\n$$\n\n---\n\n### Step 4: Verify the Result\n\nLet\u2019s test $ m = \\frac{\\pi}{6} $:\n\n$$\nf(x) = 2 \\cos\\left(x + \\frac{\\pi}{6} - \\frac{\\pi}{6}\\right) = 2 \\cos x\n$$\n\nThis is clearly an even function, as $ \\cos(-x) = \\cos x $, so the graph is symmetric about the y-axis.\n\n---\n\n### Final Answer\n\n$$\n\\boxed{\\frac{\\pi}{6}}\n$$",
+        "pred": "\\frac{\\pi}{6}",
+        "gold": "A",
+        "em": 0,
+        "no_answer": 0,
+        "total_prompt_tokens": 1073,
+        "total_completion_tokens": 4773,
+        "total_tokens": 5846,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 1073,
+        "output_tokens": 4773
+      },
+      "parent_id": null,
+      "step_id": "24cc544a-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "24cc544a",
+    "total_steps": 10,
+    "total_duration_ms": 28145.674995030276,
+    "duration_by_type_ms": {
+      "planning": 0.0034800032153725624,
+      "reasoning": 0.003249966539442539,
+      "retrieval": 0.00286102294921875,
+      "tool_calling": 0.1136919017881155,
+      "code_execution": 0.010500079952180386,
+      "prefill": 0.00257010105997324,
+      "decode": 28144.683777121827,
+      "embedding": 0.003100023604929447,
+      "other": 28145.674995030276
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

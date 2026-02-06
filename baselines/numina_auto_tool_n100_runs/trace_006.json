@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "e7ca08ef",
+  "start_time": "2026-02-05T03:16:55.304895",
+  "end_time": "2026-02-05T03:17:07.693143",
+  "total_duration_ms": 12388.23412801139,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.3499986380338669e-05,
+      "end_time": 1.6749952919781208e-05,
+      "duration_ms": 0.003249966539442539,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.092996146529913e-05,
+      "end_time": 2.3799948394298553e-05,
+      "duration_ms": 0.002869986928999424,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6950030587613583e-05,
+      "end_time": 2.9349932447075844e-05,
+      "duration_ms": 0.002399901859462261,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.193994052708149e-05,
+      "end_time": 3.412994556128979e-05,
+      "duration_ms": 0.0021900050342082977,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0009220669744536281,
+      "end_time": 10.493274115025997,
+      "duration_ms": 10492.352048051544,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 530,
+        "completion_tokens": 1797,
+        "total_tokens": 2327,
+        "elapsed_ms": 10492.334137903526,
+        "tool_calls_n": 6
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 10.493288615951315,
+      "end_time": 10.493439208948985,
+      "duration_ms": 0.15059299767017365,
+      "metadata": {
+        "tool_calls_n": 6,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.14145206660032272
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 10.493445088970475,
+      "end_time": 12.388092614943162,
+      "duration_ms": 1894.6475259726867,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 2334,
+        "completion_tokens": 283,
+        "total_tokens": 2617,
+        "elapsed_ms": 1894.6287360740826
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 12.388215207960457,
+      "end_time": 12.388225947972387,
+      "duration_ms": 0.010740011930465698,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 12.388230997952633,
+      "end_time": 12.388234807993285,
+      "duration_ms": 0.0038100406527519226,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "e7ca08ef-1",
+      "step_id": "e7ca08ef-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.119953468441963e-06,
+      "end_time": 12.388240247964859,
+      "duration_ms": 12388.23412801139,
+      "metadata": {
+        "sample_id": 5,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 159,
+        "raw_output": "<think>\nOkay, let me go through the problem again to make sure I didn't miss anything. The class has 35 students. The breakdown is 20 paying full $50, 5 with 25% discount (so $37.50 each), 7 with half price ($25 each), and 3 with 10% discount ($45 each). Then there's a $100 fee.\n\nCalculating each group:\n- 20 * 50 = 1000\n- 5 * 37.50 = 187.50\n- 7 * 25 = 175\n- 3 * 45 = 135\n\nAdding those gives 1000 + 187.50 + 175 + 135 = 1497.50. Then subtract the $100 fee: 1497.50 - 100 = 1397.50. The calculations check out. The final amount is $1,397.50.\n</think>\n\nThe class gathered a total of $1,397.50 after accounting for all discounts and the administrative fee.\n\n\\boxed{1397.50}",
+        "pred": "1397.50",
+        "gold": "\\$1397.50",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 2864,
+        "total_completion_tokens": 2080,
+        "total_tokens": 4944,
+        "total_tool_calls": 6,
+        "input_tokens_prompt": 2864,
+        "output_tokens": 2080
+      },
+      "parent_id": null,
+      "step_id": "e7ca08ef-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "e7ca08ef",
+    "total_steps": 10,
+    "total_duration_ms": 12388.23412801139,
+    "duration_by_type_ms": {
+      "planning": 0.003249966539442539,
+      "reasoning": 0.0038100406527519226,
+      "retrieval": 0.002869986928999424,
+      "tool_calling": 0.15059299767017365,
+      "code_execution": 0.010740011930465698,
+      "prefill": 0.0021900050342082977,
+      "decode": 12386.99957402423,
+      "embedding": 0.002399901859462261,
+      "other": 12388.23412801139
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

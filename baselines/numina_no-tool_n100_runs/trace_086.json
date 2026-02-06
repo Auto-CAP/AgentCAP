@@ -1,0 +1,165 @@
+{
+  "name": "numina-no-tool-skeleton",
+  "trace_id": "8617d643",
+  "start_time": "2026-02-05T01:23:47.921650",
+  "end_time": "2026-02-05T01:23:50.252395",
+  "total_duration_ms": 2330.7286279741675,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.2801028788089752e-05,
+      "end_time": 1.6281032003462315e-05,
+      "duration_ms": 0.0034800032153725624,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "8617d643-1",
+      "step_id": "8617d643-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.0260922610759735e-05,
+      "end_time": 2.321100328117609e-05,
+      "duration_ms": 0.002950080670416355,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "8617d643-1",
+      "step_id": "8617d643-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6150955818593502e-05,
+      "end_time": 2.8470996767282486e-05,
+      "duration_ms": 0.002320040948688984,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "8617d643-1",
+      "step_id": "8617d643-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.110093530267477e-05,
+      "end_time": 3.3451011404395103e-05,
+      "duration_ms": 0.002350076101720333,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "8617d643-1",
+      "step_id": "8617d643-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode",
+      "step_type": "decode",
+      "start_time": 0.0011876859935000539,
+      "end_time": 2.3306782669387758,
+      "duration_ms": 2329.4905809452757,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 268,
+        "completion_tokens": 389,
+        "total_tokens": 657,
+        "elapsed_ms": 2329.326417995617,
+        "raw_output": "<think>\nOkay, let's see. The problem is about finding the number of ways to draw a fruit from a basket with 2 chances, considering the order. The basket has 1 apple, 1 peach, 1 pear, 1 melon, and 1 strawberry. So, there are 5 different fruits.\n\nWait, so when they say \"2 chances to draw,\" does that mean drawing two fruits one after the other? And since order matters, it's a permutation problem. But I need to make sure if the drawing is with replacement or without replacement. The problem doesn't specify, but since there's only one of each fruit, if you draw one, you can't draw it again. So probably without replacement.\n\nSo, the first draw has 5 possible fruits. Then, the second draw would have 4 remaining fruits. So the total number of ways would be 5 * 4 = 20. But let me think again. The question says \"draw a fruit\" but with 2 chances. Wait, maybe it's about two draws, each time drawing one fruit, and considering the order. So yes, permutations of 5 fruits taken 2 at a time. Which is 5P2 = 5*4=20. So the answer should be 20. But let me check if there's another interpretation.\n\nAlternatively, maybe \"draw a fruit\" in two chances could mean something else, like drawing two fruits at once, but since order matters, it's still permutations. But if it's with replacement, then it would be 5*5=25. But since there's only one of each fruit, replacement isn't possible. So without replacement, 5*4=20. So I think the answer is 20. So the final answer is \\boxed{20}.\n</think>\n\n\\boxed{20}",
+        "pred": "20",
+        "gold": "20",
+        "em": 1,
+        "no_answer": 0
+      },
+      "parent_id": "8617d643-1",
+      "step_id": "8617d643-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 2.33070324792061,
+      "end_time": 2.3307213579537347,
+      "duration_ms": 0.018110033124685287,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "8617d643-1",
+      "step_id": "8617d643-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 2.330726807937026,
+      "end_time": 2.330729968030937,
+      "duration_ms": 0.0031600939109921455,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "8617d643-1",
+      "step_id": "8617d643-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.121001206338406e-06,
+      "end_time": 2.330734748975374,
+      "duration_ms": 2330.7286279741675,
+      "metadata": {
+        "sample_id": 85,
+        "mode": "no-tool",
+        "dataset": "numina",
+        "question_tokens": 52,
+        "pred": "20",
+        "gold": "20",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 268,
+        "total_completion_tokens": 389,
+        "total_tokens": 657,
+        "total_tool_calls": 0,
+        "input_tokens_prompt": 268,
+        "output_tokens": 389
+      },
+      "parent_id": null,
+      "step_id": "8617d643-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-no-tool-skeleton",
+    "trace_id": "8617d643",
+    "total_steps": 8,
+    "total_duration_ms": 2330.7286279741675,
+    "duration_by_type_ms": {
+      "planning": 0.0034800032153725624,
+      "reasoning": 0.0031600939109921455,
+      "retrieval": 0.002950080670416355,
+      "code_execution": 0.018110033124685287,
+      "prefill": 0.002350076101720333,
+      "decode": 2329.4905809452757,
+      "embedding": 0.002320040948688984,
+      "other": 2330.7286279741675
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 1,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

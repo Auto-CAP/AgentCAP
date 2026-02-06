@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "be0fbed1",
+  "start_time": "2026-02-05T03:06:00.530081",
+  "end_time": "2026-02-05T03:06:02.612610",
+  "total_duration_ms": 2082.5160919921473,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.3060052879154682e-05,
+      "end_time": 1.6520032659173012e-05,
+      "duration_ms": 0.0034599797800183296,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.0449981093406677e-05,
+      "end_time": 2.3180036805570126e-05,
+      "duration_ms": 0.0027300557121634483,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6190071366727352e-05,
+      "end_time": 2.8789974749088287e-05,
+      "duration_ms": 0.002599903382360935,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.1730043701827526e-05,
+      "end_time": 3.4349970519542694e-05,
+      "duration_ms": 0.002619926817715168,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0004973990144208074,
+      "end_time": 0.328621915075928,
+      "duration_ms": 328.12451606150717,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 468,
+        "completion_tokens": 44,
+        "total_tokens": 512,
+        "elapsed_ms": 328.1046050833538,
+        "tool_calls_n": 1
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 0.32864077505655587,
+      "end_time": 0.32875153701752424,
+      "duration_ms": 0.1107619609683752,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.0998619943857193
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 0.3287575470749289,
+      "end_time": 2.082346447976306,
+      "duration_ms": 1753.5889009013772,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 522,
+        "completion_tokens": 292,
+        "total_tokens": 814,
+        "elapsed_ms": 1753.571490989998
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 2.082500181044452,
+      "end_time": 2.082510591018945,
+      "duration_ms": 0.010409974493086338,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 2.082515351008624,
+      "end_time": 2.082518481067382,
+      "duration_ms": 0.0031300587579607964,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "be0fbed1-1",
+      "step_id": "be0fbed1-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.149988621473312e-06,
+      "end_time": 2.0825222419807687,
+      "duration_ms": 2082.5160919921473,
+      "metadata": {
+        "sample_id": 93,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 73,
+        "raw_output": "<think>\nOkay, let's see. The problem says there are ten trees equally spaced along a straight road. The distance from the first tree to the fifth is 100 feet. We need to find the distance between the first and last trees.\n\nHmm, equally spaced means the distance between each consecutive tree is the same. So, if there are ten trees, there are 9 intervals between them. But the problem mentions the distance from the first to the fifth tree. Let me think: the first to the fifth is 4 intervals, right? Because between 1 and 5, there are 4 gaps. So if those 4 intervals add up to 100 feet, each interval is 100 divided by 4, which is 25 feet. Then, the total distance from the first to the tenth tree would be 9 intervals. So 9 times 25 is 225 feet. That matches the calculator result. So the answer should be 225 feet, which is option B.\n</think>\n\nThe distance between each tree is calculated by dividing the 100 feet between the first and fifth trees by the 4 intervals between them, resulting in 25 feet per interval. For ten trees, there are 9 intervals, so the total distance is $9 \\times 25 = 225$ feet.\n\n\\boxed{225}",
+        "pred": "225",
+        "gold": "B",
+        "em": 0,
+        "no_answer": 0,
+        "total_prompt_tokens": 990,
+        "total_completion_tokens": 336,
+        "total_tokens": 1326,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 990,
+        "output_tokens": 336
+      },
+      "parent_id": null,
+      "step_id": "be0fbed1-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "be0fbed1",
+    "total_steps": 10,
+    "total_duration_ms": 2082.5160919921473,
+    "duration_by_type_ms": {
+      "planning": 0.0034599797800183296,
+      "reasoning": 0.0031300587579607964,
+      "retrieval": 0.0027300557121634483,
+      "tool_calling": 0.1107619609683752,
+      "code_execution": 0.010409974493086338,
+      "prefill": 0.002619926817715168,
+      "decode": 2081.7134169628844,
+      "embedding": 0.002599903382360935,
+      "other": 2082.5160919921473
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

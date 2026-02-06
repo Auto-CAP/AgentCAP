@@ -1,0 +1,162 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "4d1005a7",
+  "start_time": "2026-02-05T03:16:53.217604",
+  "end_time": "2026-02-05T03:16:55.304297",
+  "total_duration_ms": 2086.680529988371,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.3069948181509972e-05,
+      "end_time": 1.6389996744692326e-05,
+      "duration_ms": 0.003320048563182354,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "4d1005a7-1",
+      "step_id": "4d1005a7-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.0819948986172676e-05,
+      "end_time": 2.3860018700361252e-05,
+      "duration_ms": 0.0030400697141885757,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "4d1005a7-1",
+      "step_id": "4d1005a7-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.749101258814335e-05,
+      "end_time": 3.006099723279476e-05,
+      "duration_ms": 0.002569984644651413,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "4d1005a7-1",
+      "step_id": "4d1005a7-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.292097244411707e-05,
+      "end_time": 3.538094460964203e-05,
+      "duration_ms": 0.0024599721655249596,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "4d1005a7-1",
+      "step_id": "4d1005a7-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0004039779305458069,
+      "end_time": 2.0864661559462547,
+      "duration_ms": 2086.062178015709,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 396,
+        "completion_tokens": 347,
+        "total_tokens": 743,
+        "elapsed_ms": 2086.045688018203,
+        "tool_calls_n": 0
+      },
+      "parent_id": "4d1005a7-1",
+      "step_id": "4d1005a7-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 2.0866651199758053,
+      "end_time": 2.0866748999105766,
+      "duration_ms": 0.009779934771358967,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "4d1005a7-1",
+      "step_id": "4d1005a7-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 2.086679819971323,
+      "end_time": 2.086682969937101,
+      "duration_ms": 0.003149965777993202,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "4d1005a7-1",
+      "step_id": "4d1005a7-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.199930794537067e-06,
+      "end_time": 2.0866867299191654,
+      "duration_ms": 2086.680529988371,
+      "metadata": {
+        "sample_id": 4,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 25,
+        "raw_output": "<think>\nOkay, let's see. The problem is about a pet store that had eighty-five gerbils and sold sixty-nine of them. The question is how many they have left. Alright, so I need to subtract the number sold from the original number.\n\nSo, starting with 85 gerbils and selling 69. The calculation should be 85 minus 69. Let me do that step by step. 85 minus 60 is 25, and then minus 9 more would be 16. Wait, is that right? Let me check again. 69 is 60 + 9. So 85 - 60 = 25, then 25 - 9 = 16. Yeah, that seems correct. Alternatively, I can think of it as 85 - 70 would be 15, but since they sold 69, which is one less than 70, so adding 1 back gives 16. Either way, the answer should be 16. I don't think I need the calculator here because it's a straightforward subtraction. But if I were to use the calculator tool, I could input 85 - 69 to confirm. Let me do that. 85 minus 69 equals 16. Yep, that checks out. So the pet store would have 16 gerbils left.\n</think>\n\nThe pet store originally had 85 gerbils. After selling 69, the remaining number is calculated as $85 - 69 = 16$.\n\n\\boxed{16}",
+        "pred": "16",
+        "gold": "16",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 396,
+        "total_completion_tokens": 347,
+        "total_tokens": 743,
+        "total_tool_calls": 0,
+        "input_tokens_prompt": 396,
+        "output_tokens": 347
+      },
+      "parent_id": null,
+      "step_id": "4d1005a7-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "4d1005a7",
+    "total_steps": 8,
+    "total_duration_ms": 2086.680529988371,
+    "duration_by_type_ms": {
+      "planning": 0.003320048563182354,
+      "reasoning": 0.003149965777993202,
+      "retrieval": 0.0030400697141885757,
+      "code_execution": 0.009779934771358967,
+      "prefill": 0.0024599721655249596,
+      "decode": 2086.062178015709,
+      "embedding": 0.002569984644651413,
+      "other": 2086.680529988371
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 1,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

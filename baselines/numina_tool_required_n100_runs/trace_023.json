@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "7e166645",
+  "start_time": "2026-02-05T02:32:58.826319",
+  "end_time": "2026-02-05T02:33:32.841581",
+  "total_duration_ms": 34015.2486480074,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.3260054402053356e-05,
+      "end_time": 1.6730045899748802e-05,
+      "duration_ms": 0.003469991497695446,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.0539970137178898e-05,
+      "end_time": 2.3490050807595253e-05,
+      "duration_ms": 0.002950080670416355,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6679947040975094e-05,
+      "end_time": 2.9469956643879414e-05,
+      "duration_ms": 0.0027900096029043198,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.276101779192686e-05,
+      "end_time": 3.540096804499626e-05,
+      "duration_ms": 0.002639950253069401,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0007390850223600864,
+      "end_time": 0.23869900801219046,
+      "duration_ms": 237.95992298983037,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 513,
+        "completion_tokens": 28,
+        "total_tokens": 541,
+        "elapsed_ms": 237.9407819826156,
+        "tool_calls_n": 1
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 0.23871622805017978,
+      "end_time": 0.23878728004638106,
+      "duration_ms": 0.07105199620127678,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.061350991018116474
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 0.23879266995936632,
+      "end_time": 34.0149728320539,
+      "duration_ms": 33776.18016209453,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 546,
+        "completion_tokens": 5717,
+        "total_tokens": 6263,
+        "elapsed_ms": 33776.16477198899
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 34.01523336803075,
+      "end_time": 34.01524381805211,
+      "duration_ms": 0.010450021363794804,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 34.01524829794653,
+      "end_time": 34.01525160798337,
+      "duration_ms": 0.0033100368455052376,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "7e166645-1",
+      "step_id": "7e166645-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.139976903796196e-06,
+      "end_time": 34.015254787984304,
+      "duration_ms": 34015.2486480074,
+      "metadata": {
+        "sample_id": 22,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 118,
+        "raw_output": "<think>\nOkay, let's try to solve this problem step by step. So, we have ten identical crates, each with dimensions 3ft \u00d7 4ft \u00d7 6ft. The first crate is placed flat on the floor, and each subsequent crate is placed flat on top of the previous one, with the orientation chosen at random. We need to find the probability that the total height of the stack is exactly 41ft. The answer should be in the form of a fraction m/n where m and n are coprime, and then find m.\n\nFirst, I need to understand how the height of each crate contributes to the total. Since each crate is placed flat, the height of each crate depends on which face is on the bottom. The possible heights for each crate (after the first) would be the different dimensions. Wait, but the first crate is placed flat on the floor. So, the first crate's height is one of the dimensions. Wait, but when they say \"placed flat,\" does that mean that the base is the largest face? Or is \"flat\" just meaning that it's placed on one of its faces, not standing on a corner or something?\n\nWait, the problem says \"each of the remaining nine crates is placed, in turn, flat on top of the previous crate, and the orientation of each crate is chosen at random.\" So, \"flat\" here probably means that each crate is placed such that one of its faces is the base. So, for each crate, when placing it, we can choose which dimension is the height. The height of each crate can be 3, 4, or 6 feet, depending on how it's oriented. But the first crate is placed flat on the floor. So, the first crate's height is one of 3, 4, or 6. Wait, but the problem says \"the first crate is placed flat on the floor.\" So maybe the first crate's height is fixed? Or is it also chosen at random?\n\nWait, the problem says \"the first crate is placed flat on the floor. Each of the remaining nine crates is placed, in turn, flat on top of the previous crate, and the orientation of each crate is chosen at random.\" So the first crate's orientation is fixed? Or is it also chosen at random? The wording is a bit ambiguous. Let me check again.\n\nThe problem says: \"the first crate is placed flat on the floor. Each of the remaining nine crates is placed, in turn, flat on top of the previous crate, and the orientation of each crate is chosen at random.\" So the first crate is placed flat, but the orientation of each crate (including the first?) is chosen at random? Or is the first crate's orientation fixed? Hmm. The wording says \"the orientation of each crate is chosen at random.\" So maybe the first crate's orientation is also chosen at random. Wait, but the first crate is placed flat on the floor. So maybe \"placed flat\" implies that the base is a certain face, but the height is determined by the orientation. Wait, maybe \"placed flat\" just means that it's placed on a face, not on an edge or corner. So for each crate, when placing it, you choose which face is on the bottom, and the height is the dimension perpendicular to that face.\n\nSo for each crate, there are three possible heights: 3, 4, or 6. But the first crate's height is determined by how it's placed. However, the problem says \"the first crate is placed flat on the floor.\" So maybe the first crate's height is fixed? Or is it also chosen at random? The problem says \"the orientation of each crate is chosen at random.\" So perhaps the first crate's orientation is also chosen at random. But the problem says \"the first crate is placed flat on the floor.\" Maybe \"placed flat\" here just means that it's placed on one of its faces, not standing on an edge. So the first crate's height is one of 3, 4, or 6, chosen at random. Similarly, each subsequent crate is placed flat on top, so their heights are also chosen at random. So each of the ten crates has a height of 3, 4, or 6, each with equal probability? Or is there a different probability?\n\nWait, the problem says \"the orientation of each crate is chosen at random.\" So for each crate, when placing it, there are three possible orientations. But how many orientations are there? For a rectangular prism, there are 3 possible choices for the base: 3\u00d74, 3\u00d76, or 4\u00d76. Each of these would result in a different height. So for each crate, there are three possible heights: 3, 4, or 6. But are these equally likely? The problem says \"the orientation is chosen at random.\" Assuming that each orientation is equally likely, then each height (3, 4, 6) has a probability of 1/3. However, maybe the number of orientations isn't three. Wait, for a cube, there are more orientations, but for a rectangular prism, the number of distinct orientations where each face is a base. For example, a 3\u00d74\u00d76 crate can be placed on any of its six faces, but some orientations are equivalent. Wait, but when you place it on a face, the height is determined by the dimension perpendicular to that face. So for example, placing it on the 3\u00d74 face would make the height 6. Placing it on the 3\u00d76 face would make the height 4. Placing it on the 4\u00d76 face would make the height 3. So each of these three orientations gives a different height. However, there are other orientations where the crate is rotated, but the base is still the same face. But since the problem says \"the orientation is chosen at random,\" maybe each of the three possible heights is equally likely. So each crate contributes a height of 3, 4, or 6, each with probability 1/3. So the total height of the stack is the sum of the heights of the ten crates.\n\nBut the problem says \"the first crate is placed flat on the floor.\" So maybe the first crate's height is fixed? Wait, but the problem says \"the orientation of each crate is chosen at random.\" So maybe the first crate's orientation is also chosen at random. Therefore, all ten crates have their heights chosen independently, each with 3, 4, or 6, each with probability 1/3. Then the total height is the sum of these ten numbers. We need the probability that this sum is exactly 41.\n\nBut wait, let's check the problem statement again: \"the first crate is placed flat on the floor. Each of the remaining nine crates is placed, in turn, flat on top of the previous crate, and the orientation of each crate is chosen at random.\" So the first crate is placed flat, but the orientation of each crate (including the first?) is chosen at random. So maybe the first crate's orientation is also chosen at random. Therefore, all ten crates have their heights chosen randomly. So the total height is the sum of ten numbers, each being 3, 4, or 6, each with probability 1/3. We need the probability that this sum is 41.\n\nBut let's think about the possible total heights. The minimum height would be 10*3=30, and the maximum is 10*6=60. 41 is between 30 and 60. So we need to find the number of sequences of ten numbers (each 3,4,6) that add up to 41, divided by the total number of possible sequences, which is 3^10.\n\nSo the problem reduces to finding the number of solutions to the equation:\n\n3a + 4b + 6c = 41, where a + b + c = 10. Wait, no. Wait, each crate contributes either 3, 4, or 6. Let me think. Let me denote for each crate, the height is 3, 4, or 6. Let me think of variables. Let me say that for each of the ten crates, we have a choice of 3, 4, or 6. Let me think of variables x1, x2, ..., x10, each xi \u2208 {3,4,6}, and we need the sum x1 + x2 + ... + x10 = 41.\n\nAlternatively, we can model this as a problem of counting the number of sequences where each term is 3, 4, or 6, and the sum is 41. Then the probability is that number divided by 3^10.\n\nBut how to compute that number?\n\nAlternatively, we can model this as a generating function problem. The generating function for each crate is x^3 + x^4 + x^6. For ten crates, the generating function is (x^3 + x^4 + x^6)^10. We need the coefficient of x^41 in this expansion.\n\nBut calculating that manually would be tedious. Alternatively, we can use dynamic programming or recursive counting. However, since this is a math problem, perhaps there's a combinatorial way to approach it.\n\nAlternatively, let's think in terms of variables. Let me consider that each crate contributes a height of 3, 4, or 6. Let me define variables for the number of crates with each height. Let me say that there are k crates with height 3, m crates with height 4, and n crates with height 6. Then, we have k + m + n = 10, and 3k + 4m + 6n = 41.\n\nWe need to find all non-negative integer solutions (k, m, n) to these equations, and for each solution, compute the number of sequences, which is 10!/(k! m! n!) (if the crates are distinguishable, but since each crate is placed in sequence, the order matters. Wait, no. Wait, the problem says that each crate is placed in turn, and the orientation is chosen at random. So each crate's orientation is independent. Therefore, the number of sequences is the number of ways to assign to each of the ten crates a height of 3, 4, or 6, such that the total is 41. So for each solution (k, m, n), the number of sequences is C(10, k, m, n) = 10! / (k! m! n!) if k + m + n = 10. So we need to find all possible (k, m, n) such that 3k + 4m + 6n = 41 and k + m + n = 10.\n\nSo let's solve the system:\n\nk + m + n = 10\n\n3k + 4m + 6n = 41\n\nWe can substitute k = 10 - m - n into the second equation:\n\n3(10 - m - n) + 4m + 6n = 41\n\n30 - 3m - 3n + 4m + 6n = 41\n\n30 + m + 3n = 41\n\nSo m + 3n = 11\n\nSo m = 11 - 3n\n\nSince m and n are non-negative integers, we can find possible values of n such that m is non-negative.\n\nSo 11 - 3n \u2265 0 \u2192 3n \u2264 11 \u2192 n \u2264 3.666..., so n can be 0, 1, 2, 3.\n\nLet's check each possible n:\n\nCase 1: n = 0 \u2192 m = 11 - 0 = 11. But since k + m + n = 10, and m=11, that would require k = 10 - m - n = 10 - 11 - 0 = -1, which is invalid. So discard.\n\nCase 2: n = 1 \u2192 m = 11 - 3(1) = 8. Then k = 10 - 8 -1 = 1. So k=1, m=8, n=1. Valid.\n\nCase 3: n = 2 \u2192 m = 11 - 6 = 5. Then k = 10 -5 -2 = 3. Valid.\n\nCase 4: n = 3 \u2192 m = 11 - 9 = 2. Then k = 10 -2 -3 = 5. Valid.\n\nn=4 would give m=11-12=-1, invalid.\n\nSo the possible solutions are:\n\n(n=1, m=8, k=1), (n=2, m=5, k=3), (n=3, m=2, k=5).\n\nNow, for each of these, compute the number of sequences.\n\nFor each case, the number of sequences is 10! / (k! m! n!).\n\nLet's compute each:\n\nFirst case: k=1, m=8, n=1.\n\nNumber of sequences: 10! / (1! 8! 1!) = (10 \u00d7 9 \u00d7 8! ) / (1 \u00d7 8! \u00d7 1) ) = 10 \u00d7 9 = 90.\n\nSecond case: k=3, m=5, n=2.\n\nNumber of sequences: 10! / (3! 5! 2!) = (10 \u00d7 9 \u00d7 8 \u00d7 7 \u00d7 6 \u00d7 5! ) / (3! \u00d7 5! \u00d7 2!) ) = (10 \u00d7 9 \u00d7 8 \u00d7 7 \u00d7 6) / (6 \u00d7 2) ) = (10 \u00d7 9 \u00d7 8 \u00d7 7 \u00d7 6) / 12.\n\nLet me compute that:\n\nFirst, 10 \u00d7 9 = 90, 90 \u00d7 8 = 720, 720 \u00d7 7 = 5040, 5040 \u00d7 6 = 30240. Then divide by 12: 30240 / 12 = 2520.\n\nThird case: k=5, m=2, n=3.\n\nNumber of sequences: 10! / (5! 2! 3!) = (10 \u00d7 9 \u00d7 8 \u00d7 7 \u00d7 6 \u00d7 5! ) / (5! \u00d7 2! \u00d7 3! ) ) = (10 \u00d7 9 \u00d7 8 \u00d7 7 \u00d7 6) / (2 \u00d7 6) ) = (10 \u00d7 9 \u00d7 8 \u00d7 7 \u00d7 6) / 12.\n\nWait, same as the second case? Let me check:\n\nYes, because 5! 2! 3! is same as 3! 2! 5! so the calculation is same. So 10 \u00d7 9 \u00d7 8 \u00d7 7 \u00d7 6 / (2 \u00d7 6) = same as before. Let me compute:\n\n10 \u00d7 9 \u00d7 8 \u00d7 7 \u00d7 6 = 30240, divided by 12 gives 2520.\n\nSo total number of favorable sequences is 90 + 2520 + 2520 = 90 + 5040 = 5130.\n\nWait, 2520 + 2520 is 5040, plus 90 is 5130.\n\nTotal number of possible sequences is 3^10. Let me compute 3^10.\n\n3^1 = 3\n\n3^2 = 9\n\n3^3 = 27\n\n3^4 = 81\n\n3^5 = 243\n\n3^6 = 729\n\n3^7 = 2187\n\n3^8 = 6561\n\n3^9 = 19683\n\n3^10 = 59049.\n\nSo the probability is 5130 / 59049.\n\nNow, we need to simplify this fraction.\n\nFirst, let's find the greatest common divisor (GCD) of 5130 and 59049.\n\nLet me compute GCD(5130, 59049).\n\nFirst, factor 5130:\n\n5130 = 513 \u00d7 10 = (513) \u00d7 10. 513 \u00f7 3 = 171, 171 \u00f7 3 = 57, 57 \u00f7 3 = 19. So 5130 = 2 \u00d7 3^3 \u00d7 5 \u00d7 19.\n\nNow, 59049: 3^10, since 3^10 = 59049.\n\nSo 5130 = 2 \u00d7 3^3 \u00d7 5 \u00d7 19.\n\n59049 = 3^10.\n\nSo the GCD is 3^3 = 27.\n\nTherefore, divide numerator and denominator by 27:\n\n5130 \u00f7 27 = ?\n\nLet me compute 27 \u00d7 190 = 5130 (since 27 \u00d7 200 = 5400, minus 27\u00d710=270 \u2192 5400-270=5130). So 5130 \u00f727=190.\n\nDenominator: 59049 \u00f727 = 59049 \u00f7 27. 27 \u00d7 2000 = 54000. 59049 - 54000 = 5049. 27 \u00d7 187 = 5049 (since 27\u00d7180=4860, 27\u00d77=189; 4860+189=5049). So total is 2000 + 187 = 2187.\n\nSo simplified fraction is 190 / 2187.\n\nCheck if 190 and 2187 have any common factors. 190 factors: 2 \u00d7 5 \u00d7 19. 2187 is 3^7. No common factors. So m = 190, n = 2187. Therefore, the answer is m = 190.\n\nWait, but let me check the calculation again. Because 5130 divided by 27 is 190? Let me verify:\n\n27 \u00d7 190 = 27 \u00d7 19 \u00d7 10. 27 \u00d7 19 = 513. 513 \u00d7 10 = 5130. Yes. Correct.\n\nAnd 59049 \u00f7 27 = 2187. Correct.\n\nSo the probability is 190/2187. Are 190 and 2187 coprime? 190 factors: 2, 5, 19. 2187 is 3^7. No common factors. So yes, m is 190.\n\nBut wait, the problem says \"the first crate is placed flat on the floor.\" Did I account for that correctly? Because earlier, I assumed that all ten crates have their orientations chosen at random. But the problem says the first crate is placed flat on the floor, and the rest are placed flat on top with random orientation. So maybe the first crate's orientation is fixed? Wait, that would change the calculation.\n\nWait, this is a critical point. Let me re-examine the problem statement.\n\nProblem statement: \"The first crate is placed flat on the floor. Each of the remaining nine crates is placed, in turn, flat on top of the previous crate, and the orientation of each crate is chosen at random.\"\n\nSo the first crate is placed flat on the floor. The orientation of each crate is chosen at random. So does this mean that the first crate's orientation is also chosen at random? Or is the first crate's orientation fixed?\n\nThe wording is a bit ambiguous. If \"the first crate is placed flat on the floor\" and \"the orientation of each crate is chosen at random,\" then it's possible that the first crate's orientation is also chosen at random. However, maybe \"placed flat on the floor\" implies that the first crate's height is fixed. For example, maybe \"placed flat\" means that the base is the largest face, so the height is the smallest dimension. But that's an assumption.\n\nAlternatively, \"placed flat\" could mean that the crate is placed on one of its faces, not standing on an edge. So for the first crate, the orientation is chosen at random, just like the others. But the problem says \"the first crate is placed flat on the floor,\" which might just be a way of saying that it's placed on the floor, not that the orientation is fixed.\n\nBut if the first crate's orientation is fixed, then the total number of possible sequences would be 3^9, since only the remaining nine have random orientations. However, the problem says \"the orientation of each crate is chosen at random.\" So \"each crate\" includes the first one. Therefore, the first crate's orientation is also chosen at random. Therefore, my initial calculation is correct, with 3^10 total possibilities.\n\nBut let me check again. Suppose that the first crate's orientation is fixed. For example, maybe the first crate is placed with a specific height, say 3ft. Then the total height would be 3 + sum of the other nine crates. But the problem doesn't specify that. The problem says \"the first crate is placed flat on the floor. Each of the remaining nine crates is placed, in turn, flat on top of the previous crate, and the orientation of each crate is chosen at random.\" So \"the orientation of each crate is chosen at random\" \u2014 this would include the first crate. Therefore, the first crate's orientation is also chosen at random. Therefore, my initial approach is correct.\n\nBut to be thorough, let's consider both possibilities.\n\nCase 1: All ten crates have random orientations. Total possibilities: 3^10. As before.\n\nCase 2: First crate's orientation is fixed. Then total possibilities: 3^9. But the problem says \"the orientation of each crate is chosen at random,\" which would imply that the first crate's orientation is also chosen at random. So Case 1 is correct.\n\nTherefore, the answer is 190.\n\nBut let me check the calculation again. The number of favorable cases was 5130, and 5130/59049 reduces to 190/2187. So m is 190.\n\nBut wait, let me check the possible solutions again. The equations were:\n\nk + m + n = 10\n\n3k + 4m + 6n = 41\n\nWhich led to m + 3n = 11.\n\nPossible n=1,2,3.\n\nFor n=1: m=8, k=1. Then the total height is 3*1 +4*8 +6*1 = 3 +32 +6=41. Correct.\n\nFor n=2: m=5, k=3. 3*3 +4*5 +6*2 =9 +20 +12=41. Correct.\n\nFor n=3: m=2, k=5. 3*5 +4*2 +6*3=15 +8 +18=41. Correct.\n\nSo those are the three cases. Then the number of sequences for each case:\n\nFirst case: 10!/(1!8!1!) = 90.\n\nSecond case: 10!/(3!5!2!) = 2520.\n\nThird case: 10!/(5!2!3!) = 2520.\n\nTotal: 90 + 2520 + 2520 = 5130. Correct.\n\nSo 5130 / 3^10 = 5130 / 59049 = 190 / 2187. Yes.\n\nSo m is 190. Therefore, the answer is 190.\n\nBut wait, the problem says \"the first crate is placed flat on the floor.\" If the first crate's orientation is fixed, then the total number of possibilities would be 3^9, and the number of favorable cases would be different. Let me check that scenario as well, just to be safe.\n\nSuppose the first crate's height is fixed. For example, suppose the first crate is placed with height 3. Then the remaining nine crates contribute to the total height. The total height would be 3 + sum of the other nine. We need 3 + sum = 41 \u2192 sum = 38. So the problem becomes: find the number of sequences of nine crates (each with height 3,4,6) that sum to 38, divided by 3^9.\n\nBut the problem states that the first crate is placed flat on the floor, but doesn't specify the orientation. So if the first crate's orientation is fixed, but the problem doesn't say which one, then we need to know the possible orientations. However, the problem says \"the orientation of each crate is chosen at random.\" So if the first crate's orientation is chosen at random, then it's part of the 3^10 possibilities. But if the first crate's orientation is fixed, then it's 3^9.\n\nBut the problem says \"the first crate is placed flat on the floor. Each of the remaining nine crates is placed, in turn, flat on top of the previous crate, and the orientation of each crate is chosen at random.\" The phrase \"the orientation of each crate is chosen at random\" likely refers to all crates, including the first. Therefore, the first crate's orientation is also chosen at random. Hence, the initial calculation is correct.\n\nTherefore, the answer is 190.\n</think>",
+        "pred": "",
+        "gold": "190",
+        "em": 0,
+        "no_answer": 1,
+        "total_prompt_tokens": 1059,
+        "total_completion_tokens": 5745,
+        "total_tokens": 6804,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 1059,
+        "output_tokens": 5745
+      },
+      "parent_id": null,
+      "step_id": "7e166645-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "7e166645",
+    "total_steps": 10,
+    "total_duration_ms": 34015.2486480074,
+    "duration_by_type_ms": {
+      "planning": 0.003469991497695446,
+      "reasoning": 0.0033100368455052376,
+      "retrieval": 0.002950080670416355,
+      "tool_calling": 0.07105199620127678,
+      "code_execution": 0.010450021363794804,
+      "prefill": 0.002639950253069401,
+      "decode": 34014.140085084364,
+      "embedding": 0.0027900096029043198,
+      "other": 34015.2486480074
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

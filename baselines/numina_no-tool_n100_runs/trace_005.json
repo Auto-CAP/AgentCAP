@@ -1,0 +1,165 @@
+{
+  "name": "numina-no-tool-skeleton",
+  "trace_id": "0c4e72ca",
+  "start_time": "2026-02-05T00:49:19.247702",
+  "end_time": "2026-02-05T00:49:21.562560",
+  "total_duration_ms": 2314.8448730353266,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.4480086974799633e-05,
+      "end_time": 2.0210049115121365e-05,
+      "duration_ms": 0.005729962140321732,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "0c4e72ca-1",
+      "step_id": "0c4e72ca-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.508005127310753e-05,
+      "end_time": 2.8030015528202057e-05,
+      "duration_ms": 0.002949964255094528,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "0c4e72ca-1",
+      "step_id": "0c4e72ca-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 3.1310017220675945e-05,
+      "end_time": 3.3940072171390057e-05,
+      "duration_ms": 0.0026300549507141113,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "0c4e72ca-1",
+      "step_id": "0c4e72ca-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.6800047382712364e-05,
+      "end_time": 3.91700305044651e-05,
+      "duration_ms": 0.002369983121752739,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "0c4e72ca-1",
+      "step_id": "0c4e72ca-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode",
+      "step_type": "decode",
+      "start_time": 0.00048739707563072443,
+      "end_time": 2.314812642056495,
+      "duration_ms": 2314.325244980864,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 241,
+        "completion_tokens": 387,
+        "total_tokens": 628,
+        "elapsed_ms": 2314.166262978688,
+        "raw_output": "<think>\nOkay, let's see. The problem is about a pet store that had eighty-five gerbils and sold sixty-nine of them. The question is asking how many they have left. Alright, so I need to subtract the number sold from the original number.\n\nFirst, let me make sure I understand the numbers. Eighty-five minus sixty-nine. Hmm. Let me do the subtraction step by step. 85 minus 60 would be 25, right? Then subtract the remaining 9. So 25 minus 9 is 16. Wait, is that correct? Let me check again. 85 minus 69. Another way to think about it is adding up from 69 to 85. 69 plus 16 is 85. So yes, 16. \n\nAlternatively, I can do the standard subtraction method. 85 minus 69. Since 5 is less than 9, I need to borrow from the tens place. So 85 becomes 7 and 15. Then subtract 9 from 15, which is 6. Then subtract 6 from 7, which is 1. So the result is 16. Yep, that matches. \n\nSo the answer should be 16. Let me just confirm once more to avoid any mistakes. 69 plus 16 equals 85. 69 + 10 is 79, plus 6 is 85. Correct. So the pet store would have 16 gerbils left.\n</think>\n\nThe pet store originally had 85 gerbils and sold 69. To find the remaining number, subtract 69 from 85:\n\n$$\n85 - 69 = 16\n$$\n\n\\boxed{16}",
+        "pred": "16",
+        "gold": "16",
+        "em": 1,
+        "no_answer": 0
+      },
+      "parent_id": "0c4e72ca-1",
+      "step_id": "0c4e72ca-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 2.3148301820037887,
+      "end_time": 2.3148392430739477,
+      "duration_ms": 0.009061070159077644,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "0c4e72ca-1",
+      "step_id": "0c4e72ca-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 2.3148440630175173,
+      "end_time": 2.3148471229942515,
+      "duration_ms": 0.0030599767342209816,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "0c4e72ca-1",
+      "step_id": "0c4e72ca-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.54999166727066e-06,
+      "end_time": 2.314851423026994,
+      "duration_ms": 2314.8448730353266,
+      "metadata": {
+        "sample_id": 4,
+        "mode": "no-tool",
+        "dataset": "numina",
+        "question_tokens": 25,
+        "pred": "16",
+        "gold": "16",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 241,
+        "total_completion_tokens": 387,
+        "total_tokens": 628,
+        "total_tool_calls": 0,
+        "input_tokens_prompt": 241,
+        "output_tokens": 387
+      },
+      "parent_id": null,
+      "step_id": "0c4e72ca-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-no-tool-skeleton",
+    "trace_id": "0c4e72ca",
+    "total_steps": 8,
+    "total_duration_ms": 2314.8448730353266,
+    "duration_by_type_ms": {
+      "planning": 0.005729962140321732,
+      "reasoning": 0.0030599767342209816,
+      "retrieval": 0.002949964255094528,
+      "code_execution": 0.009061070159077644,
+      "prefill": 0.002369983121752739,
+      "decode": 2314.325244980864,
+      "embedding": 0.0026300549507141113,
+      "other": 2314.8448730353266
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 1,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

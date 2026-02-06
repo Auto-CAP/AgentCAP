@@ -1,0 +1,39 @@
+{
+  "workload": "numina split=test (n=100) | mode=tool | skeleton=0ms",
+  "base_url": "http://127.0.0.1:30001/v1",
+  "model_id": "Qwen/Qwen3-30B-A3B",
+  "dataset": "numina",
+  "dataset_split": "test",
+  "mode": "tool",
+  "n": 100,
+  "em": {
+    "mean": 0.5,
+    "correct": 50
+  },
+  "latency_ms": {
+    "n": 100,
+    "mean": 24876.120574373053,
+    "stdev": 33371.53650018229,
+    "p50": 12062.813255004585,
+    "p95": 93184.16533555718,
+    "min": 1607.291917083785,
+    "max": 219072.5013189949
+  },
+  "tool_call_rate": 0.28,
+  "tool_calls_total": 163,
+  "truncated_count": 3,
+  "tokens": {
+    "avg_question_tokens": 87.44,
+    "avg_output_tokens": 4074.58,
+    "max_output_tokens": 32768
+  },
+  "trace_dir": "baselines/numina_auto_tool_n100_runs",
+  "trace_files": [
+    "baselines/numina_auto_tool_n100_runs/trace_001.json",
+    "baselines/numina_auto_tool_n100_runs/trace_002.json",
+    "baselines/numina_auto_tool_n100_runs/trace_003.json",
+    "baselines/numina_auto_tool_n100_runs/trace_004.json",
+    "baselines/numina_auto_tool_n100_runs/trace_005.json",
+    "..."
+  ]
+}

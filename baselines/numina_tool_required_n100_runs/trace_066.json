@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "a43a8e83",
+  "start_time": "2026-02-05T02:50:13.787596",
+  "end_time": "2026-02-05T02:50:58.440631",
+  "total_duration_ms": 44653.02134898957,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.3309996575117111e-05,
+      "end_time": 1.6810023225843906e-05,
+      "duration_ms": 0.003500026650726795,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.101005520671606e-05,
+      "end_time": 2.413999754935503e-05,
+      "duration_ms": 0.0031299423426389694,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.759997732937336e-05,
+      "end_time": 3.0471011996269226e-05,
+      "duration_ms": 0.0028710346668958664,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.3711083233356476e-05,
+      "end_time": 3.6141020245850086e-05,
+      "duration_ms": 0.0024299370124936104,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0004294980317354202,
+      "end_time": 0.2351331760874018,
+      "duration_ms": 234.7036780556664,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 442,
+        "completion_tokens": 28,
+        "total_tokens": 470,
+        "elapsed_ms": 234.6848879242316,
+        "tool_calls_n": 1
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 0.23515101708471775,
+      "end_time": 0.23522358806803823,
+      "duration_ms": 0.07257098332047462,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.0626909313723445
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 0.23522940801922232,
+      "end_time": 44.65275002398994,
+      "duration_ms": 44417.520615970716,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 488,
+        "completion_tokens": 7465,
+        "total_tokens": 7953,
+        "elapsed_ms": 44417.502534925006
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 44.65300470904913,
+      "end_time": 44.6530152290361,
+      "duration_ms": 0.010519986972212791,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 44.65301994897891,
+      "end_time": 44.65302312897984,
+      "duration_ms": 0.0031800009310245514,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "a43a8e83-1",
+      "step_id": "a43a8e83-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.059999577701092e-06,
+      "end_time": 44.653027408989146,
+      "duration_ms": 44653.02134898957,
+      "metadata": {
+        "sample_id": 65,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 47,
+        "raw_output": "<think>\nOkay, let's try to solve this problem step by step. The problem is asking for the smallest possible value of r - p where p, q, r are positive integers such that p * q * r = 9! and p < q < r. \n\nFirst, I need to recall what 9! is. 9 factorial is 9 \u00d7 8 \u00d7 7 \u00d7 ... \u00d7 1. Let me calculate that. 9! = 362880. Wait, but maybe I should verify that. Let me compute it step by step: 9\u00d78=72, 72\u00d77=504, 504\u00d76=3024, 3024\u00d75=15120, 15120\u00d74=60480, 60480\u00d73=181440, 181440\u00d72=362880. Yes, that's correct. So 9! is 362880.\n\nNow, the task is to find three integers p, q, r such that their product is 362880, they are in increasing order, and the difference between the largest and smallest (r - p) is as small as possible.\n\nTo minimize r - p, we want p, q, r to be as close to each other as possible. Because if they are close, their product would be similar to the cube root of 9!. So first, let's find the cube root of 362880 to get an idea of where to start.\n\nCalculating cube root of 362880. Let me approximate. 70^3 is 343,000. 72^3 is 72*72*72 = 5184*72 = let's see, 5184*70=362,880 and 5184*2=10,368, so total 373,248. So 72^3 is 373,248. Our target is 362,880, which is between 70^3 and 72^3. So the cube root is approximately 71. Let me check 71^3: 71*71=5041, 5041*71. Let's compute 5041*70=352,870 and 5041*1=5041, so total 357,911. That's still less than 362,880. Then 71.5^3? Maybe that's too detailed. But the point is, the cube root is around 71. So we need to find three numbers around 71 that multiply to 362880.\n\nBut since p, q, r must be integers, we need to find factors of 9! that are close to each other. So the strategy is to factor 9! into three factors as close as possible.\n\nFirst, let's factorize 9! into its prime factors. 9! = 2^7 * 3^4 * 5^1 * 7^1. Let me confirm that:\n\n- The exponent of 2 in 9! is floor(9/2) + floor(9/4) + floor(9/8) = 4 + 2 + 1 = 7.\n- Exponent of 3: floor(9/3) + floor(9/9) = 3 + 1 = 4.\n- Exponent of 5: floor(9/5) = 1.\n- Exponent of 7: floor(9/7) = 1.\n- Higher primes (11, etc.) don't exist since 9! is up to 9.\n\nSo the prime factors are 2^7 * 3^4 * 5 * 7.\n\nNow, we need to split these prime factors into three integers p, q, r such that p < q < r and their product is 9!.\n\nTo make them as close as possible, we can try to distribute the prime factors evenly.\n\nLet me think about possible triplets. Let's start by trying to find three numbers close to the cube root of 9! which is approximately 71. So looking for numbers around 70-75.\n\nLet me check if 70 is a factor. 70 = 2 * 5 * 7. Then 362880 / 70 = 5184. Now, we need to split 5184 into two numbers q and r such that q < r and q > 70 (since p=70, q must be greater than 70). Let's factor 5184. 5184 is 72^2, which is 2^6 * 3^4. So possible factors: 72 and 72. But since q < r, we can't have both 72. So maybe 72 and 72, but they are equal. But the problem states p < q < r, so q must be less than r. So if p=70, then q and r would have to be 72 and 72, which is invalid. So that's not allowed. So maybe p=70 is not a good choice.\n\nAlternatively, maybe p=72. Wait, but then q and r would need to be larger. But that might not help. Let me think.\n\nAlternatively, let's try to find three numbers close to each other. Let's think of factors of 9! that are close. Let's list some factors around 70.\n\nAnother approach: Let's list all possible triplets (p, q, r) where p*q*r = 9! and p < q < r, and find the one with the smallest r - p.\n\nBut this might take a long time. Maybe there's a smarter way.\n\nAlternatively, since the cube root is around 71, let's try to find factors near that.\n\nLet me check 72. 72 is a factor. Let's see. 9! / 72 = 362880 / 72 = 5040. Now, we need to split 5040 into two factors q and r such that q > 72 and r > q. Let's factor 5040. 5040 is 7! = 5040. Its factors include 70 and 72. So if p=72, then q=70? No, because p < q < r. So p must be less than q. So if p=72, then q must be greater than 72. So 5040 can be split into 70 and 72, but 70 is less than 72, so that's not allowed. So maybe 72 and 70, but that's not in order. So perhaps 72, 70, but that's not valid. So maybe p=72 is not a good choice.\n\nAlternatively, let's try p=60. Then q*r = 362880 / 60 = 6048. Now, find q and r such that 60 < q < r and q*r=6048. Let's see. Let's find factors of 6048. Let's see, sqrt(6048) is about 77.7. So possible factors around there. Let's check 72 and 84. 72*84=6048. So q=72, r=84. Then p=60, q=72, r=84. The difference r - p is 84 - 60 = 24. Is this a candidate?\n\nBut maybe there's a better triplet. Let's try other possibilities.\n\nWhat if p=70, then q*r=362880 /70=5184. As before, 5184=72^2. So q and r would have to be 72 and 72, but they are equal, which is not allowed. So maybe p=70 is not possible.\n\nWhat about p=63? Then q*r=362880 /63=5760. Now, find q and r such that 63 < q < r and q*r=5760. Let's find factors of 5760. Let's see, sqrt(5760) is about 75.8. So possible factors around there. Let's check 75 and 76.8. Not integers. Let's try 72 and 80. 72*80=5760. So q=72, r=80. Then p=63, q=72, r=80. The difference is 80 - 63 = 17. That's better than 24.\n\nIs there a better one?\n\nWhat if p=64? Then q*r=362880 /64=5670. Now, find q and r with 64 < q < r and q*r=5670. Let's factor 5670. Let's see, sqrt(5670) is about 75.3. Let's check 70 and 81. 70*81=5670. So q=70, r=81. But q must be greater than p=64, so 70 is okay. So p=64, q=70, r=81. The difference is 81 - 64 = 17. Same as before.\n\nAnother possibility: p=65. Then q*r=362880 /65. Let me compute that. 362880 \u00f7 65. Let's see, 65*5000=325000. 362880 - 325000 = 37880. 65*580=37700. So 5000+580=5580, and 37880-37700=180. 65*2=130, so 5580+2=5582, remainder 50. So 362880 \u00f765 is not an integer. So p=65 is not a factor. So that's invalid.\n\nHow about p=66? 362880 \u00f766. Let's compute. 66*5000=330000. 362880-330000=32880. 66*500=33000, which is more than 32880. So 66*498= 66*(500-2)= 33000 - 132= 32868. Then 32880 - 32868=12. So 362880 \u00f766=5498.18... Not integer. So p=66 is invalid.\n\np=60: we had 60,72,84 with difference 24.\n\np=63: 63,72,80 (diff 17)\n\np=64: 64,70,81 (diff 17)\n\nWhat about p=70? Not possible. How about p=56? Then q*r=362880 /56=6480. Find q and r with 56 < q < r and q*r=6480. Let's see. sqrt(6480) is about 80.5. Let's try 80 and 81. 80*81=6480. So q=80, r=81. Then p=56, q=80, r=81. Difference is 81-56=25. Worse than 17.\n\nAnother possibility: p=60, q=72, r=84 (diff 24). What about p=60, q=75, r= 362880/(60*75)= 362880/4500= 80.64. Not integer. So no.\n\nWhat about p=60, q=70, r= 362880/(60*70)= 362880/4200= 86.4. Not integer.\n\nHow about p=60, q=72, r=84 (as before). \n\nAnother approach: Let's look for triplets where p, q, r are as close as possible. Let's think of factors of 9! that are close to each other.\n\nLet me think of the prime factors again: 2^7 * 3^4 *5 *7. We need to split these into three numbers.\n\nLet me try to balance the exponents. Let's try to distribute the primes as evenly as possible.\n\nFor example, let's try to make p, q, r each have roughly similar exponents.\n\nLet me think of possible triplets. For example, 72, 70, 72. But that's not allowed. Wait, but 72 is 2^3 * 3^2, 70 is 2*5*7, and another 72. But that would give product 72*70*72 = 72^2 *70 = 5184*70= 362880, which is correct. But since p < q < r, we need to arrange them. So if p=70, q=72, r=72. But r must be greater than q, so that's invalid. So we need to adjust.\n\nAlternatively, maybe 70, 72, 72 is not allowed. So perhaps 70, 72, 72 is invalid. So maybe we need to find another triplet.\n\nWhat if we take p=70, q=72, r=72. Not allowed. So maybe p=70, q=72, r= something else. But 70*72*r = 362880 \u2192 r= 362880/(70*72) = 362880/5040 = 72. So again, same as before. So no good.\n\nAnother idea: Let's try to find three numbers where two are close and the third is adjusted. For example, let's take p=72, q=70, but that's not in order. So p=70, q=72, r=72. Not allowed. So maybe p=70, q=72, r=72 is invalid. So perhaps we need to find another triplet.\n\nWhat if we take p=63, q=72, r=80. As before, difference is 17. Let's check if there's a triplet with smaller difference.\n\nLet me think of other triplets. For example, p=64, q=70, r=81 (diff 17). What about p=65? Not a factor. p=66? Not a factor. p=67? Let's check if 67 divides 9!. 9! is 362880. 67 is a prime number. 67*5415= 362,  but 67*5415= 67*5000=335000, 67*415= 277,  so total 335000 + 277... Wait, 67*5415 is way larger than 362880. So 67 is larger than 362880/ (something). So 362880 \u00f767 is approximately 5416. So 67 is not a factor. So p=67 is invalid.\n\nHow about p=60, q=72, r=84 (diff 24). Not better.\n\nWhat about p=56, q=72, r=90. Let's check 56*72*90 = 56*6480 = 362880. Yes. Then r - p = 90 -56=34. Worse.\n\nAnother idea: Let's try to find three numbers where they are as close as possible. Let's think of numbers around 72. For example, 72, 72, 70. But again, duplicates. What if we take 72, 70, 72. Not allowed. So maybe 70, 72, 72. Not allowed. So perhaps we need to adjust.\n\nWhat if we take p=70, q=72, r=72. Not allowed. So maybe p=70, q=72, r=72. Not valid. So maybe we need to find another triplet where the numbers are closer.\n\nWait, what if we take p=72, q=75, r= 362880/(72*75) = 362880 / 5400 = 67.2. Not integer. So no.\n\nHow about p=72, q=70, r=72. Again, same as before.\n\nAlternatively, let's think of other factors. Let's try p=60, q=70, r= 362880/(60*70)= 362880/4200= 86.4. Not integer.\n\nWhat about p=60, q=75, r= 362880/(60*75)= 362880/4500= 80.64. Not integer.\n\nHow about p=60, q=80, r= 362880/(60*80)= 362880/4800= 75.6. Not integer.\n\nNot helpful.\n\nAnother approach: Let's list all possible triplets where p, q, r are factors of 9! and p < q < r, and compute r - p.\n\nBut this might take a long time. Let's think of possible triplets.\n\nWe already have:\n\n- 63, 72, 80 (diff 17)\n- 64, 70, 81 (diff 17)\n- 60, 72, 84 (diff 24)\n- 56, 80, 81 (diff 25)\n\nAre there any other triplets with smaller differences?\n\nLet me think of p=72, q=75, r= something. But 72*75=5400. 362880 /5400= 67.2. Not integer.\n\nWhat about p=70, q=72, r=72. Not allowed.\n\nWhat about p=70, q=72, r=72. Not allowed.\n\nWhat about p=70, q=75, r= 362880/(70*75)= 362880/5250= 69.12. Not integer.\n\nHow about p=70, q=72, r=72. Not allowed.\n\nAnother idea: Let's try to find three numbers where they are as close as possible. For example, 72, 70, 72. Not allowed. What if we take 70, 72, 72. Not allowed. So maybe 70, 72, 72 is invalid. So perhaps we need to find a triplet where the numbers are closer.\n\nWait, what if we take p=72, q=75, r= 362880/(72*75)= 67.2. Not integer. Not helpful.\n\nWhat about p=63, q=70, r= 362880/(63*70)= 362880/4410= 82.285... Not integer.\n\nHow about p=63, q=75, r= 362880/(63*75)= 362880/4725= 76.8. Not integer.\n\nAnother idea: Let's look for triplets where p, q, r are all in the vicinity of 70-75.\n\nFor example, 70, 72, 72 (invalid). What about 70, 72, 72. Not allowed. So maybe 70, 72, 72. No.\n\nWhat about 70, 72, 72. Not allowed. So maybe 70, 72, 72. Not valid.\n\nAlternatively, maybe 70, 72, 72. Not allowed. So perhaps there's no triplet with difference less than 17.\n\nWait, what about p=64, q=72, r= 362880/(64*72)= 362880/4608= 78.75. Not integer.\n\nHow about p=64, q=75, r= 362880/(64*75)= 362880/4800= 75.6. Not integer.\n\nWhat about p=64, q=70, r=81 (as before). Difference 17.\n\nAnother triplet: p=60, q=72, r=84 (diff 24). Not better.\n\nWhat about p=60, q=75, r= 80.64. Not integer.\n\nHow about p=60, q=80, r=75.6. Not integer.\n\nAnother idea: Let's check if there's a triplet with difference 16. For example, r - p =16. So p and r are 16 apart. Let's see if such a triplet exists.\n\nSuppose p= x, r= x+16. Then q is between p and r. So p < q < x+16. And p*q*(x+16) = 9!.\n\nBut this might be too vague. Let's try specific values.\n\nFor example, if p=64, r=80. Then q must be between 64 and 80. So 64* q *80 = 362880 \u2192 q = 362880/(64*80) = 362880/5120 = 70.875. Not integer.\n\nIf p=63, r=79. Then q= 362880/(63*79). Let's compute 63*79= 4977. 362880 /4977 \u2248 72.9. Not integer.\n\nIf p=65, r=81. But 65 is not a factor. So invalid.\n\nIf p=60, r=76. Then q= 362880/(60*76)= 362880/4560= 79.5. Not integer.\n\nIf p=62, r=78. 62*78=4836. 362880/4836 \u2248 75.0. Let me compute 4836*75= 362700. Close to 362880. Difference is 180. So 75 + 180/4836 \u2248 75.037. Not integer.\n\nNot helpful.\n\nWhat about p=64, r=80. As before, q\u224870.875. Not integer.\n\nAnother approach: Let's check if there are any triplets with difference 16. Maybe not. So the current best is 17.\n\nIs there a triplet with difference 16? Let's think of other possibilities.\n\nWhat if p=70, q=72, r=72. Not allowed. But if we can find p=70, q=72, r=72. Not allowed. So no.\n\nAlternatively, p=70, q=72, r=72. Not allowed.\n\nAnother idea: Let's check if there's a triplet where p=72, q=75, r= something. But 72*75=5400. 362880/5400=67.2. Not integer.\n\nWhat about p=72, q=70, r=72. Not allowed.\n\nAlternatively, p=70, q=72, r=72. Not allowed.\n\nSo maybe the minimal difference is 17. But let's check if there are other triplets with difference 17.\n\nFor example, p=63, q=72, r=80 (diff 17). Another triplet: p=64, q=70, r=81 (diff 17). Are there others?\n\nWhat about p=65, but 65 is not a factor. p=66, not a factor. p=67, no. p=68? Let's check if 68 divides 9!.\n\n68=4*17. 17 is a prime. 9! is up to 9, so 17 is not a factor. So 68 is not a factor. So p=68 is invalid.\n\np=69: 69=3*23. 23 is a prime not in 9! factors. So no.\n\np=70: yes, as before.\n\nSo the only triplets with difference 17 are the two we found: (63,72,80) and (64,70,81).\n\nIs there another triplet with difference 17?\n\nLet me think of p=72, q= something, r= something. For example, p=72, q=75, r= 362880/(72*75)= 67.2. Not integer.\n\nWhat about p=70, q=72, r=72. Not allowed.\n\nAnother idea: Let's check if there are other triplets with difference 17.\n\nFor example, p=56, q=72, r= 362880/(56*72)= 362880/4032= 90. So triplet (56,72,90), difference 90-56=34. Not better.\n\nWhat about p=60, q=72, r=84 (diff 24).\n\nAnother possibility: p=60, q=75, r= 80.64. Not integer.\n\nHow about p=60, q=80, r=75.6. Not integer.\n\nAnother approach: Let's check if there are other triplets with difference 17.\n\nFor example, p=63, q=72, r=80. Let's verify the product: 63*72=4536, 4536*80=362880. Correct.\n\nAnother triplet: p=64, q=70, r=81. 64*70=4480, 4480*81= 362880. Correct.\n\nAre there any other triplets?\n\nWhat about p=65, but not a factor. p=66, no. p=67, no. p=68, no. p=69, no. p=70, yes. So for p=70, q*r=5184. As before, which gives q=72 and r=72, but not allowed. So no.\n\nWhat about p=72, q=75, r= something. Not possible.\n\nSo the minimal difference we have is 17. But wait, let's check if there are other triplets with smaller differences.\n\nWait, what about p=72, q=75, r= 362880/(72*75)= 67.2. Not integer.\n\nAnother idea: Let's think of other factor combinations. For example, 72, 70, 72. Not allowed. What about 70, 72, 72. Not allowed.\n\nWhat if we take p=70, q=72, r=72. Not allowed. So no.\n\nAnother possibility: Let's check if there's a triplet where p=72, q=75, r= something. Not possible.\n\nAlternatively, let's think of other triplets. For example, p=60, q=72, r=84 (diff 24). Not better.\n\nWhat about p=60, q=84, r=72. Not in order.\n\nAnother idea: Let's check if there are triplets where p, q, r are closer. For example, 72, 70, 72. Not allowed. What about 70, 72, 72. Not allowed.\n\nAlternatively, maybe p=70, q=72, r=72. Not allowed. So no.\n\nSo, based on the above, the minimal difference is 17. But wait, let me check another triplet.\n\nWhat about p=63, q=70, r= 362880/(63*70)= 362880/4410= 82.285... Not integer.\n\nHow about p=63, q=75, r= 362880/(63*75)= 362880/4725= 76.8. Not integer.\n\nAnother triplet: p=63, q=80, r= 362880/(63*80)= 362880/5040= 72. So triplet (63, 72, 80). Which is the same as before. So difference 17.\n\nAnother triplet: p=64, q=70, r=81. Difference 17.\n\nIs there a triplet with difference 16? Let's think.\n\nFor example, p=64, r=80. Then q= 362880/(64*80)= 362880/5120= 70.875. Not integer.\n\np=65, r=81. But 65 is not a factor.\n\np=66, r=82. 66 is not a factor.\n\np=67, r=83. No.\n\np=68, r=84. 68 is not a factor.\n\np=69, r=85. No.\n\np=70, r=86. 70 is a factor. Let's check: 70* q *86 = 362880 \u2192 q= 362880/(70*86)= 362880/6020 \u2248 60.28. Not integer.\n\nSo no.\n\nAnother idea: Let's check if there's a triplet where p=72, q=75, r= something. Not possible.\n\nSo, based on all this, the minimal difference is 17. Therefore, the answer should be 17.\n\nBut wait, let me check if there are other triplets with difference 17.\n\nFor example, p=60, q=72, r=84 (diff 24). No.\n\nWhat about p=63, q=72, r=80 (diff 17). Yes.\n\nAnother triplet: p=64, q=70, r=81 (diff 17). Yes.\n\nAre there any other triplets?\n\nWhat about p=60, q=75, r= 80.64. No.\n\nWhat about p=60, q=70, r= 86.4. No.\n\nAnother possibility: p=60, q=72, r=84. Difference 24.\n\nSo, the minimal difference is 17. Therefore, the answer is 17.\n</think>",
+        "pred": "",
+        "gold": "219",
+        "em": 0,
+        "no_answer": 1,
+        "total_prompt_tokens": 930,
+        "total_completion_tokens": 7493,
+        "total_tokens": 8423,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 930,
+        "output_tokens": 7493
+      },
+      "parent_id": null,
+      "step_id": "a43a8e83-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "a43a8e83",
+    "total_steps": 10,
+    "total_duration_ms": 44653.02134898957,
+    "duration_by_type_ms": {
+      "planning": 0.003500026650726795,
+      "reasoning": 0.0031800009310245514,
+      "retrieval": 0.0031299423426389694,
+      "tool_calling": 0.07257098332047462,
+      "code_execution": 0.010519986972212791,
+      "prefill": 0.0024299370124936104,
+      "decode": 44652.22429402638,
+      "embedding": 0.0028710346668958664,
+      "other": 44653.02134898957
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

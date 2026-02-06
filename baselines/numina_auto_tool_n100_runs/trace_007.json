@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "9c23b4ca",
+  "start_time": "2026-02-05T03:17:07.693808",
+  "end_time": "2026-02-05T03:17:22.686825",
+  "total_duration_ms": 14993.003512034193,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.3350043445825577e-05,
+      "end_time": 1.6879988834261894e-05,
+      "duration_ms": 0.0035299453884363174,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.1180021576583385e-05,
+      "end_time": 2.3880042135715485e-05,
+      "duration_ms": 0.002700020559132099,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6830006390810013e-05,
+      "end_time": 2.935004886239767e-05,
+      "duration_ms": 0.002520042471587658,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.239104989916086e-05,
+      "end_time": 3.475998528301716e-05,
+      "duration_ms": 0.0023689353838562965,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.000626391964033246,
+      "end_time": 13.170603482052684,
+      "duration_ms": 13169.97709008865,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 460,
+        "completion_tokens": 2257,
+        "total_tokens": 2717,
+        "elapsed_ms": 13169.959869002923,
+        "tool_calls_n": 1
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 13.170626742066815,
+      "end_time": 13.170746703981422,
+      "duration_ms": 0.11996191460639238,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.11188199277967215
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 13.170752563979477,
+      "end_time": 14.992885229061358,
+      "duration_ms": 1822.132665081881,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 2734,
+        "completion_tokens": 253,
+        "total_tokens": 2987,
+        "elapsed_ms": 1822.116645053029
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 14.992988431011327,
+      "end_time": 14.992998411064036,
+      "duration_ms": 0.009980052709579468,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 14.993002910981886,
+      "end_time": 14.99300612101797,
+      "duration_ms": 0.0032100360840559006,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "9c23b4ca-1",
+      "step_id": "9c23b4ca-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.360001862049103e-06,
+      "end_time": 14.993009872036055,
+      "duration_ms": 14993.003512034193,
+      "metadata": {
+        "sample_id": 6,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 90,
+        "raw_output": "<think>\nOkay, let me check the calculation again. The user asked for the total food the puppy will eat over the next 4 weeks, including today. \n\nFirst, today's feeding is 1/2 cup. Then, for the first two weeks starting tomorrow, it's 1/4 cup three times a day. That's 3 * 1/4 = 3/4 cup per day. Over 14 days, that's 14 * 3/4 = 10.5 cups.\n\nNext, the following two weeks, it's 1/2 cup twice a day. That's 2 * 1/2 = 1 cup per day. Over 14 days, that's 14 * 1 = 14 cups.\n\nAdding them all together: 0.5 (today) + 10.5 (first two weeks) + 14 (next two weeks) = 25 cups. The calculator confirmed 25.0, so the answer is correct. \n\nI need to make sure there's exactly one boxed answer. The final answer is 25, so \\boxed{25}.\n</think>\n\n\\boxed{25}",
+        "pred": "25",
+        "gold": "25",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 3194,
+        "total_completion_tokens": 2510,
+        "total_tokens": 5704,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 3194,
+        "output_tokens": 2510
+      },
+      "parent_id": null,
+      "step_id": "9c23b4ca-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "9c23b4ca",
+    "total_steps": 10,
+    "total_duration_ms": 14993.003512034193,
+    "duration_by_type_ms": {
+      "planning": 0.0035299453884363174,
+      "reasoning": 0.0032100360840559006,
+      "retrieval": 0.002700020559132099,
+      "tool_calling": 0.11996191460639238,
+      "code_execution": 0.009980052709579468,
+      "prefill": 0.0023689353838562965,
+      "decode": 14992.109755170532,
+      "embedding": 0.002520042471587658,
+      "other": 14993.003512034193
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

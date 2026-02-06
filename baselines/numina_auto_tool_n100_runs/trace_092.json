@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "4cbe9e14",
+  "start_time": "2026-02-05T03:50:08.918160",
+  "end_time": "2026-02-05T03:50:13.636495",
+  "total_duration_ms": 4718.321011052467,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.2779957614839077e-05,
+      "end_time": 1.6079982742667198e-05,
+      "duration_ms": 0.003300025127828121,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.0549981854856014e-05,
+      "end_time": 2.3580039851367474e-05,
+      "duration_ms": 0.0030300579965114594,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.7079950086772442e-05,
+      "end_time": 3.0111055821180344e-05,
+      "duration_ms": 0.0030311057344079018,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.293994814157486e-05,
+      "end_time": 3.52710485458374e-05,
+      "duration_ms": 0.0023311004042625427,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0002809549914672971,
+      "end_time": 2.7795107449637726,
+      "duration_ms": 2779.2297899723053,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 383,
+        "completion_tokens": 468,
+        "total_tokens": 851,
+        "elapsed_ms": 2779.2122300015762,
+        "tool_calls_n": 1
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 2.7795261250576004,
+      "end_time": 2.7796004159608856,
+      "duration_ms": 0.07429090328514576,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.06560096517205238
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 2.779605977004394,
+      "end_time": 4.718178738025017,
+      "duration_ms": 1938.5727610206231,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 877,
+        "completion_tokens": 320,
+        "total_tokens": 1197,
+        "elapsed_ms": 1938.5570609010756
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 4.718301189946942,
+      "end_time": 4.718312370008789,
+      "duration_ms": 0.011180061846971512,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 4.718318670988083,
+      "end_time": 4.718322610948235,
+      "duration_ms": 0.003939960151910782,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "4cbe9e14-1",
+      "step_id": "4cbe9e14-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.119953468441963e-06,
+      "end_time": 4.718327131005935,
+      "duration_ms": 4718.321011052467,
+      "metadata": {
+        "sample_id": 91,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 12,
+        "raw_output": "<think>\nOkay, the user tried to use the calculator tool with the expression \"10! / (3! * 7!)\" but got an error. Hmm, maybe the calculator doesn't accept factorial notation. Let me check the tool's description again. The tool says it's for evaluating mathematical expressions, but perhaps it doesn't recognize the factorial symbol. \n\nAlternatively, maybe I should compute it step by step without using factorials. The original formula is 10 choose 3, which is 10!/(3!7!). But since 10! is 10\u00d79\u00d78\u00d77!, dividing by 7! cancels that out, leaving (10\u00d79\u00d78)/(3\u00d72\u00d71). So calculating that: 10\u00d79\u00d78 is 720, and 3\u00d72\u00d71 is 6. Then 720 divided by 6 is 120. \n\nMaybe the calculator can handle the simplified expression. Let me try entering (10*9*8)/(3*2*1). That should work. Let me check if the tool allows multiplication and division. The parameters say \"mathematical expression\", so probably yes. So the correct expression would be (10*9*8)/(3*2*1). Let me call the calculator again with that.\n</think>",
+        "pred": "",
+        "gold": "120",
+        "em": 0,
+        "no_answer": 1,
+        "total_prompt_tokens": 1260,
+        "total_completion_tokens": 788,
+        "total_tokens": 2048,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 1260,
+        "output_tokens": 788
+      },
+      "parent_id": null,
+      "step_id": "4cbe9e14-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "4cbe9e14",
+    "total_steps": 10,
+    "total_duration_ms": 4718.321011052467,
+    "duration_by_type_ms": {
+      "planning": 0.003300025127828121,
+      "reasoning": 0.003939960151910782,
+      "retrieval": 0.0030300579965114594,
+      "tool_calling": 0.07429090328514576,
+      "code_execution": 0.011180061846971512,
+      "prefill": 0.0023311004042625427,
+      "decode": 4717.802550992928,
+      "embedding": 0.0030311057344079018,
+      "other": 4718.321011052467
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

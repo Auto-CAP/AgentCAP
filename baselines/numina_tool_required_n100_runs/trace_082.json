@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "5d8ca65c",
+  "start_time": "2026-02-05T03:00:09.027714",
+  "end_time": "2026-02-05T03:00:10.439484",
+  "total_duration_ms": 1411.7584249470383,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.2710923328995705e-05,
+      "end_time": 1.6530975699424744e-05,
+      "duration_ms": 0.003820052370429039,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.0600971765816212e-05,
+      "end_time": 2.339098136872053e-05,
+      "duration_ms": 0.0027900096029043198,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6080990210175514e-05,
+      "end_time": 2.864096313714981e-05,
+      "duration_ms": 0.0025599729269742966,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.131094854325056e-05,
+      "end_time": 3.417092375457287e-05,
+      "duration_ms": 0.0028599752113223076,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.00040131795685738325,
+      "end_time": 0.27038123388774693,
+      "duration_ms": 269.97991593088955,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 439,
+        "completion_tokens": 34,
+        "total_tokens": 473,
+        "elapsed_ms": 269.962796010077,
+        "tool_calls_n": 1
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 0.2703966139815748,
+      "end_time": 0.2704774859594181,
+      "duration_ms": 0.08087197784334421,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.07190206088125706
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 0.27048321592155844,
+      "end_time": 1.4116628229385242,
+      "duration_ms": 1141.1796070169657,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 478,
+        "completion_tokens": 186,
+        "total_tokens": 664,
+        "elapsed_ms": 1141.1628269124776
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 1.4117428939789534,
+      "end_time": 1.4117525849724188,
+      "duration_ms": 0.009690993465483189,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 1.4117568149231374,
+      "end_time": 1.4117600449826568,
+      "duration_ms": 0.0032300595194101334,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "5d8ca65c-1",
+      "step_id": "5d8ca65c-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.039976142346859e-06,
+      "end_time": 1.4117644649231806,
+      "duration_ms": 1411.7584249470383,
+      "metadata": {
+        "sample_id": 81,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 44,
+        "raw_output": "<think>\nOkay, let's see. The problem says Kaleb had 98 lives initially. Then he lost 25 lives. To find out how many he has left, I need to subtract the number of lives he lost from his original amount. So that's 98 minus 25. Let me do that calculation.\n\n98 minus 25. Hmm, 98 minus 20 is 78, and then minus 5 more would be 73. So the result should be 73. I should check if the calculator tool was used correctly. The user required at least one tool call, so I used the calculator with the expression \"98 - 25\", which gave 73. That makes sense. The answer is 73, so the final boxed answer should be \\boxed{73}.\n</think>\n\n\\boxed{73}",
+        "pred": "73",
+        "gold": "73",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 917,
+        "total_completion_tokens": 220,
+        "total_tokens": 1137,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 917,
+        "output_tokens": 220
+      },
+      "parent_id": null,
+      "step_id": "5d8ca65c-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "5d8ca65c",
+    "total_steps": 10,
+    "total_duration_ms": 1411.7584249470383,
+    "duration_by_type_ms": {
+      "planning": 0.003820052370429039,
+      "reasoning": 0.0032300595194101334,
+      "retrieval": 0.0027900096029043198,
+      "tool_calling": 0.08087197784334421,
+      "code_execution": 0.009690993465483189,
+      "prefill": 0.0028599752113223076,
+      "decode": 1411.1595229478553,
+      "embedding": 0.0025599729269742966,
+      "other": 1411.7584249470383
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

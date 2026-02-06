@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "e40aa08d",
+  "start_time": "2026-02-05T02:49:08.061885",
+  "end_time": "2026-02-05T02:49:43.106142",
+  "total_duration_ms": 35044.2370880628,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.3669952750205994e-05,
+      "end_time": 1.7369980923831463e-05,
+      "duration_ms": 0.003700028173625469,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.129003405570984e-05,
+      "end_time": 2.3939996026456356e-05,
+      "duration_ms": 0.002649961970746517,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6830006390810013e-05,
+      "end_time": 2.956006210297346e-05,
+      "duration_ms": 0.0027300557121634483,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.2859970815479755e-05,
+      "end_time": 3.53700015693903e-05,
+      "duration_ms": 0.0025100307539105415,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0005528799956664443,
+      "end_time": 0.4159185270546004,
+      "duration_ms": 415.365647058934,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 502,
+        "completion_tokens": 59,
+        "total_tokens": 561,
+        "elapsed_ms": 415.34575703553855,
+        "tool_calls_n": 1
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 0.41593528795056045,
+      "end_time": 0.4160934010287747,
+      "duration_ms": 0.15811307821422815,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.1481430372223258
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 0.41609923099167645,
+      "end_time": 35.04400119301863,
+      "duration_ms": 34627.901962026954,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 572,
+        "completion_tokens": 5854,
+        "total_tokens": 6426,
+        "elapsed_ms": 34627.88584199734
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 35.04422154696658,
+      "end_time": 35.044231188017875,
+      "duration_ms": 0.009641051292419434,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 35.04423586803023,
+      "end_time": 35.044239397044294,
+      "duration_ms": 0.003529014065861702,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "e40aa08d-1",
+      "step_id": "e40aa08d-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.329966709017754e-06,
+      "end_time": 35.04424341802951,
+      "duration_ms": 35044.2370880628,
+      "metadata": {
+        "sample_id": 62,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 107,
+        "raw_output": "<think>\nOkay, let's try to solve this problem step by step. The problem is about finding the sum S of an infinite series, then computing (S + 1)^3 and expressing it as a reduced fraction m/n, finally finding 10m + n.\n\nFirst, let's understand the series given. The series S is the sum from i=1 to infinity of the product from j=1 to i of (3j - 2)/(12j). So each term in the series is a product of fractions. Let me write out the first few terms to see if there's a pattern.\n\nFor i=1: the product is (3*1 - 2)/(12*1) = (3 - 2)/12 = 1/12. So the first term is 1/12.\n\nFor i=2: the product is [(3*1 - 2)/(12*1)] * [(3*2 - 2)/(12*2)] = (1/12) * (4/24) = (1/12)*(1/6) = 1/72. So the second term is 1/72.\n\nFor i=3: multiply the previous product by (3*3 - 2)/(12*3) = (7/36). So 1/72 * 7/36 = 7/(72*36) = 7/2592. Hmm, this seems to be getting smaller quickly.\n\nBut summing these terms directly might not be feasible. Maybe there's a way to find a closed-form expression for the product or the sum.\n\nLet me look at the general term of the product. The product from j=1 to i of (3j - 2)/(12j). Let's simplify each term:\n\n(3j - 2)/(12j) = [3j - 2]/[12j] = [3j/(12j) - 2/(12j)] = 1/4 - 1/(6j). Wait, but that might not help. Alternatively, maybe factor out constants:\n\n(3j - 2)/(12j) = (3j - 2)/(12j) = (3j - 2)/(12j) = (3j - 2)/(12j). Alternatively, write it as (3j - 2)/12j = (3j - 2)/(12j) = (3j - 2)/(12j). Maybe express it as a product of terms that can telescope or relate to known series.\n\nAlternatively, consider the product P_i = product_{j=1}^i (3j - 2)/(12j). Let's try to write this product in terms of factorials or gamma functions. Let's see:\n\nThe numerator of the product is product_{j=1}^i (3j - 2). Let's note that 3j - 2 = 3(j - 2/3). So the product becomes product_{j=1}^i 3(j - 2/3) = 3^i * product_{j=1}^i (j - 2/3).\n\nSimilarly, the denominator is product_{j=1}^i 12j = 12^i * i!.\n\nSo P_i = [3^i * product_{j=1}^i (j - 2/3)] / [12^i * i!] = (3/12)^i * [product_{j=1}^i (j - 2/3)] / i! = (1/4)^i * [product_{j=1}^i (j - 2/3)] / i!.\n\nNow, the product product_{j=1}^i (j - 2/3) can be related to the gamma function. Recall that Gamma(n) = (n-1)! and Gamma(z) = \u222b_0^\u221e t^{z-1} e^{-t} dt. Also, Gamma(z + n) = z(z+1)...(z + n -1) Gamma(z). \n\nBut maybe there's a better way. Let's note that product_{j=1}^i (j - 2/3) = (1 - 2/3)(2 - 2/3)...(i - 2/3) = (1/3)(4/3)(7/3)...((3i - 2)/3). So that's product_{k=1}^i (3k - 2)/3 = [product_{k=1}^i (3k - 2)] / 3^i.\n\nWait, but that's the same as the numerator we had earlier. So maybe this approach isn't helping. Alternatively, think of the product as a Pochhammer symbol. The Pochhammer symbol (a)_n = a(a+1)...(a + n -1). But here, the product is (1/3)(4/3)(7/3)...((3i - 2)/3) = (1/3)^i * product_{k=0}^{i-1} (1 + 3k) = (1/3)^i * 3^i * product_{k=0}^{i-1} (1/3 + k) = product_{k=0}^{i-1} (k + 1/3) = (1/3)_i, where (a)_i is the Pochhammer symbol.\n\nSo product_{j=1}^i (j - 2/3) = (1/3)_i. Therefore, P_i = (1/4)^i * (1/3)_i / i!.\n\nBut the Pochhammer symbol (a)_i is related to the gamma function: (a)_i = \u0393(a + i)/\u0393(a). So (1/3)_i = \u0393(1/3 + i)/\u0393(1/3). Therefore, P_i = (1/4)^i * \u0393(1/3 + i) / [\u0393(1/3) i! ].\n\nBut I'm not sure if this helps directly. Maybe we can relate the sum S to a hypergeometric function. The general term of the series S is P_i, so S = sum_{i=1}^\u221e P_i.\n\nAlternatively, let's consider the generating function. Let me think about the sum S. Let me write S as sum_{i=1}^\u221e [product_{j=1}^i (3j - 2)/(12j)].\n\nAlternatively, note that each term can be written as:\n\nproduct_{j=1}^i (3j - 2)/(12j) = product_{j=1}^i (3j - 2)/12j = product_{j=1}^i (3j - 2)/12j.\n\nLet me try to write this as a product that can be simplified. Let's consider the product:\n\nproduct_{j=1}^i (3j - 2)/(12j) = product_{j=1}^i (3j - 2)/12j = product_{j=1}^i (3j - 2)/12j.\n\nLet me separate the constants:\n\n= (1/12^i) * product_{j=1}^i (3j - 2)/j.\n\nBut product_{j=1}^i (3j - 2)/j = product_{j=1}^i (3 - 2/j). Hmm, not sure.\n\nAlternatively, product_{j=1}^i (3j - 2)/j = product_{j=1}^i (3 - 2/j). But this seems complicated.\n\nAlternatively, think of the product as:\n\nproduct_{j=1}^i (3j - 2) / product_{j=1}^i 12j = [product_{j=1}^i (3j - 2)] / [12^i i! ].\n\nSo the term is [product_{j=1}^i (3j - 2)] / [12^i i! ].\n\nNow, the product in the numerator is similar to a factorial but with steps of 3. For example, for i=1: 1, i=2: 1*4, i=3: 1*4*7, etc. This is similar to the double factorial or some generalized factorial. But I'm not sure. Alternatively, this product can be expressed using the Gamma function. For example, product_{j=1}^i (3j - 2) = 3^i * product_{j=1}^i (j - 2/3) = 3^i * \u0393(i + 1 - 2/3)/\u0393(1 - 2/3) = 3^i * \u0393(i + 1/3)/\u0393(1/3).\n\nSo substituting back, the term becomes [3^i * \u0393(i + 1/3)/\u0393(1/3)] / [12^i i! ] = [ (3/12)^i * \u0393(i + 1/3) ] / [\u0393(1/3) i! ] = [ (1/4)^i * \u0393(i + 1/3) ] / [\u0393(1/3) i! ].\n\nBut I'm not sure how to sum this. Maybe using the series expansion of some function. Alternatively, consider the sum S = sum_{i=1}^\u221e [ (1/4)^i * \u0393(i + 1/3) ] / [\u0393(1/3) i! ].\n\nBut this seems complicated. Maybe there's a generating function or a known series that matches this.\n\nAlternatively, think of the sum S as part of a binomial expansion. Let me recall that the binomial series is (1 + x)^k = sum_{n=0}^\u221e (k choose n) x^n, where (k choose n) is the generalized binomial coefficient.\n\nBut how does that relate here? Let's see. The generalized binomial coefficient is (k choose n) = \u0393(k + 1)/[\u0393(n + 1)\u0393(k - n + 1)] for non-integer k. But I'm not sure.\n\nAlternatively, consider the series expansion of (1 - x)^{-a} = sum_{n=0}^\u221e (a + n - 1 choose n) x^n. But again, not sure.\n\nAlternatively, think of the product term as a term in a hypergeometric series. The general hypergeometric function is _pF_q(a_1,...,a_p; b_1,...,b_q; z) = sum_{n=0}^\u221e [ (a_1)_n ... (a_p)_n / (b_1)_n ... (b_q)_n ] * z^n / n!.\n\nIn our case, the term for S is [product_{j=1}^i (3j - 2)/12j] = [product_{j=1}^i (3j - 2)/12j]. Let's see if this can be expressed in terms of Pochhammer symbols.\n\nEarlier, we had that product_{j=1}^i (3j - 2) = 3^i * (1/3)_i, where (a)_i is the Pochhammer symbol. So the term becomes [3^i * (1/3)_i / 12^i i!] = (1/4)^i * (1/3)_i / i!.\n\nSo the sum S is sum_{i=1}^\u221e (1/4)^i * (1/3)_i / i!.\n\nThis looks like a hypergeometric series. Specifically, the hypergeometric function _1F_1(a; b; z) is sum_{n=0}^\u221e (a)_n / (b)_n * z^n / n!.\n\nBut in our case, the sum starts at i=1, and the term is (1/3)_i / i! * (1/4)^i. So if we consider the hypergeometric function _1F_1(1/3; 1; 1/4), then the sum from n=0 to \u221e would be _1F_1(1/3; 1; 1/4) = sum_{n=0}^\u221e (1/3)_n / (1)_n * (1/4)^n / n!.\n\nBut (1)_n = n! So the term is (1/3)_n / n! * (1/4)^n. Therefore, the sum from n=0 to \u221e is _1F_1(1/3; 1; 1/4). Then our sum S is this sum minus the n=0 term. The n=0 term is (1/3)_0 / 0! * (1/4)^0 = 1/1 * 1 = 1. So S = _1F_1(1/3; 1; 1/4) - 1.\n\nBut I'm not sure how to evaluate this hypergeometric function. Maybe there's a known value for _1F_1(1/3; 1; 1/4). Alternatively, perhaps there's a way to relate this to a binomial expansion or another function.\n\nAlternatively, think of the series as a binomial expansion with a fractional exponent. Let me recall that (1 - x)^{-a} = sum_{n=0}^\u221e (a + n - 1 choose n) x^n. But the coefficients here involve (a)_n / n! which is similar to the binomial coefficients.\n\nWait, the generalized binomial coefficient (a choose n) = \u0393(a + 1)/[\u0393(n + 1)\u0393(a - n + 1)] for non-integer a. But for the series expansion of (1 - x)^{-a}, it's sum_{n=0}^\u221e (a + n - 1 choose n) x^n. Which is the same as sum_{n=0}^\u221e (a)_n / n! x^n. So that's exactly the same as the hypergeometric function _1F_1(a; 1; x), since _1F_1(a; 1; x) = sum_{n=0}^\u221e (a)_n / (1)_n * x^n / n! = sum_{n=0}^\u221e (a)_n / n! * x^n / n! ? Wait no, (1)_n = n! So _1F_1(a; 1; x) = sum_{n=0}^\u221e (a)_n / (1)_n * x^n / n! = sum_{n=0}^\u221e (a)_n / n! * x^n / n! ? No, that's not right. Wait, the general hypergeometric function _pF_q has terms [ (a_1)_n ... (a_p)_n / (b_1)_n ... (b_q)_n ] * z^n / n!.\n\nSo _1F_1(a; b; z) = sum_{n=0}^\u221e [ (a)_n / (b)_n ] * z^n / n!.\n\nIn our case, the sum S + 1 (since S is from n=1 to \u221e) is sum_{n=0}^\u221e [ (1/3)_n / (1)_n ] * (1/4)^n / n! ?\n\nWait, no. Wait, our term is (1/3)_n / n! * (1/4)^n. Since (1)_n = n!, so the term is (1/3)_n / (1)_n * (1/4)^n / n! ? No, that would be (1/3)_n / (1)_n * (1/4)^n / n! = (1/3)_n / (n! * n!) * (1/4)^n. Which is not the same as our term. Wait, our term is (1/3)_n / n! * (1/4)^n. So that's [ (1/3)_n / n! ] * (1/4)^n. Which is the same as [ (1/3)_n / (1)_n ] * (1/4)^n / n! ? No, because (1)_n = n! So [ (1/3)_n / (1)_n ] * (1/4)^n = [ (1/3)_n / n! ] * (1/4)^n. So the sum from n=0 to \u221e of [ (1/3)_n / n! ] * (1/4)^n is _1F_1(1/3; 1; 1/4). Therefore, S = _1F_1(1/3; 1; 1/4) - 1.\n\nBut I need to find the value of this hypergeometric function. I'm not sure how to compute it directly. Maybe there's a relationship with the binomial theorem or another function.\n\nAlternatively, consider that the series might be related to the expansion of (1 - x)^{-a} for some a. Let me think. For example, if we have (1 - x)^{-a} = sum_{n=0}^\u221e (a + n - 1 choose n) x^n. The coefficients here are (a + n - 1 choose n) = (a)_n / n!.\n\nSo if we set a = 1/3, then (1 - x)^{-1/3} = sum_{n=0}^\u221e (1/3 + n - 1 choose n) x^n = sum_{n=0}^\u221e (n - 2/3 choose n) x^n = sum_{n=0}^\u221e (1/3)_n / n! x^n. Wait, that's exactly the same as our sum! Because (1/3)_n / n! is the same as (n - 2/3 choose n) ?\n\nWait, the generalized binomial coefficient (a choose n) is \u0393(a + 1)/[\u0393(n + 1)\u0393(a - n + 1)] for non-integer a. But for a = 1/3, (1/3 choose n) = \u0393(1/3 + 1)/[\u0393(n + 1)\u0393(1/3 - n + 1)] = \u0393(4/3)/[n! \u0393(4/3 - n)]. But this seems complicated. However, the series expansion of (1 - x)^{-a} is sum_{n=0}^\u221e (a + n - 1 choose n) x^n, and (a + n - 1 choose n) = (a)_n / n!.\n\nSo if we take a = 1/3, then (1 - x)^{-1/3} = sum_{n=0}^\u221e (1/3)_n / n! x^n. Therefore, our sum S + 1 is equal to (1 - x)^{-1/3} evaluated at x = 1/4. So S + 1 = (1 - 1/4)^{-1/3} = (3/4)^{-1/3} = (4/3)^{1/3}.\n\nWait, that seems promising! Let me check this again. If the sum from n=0 to \u221e of (1/3)_n / n! * x^n is (1 - x)^{-1/3}, then substituting x = 1/4 gives us sum_{n=0}^\u221e (1/3)_n / n! * (1/4)^n = (1 - 1/4)^{-1/3} = (3/4)^{-1/3} = (4/3)^{1/3}.\n\nTherefore, S + 1 = (4/3)^{1/3}, so S = (4/3)^{1/3} - 1.\n\nBut wait, the original sum S is from i=1 to \u221e, so S = sum_{i=1}^\u221e [ (1/3)_i / i! * (1/4)^i ] = [sum_{i=0}^\u221e ... ] - the i=0 term. The i=0 term is (1/3)_0 / 0! * (1/4)^0 = 1/1 * 1 = 1. So S = (4/3)^{1/3} - 1.\n\nTherefore, S + 1 = (4/3)^{1/3}. Then (S + 1)^3 = (4/3)^{1/3 * 3} = 4/3. So m/n is 4/3, which is already in lowest terms since 4 and 3 are coprime. Therefore, m=4, n=3, and 10m + n = 10*4 + 3 = 43.\n\nWait, that seems straightforward. Let me verify this conclusion.\n\nIf S + 1 = (4/3)^{1/3}, then cubing both sides gives (S + 1)^3 = 4/3. So yes, m=4, n=3, and 10m + n = 43. That seems correct.\n\nBut let me check the step where I equated the sum to (1 - x)^{-a}. The key step was recognizing that the series sum_{n=0}^\u221e (1/3)_n / n! x^n equals (1 - x)^{-1/3}. This is a standard binomial series expansion. The binomial theorem for any exponent \u03b1 is (1 - x)^\u03b1 = sum_{n=0}^\u221e (\u03b1 choose n) (-x)^n. But when \u03b1 is a real number, the expansion is sum_{n=0}^\u221e (\u03b1)_n / n! x^n. Wait, no, the binomial series is (1 + x)^\u03b1 = sum_{n=0}^\u221e (\u03b1 choose n) x^n, where (\u03b1 choose n) = \u03b1(\u03b1 - 1)...(\u03b1 - n + 1)/n!.\n\nBut for (1 - x)^{-1/3}, it's equivalent to (1 + (-x))^{-1/3}, so the expansion is sum_{n=0}^\u221e (-1/3 choose n) (-x)^n = sum_{n=0}^\u221e (-1/3 choose n) (-1)^n x^n = sum_{n=0}^\u221e [ (-1/3)(-1/3 - 1)...(-1/3 - n + 1)/n! ] (-1)^n x^n.\n\nSimplifying the coefficients:\n\n[ (-1/3)(-4/3)(-7/3)...(- (3n - 2)/3 ) / n! ] * (-1)^n.\n\nEach term in the product is - (3k - 2)/3 for k from 1 to n. So the product is (-1)^n * product_{k=1}^n (3k - 2)/3. Therefore, the coefficient becomes [ (-1)^n * product_{k=1}^n (3k - 2)/3 ] / n! * (-1)^n = [ product_{k=1}^n (3k - 2)/3 ] / n! = [ product_{k=1}^n (3k - 2) ] / (3^n n! ).\n\nBut this is exactly the same as the term we have in our series. Because our term for the sum is [ (1/3)_n / n! ] * x^n. Wait, (1/3)_n = \u0393(1/3 + n)/\u0393(1/3) = (1/3)(4/3)(7/3)...( (3n - 2)/3 ) * \u0393(1/3)/\u0393(1/3) = product_{k=1}^n (3k - 2)/3. So (1/3)_n / n! = [ product_{k=1}^n (3k - 2)/3 ] / n! = [ product_{k=1}^n (3k - 2) ] / (3^n n! ). Which matches the coefficient from the binomial expansion. Therefore, the sum sum_{n=0}^\u221e [ (1/3)_n / n! ] x^n = (1 - x)^{-1/3}.\n\nTherefore, substituting x = 1/4, we get sum_{n=0}^\u221e [ (1/3)_n / n! ] (1/4)^n = (1 - 1/4)^{-1/3} = (3/4)^{-1/3} = (4/3)^{1/3}. Hence, S + 1 = (4/3)^{1/3}, so (S + 1)^3 = 4/3. Therefore, m = 4, n = 3, and 10m + n = 43.\n\nThis seems correct. Let me check with the initial terms. Let's compute S numerically using the first few terms and see if it approaches (4/3)^{1/3} - 1.\n\nCompute (4/3)^{1/3} \u2248 (1.3333)^{0.3333} \u2248 1.1006. So S \u2248 1.1006 - 1 = 0.1006.\n\nNow compute the first few terms of S:\n\nTerm 1: 1/12 \u2248 0.0833\n\nTerm 2: 1/72 \u2248 0.0139\n\nTerm 3: 7/2592 \u2248 0.0027\n\nTerm 4: 7/2592 * (3*4 - 2)/(12*4) = 7/2592 * 10/48 = 70/(2592*48) \u2248 70/124416 \u2248 0.000563\n\nAdding these up: 0.0833 + 0.0139 = 0.0972 + 0.0027 = 0.0999 + 0.000563 \u2248 0.1005, which is very close to 0.1006. So this suggests that the analytical result is correct.\n\nTherefore, the answer is 43.\n</think>",
+        "pred": "",
+        "gold": "43",
+        "em": 0,
+        "no_answer": 1,
+        "total_prompt_tokens": 1074,
+        "total_completion_tokens": 5913,
+        "total_tokens": 6987,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 1074,
+        "output_tokens": 5913
+      },
+      "parent_id": null,
+      "step_id": "e40aa08d-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "e40aa08d",
+    "total_steps": 10,
+    "total_duration_ms": 35044.2370880628,
+    "duration_by_type_ms": {
+      "planning": 0.003700028173625469,
+      "reasoning": 0.003529014065861702,
+      "retrieval": 0.002649961970746517,
+      "tool_calling": 0.15811307821422815,
+      "code_execution": 0.009641051292419434,
+      "prefill": 0.0025100307539105415,
+      "decode": 35043.26760908589,
+      "embedding": 0.0027300557121634483,
+      "other": 35044.2370880628
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

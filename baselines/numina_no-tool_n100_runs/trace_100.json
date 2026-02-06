@@ -1,0 +1,165 @@
+{
+  "name": "numina-no-tool-skeleton",
+  "trace_id": "8d31d8e1",
+  "start_time": "2026-02-05T01:30:21.629780",
+  "end_time": "2026-02-05T01:30:23.460904",
+  "total_duration_ms": 1831.1097879195586,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.2869946658611298e-05,
+      "end_time": 1.646997407078743e-05,
+      "duration_ms": 0.003600027412176132,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "8d31d8e1-1",
+      "step_id": "8d31d8e1-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.059992402791977e-05,
+      "end_time": 2.3639993742108345e-05,
+      "duration_ms": 0.0030400697141885757,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "8d31d8e1-1",
+      "step_id": "8d31d8e1-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6679947040975094e-05,
+      "end_time": 2.9439921490848064e-05,
+      "duration_ms": 0.0027599744498729706,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "8d31d8e1-1",
+      "step_id": "8d31d8e1-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.2220035791397095e-05,
+      "end_time": 3.4570926800370216e-05,
+      "duration_ms": 0.0023508910089731216,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "8d31d8e1-1",
+      "step_id": "8d31d8e1-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode",
+      "step_type": "decode",
+      "start_time": 0.0009213379817083478,
+      "end_time": 1.8310780769679695,
+      "duration_ms": 1830.1567389862612,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 259,
+        "completion_tokens": 303,
+        "total_tokens": 562,
+        "elapsed_ms": 1830.047106021084,
+        "raw_output": "<think>\nOkay, let's see. There are 120 crayons in total. The problem says one third are new, 20% are broken, and the rest are slightly used. I need to find out how many are slightly used.\n\nFirst, let me calculate the number of new crayons. One third of 120. So 120 divided by 3. That's 40. So 40 new crayons.\n\nNext, 20% are broken. To find 20% of 120, I can multiply 120 by 0.20. Let me do that: 120 * 0.2 = 24. So 24 broken crayons.\n\nNow, the rest are slightly used. So I need to subtract the new and broken crayons from the total. Total is 120. So 120 minus 40 new minus 24 broken. Let me compute that: 120 - 40 = 80, then 80 - 24 = 56. So 56 slightly used crayons.\n\nWait, let me check if that makes sense. 40 + 24 is 64. 120 - 64 is 56. Yeah, that seems right. So the answer should be 56.\n</think>\n\n\\boxed{56}",
+        "pred": "56",
+        "gold": "56",
+        "em": 1,
+        "no_answer": 0
+      },
+      "parent_id": "8d31d8e1-1",
+      "step_id": "8d31d8e1-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 1.8310947369318455,
+      "end_time": 1.8311038370011374,
+      "duration_ms": 0.009100069291889668,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "8d31d8e1-1",
+      "step_id": "8d31d8e1-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 1.8311087479814887,
+      "end_time": 1.831111868028529,
+      "duration_ms": 0.00312004704028368,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "8d31d8e1-1",
+      "step_id": "8d31d8e1-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.2800245359539986e-06,
+      "end_time": 1.8311160679440945,
+      "duration_ms": 1831.1097879195586,
+      "metadata": {
+        "sample_id": 99,
+        "mode": "no-tool",
+        "dataset": "numina",
+        "question_tokens": 43,
+        "pred": "56",
+        "gold": "56",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 259,
+        "total_completion_tokens": 303,
+        "total_tokens": 562,
+        "total_tool_calls": 0,
+        "input_tokens_prompt": 259,
+        "output_tokens": 303
+      },
+      "parent_id": null,
+      "step_id": "8d31d8e1-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-no-tool-skeleton",
+    "trace_id": "8d31d8e1",
+    "total_steps": 8,
+    "total_duration_ms": 1831.1097879195586,
+    "duration_by_type_ms": {
+      "planning": 0.003600027412176132,
+      "reasoning": 0.00312004704028368,
+      "retrieval": 0.0030400697141885757,
+      "code_execution": 0.009100069291889668,
+      "prefill": 0.0023508910089731216,
+      "decode": 1830.1567389862612,
+      "embedding": 0.0027599744498729706,
+      "other": 1831.1097879195586
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 1,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

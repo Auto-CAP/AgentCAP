@@ -1,0 +1,163 @@
+{
+  "name": "synthetic-e2e-wallclock",
+  "trace_id": "5561eb75",
+  "start_time": "2026-01-22T20:55:38.124743",
+  "end_time": "2026-01-22T20:55:39.459268",
+  "total_duration_ms": 1334.4975410145707,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 2.295803278684616e-05,
+      "end_time": 0.08299933304078877,
+      "duration_ms": 82.97637500800192,
+      "metadata": {
+        "slept_ms": 79.50010068093452
+      },
+      "parent_id": "5561eb75-1",
+      "step_id": "5561eb75-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 0.08303112501744181,
+      "end_time": 0.26536150003084913,
+      "duration_ms": 182.33037501340732,
+      "metadata": {
+        "slept_ms": 180.52048490986024
+      },
+      "parent_id": "5561eb75-1",
+      "step_id": "5561eb75-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 0.26540058304090053,
+      "end_time": 0.34034600004088134,
+      "duration_ms": 74.94541699998081,
+      "metadata": {
+        "slept_ms": 71.65715343898972,
+        "embedding_dim": 768
+      },
+      "parent_id": "5561eb75-1",
+      "step_id": "5561eb75-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 0.3403982080053538,
+      "end_time": 0.49661358300363645,
+      "duration_ms": 156.21537499828264,
+      "metadata": {
+        "slept_ms": 152.89114250387303,
+        "input_tokens": 1024
+      },
+      "parent_id": "5561eb75-1",
+      "step_id": "5561eb75-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode",
+      "step_type": "decode",
+      "start_time": 0.4966685000108555,
+      "end_time": 0.8640786250471137,
+      "duration_ms": 367.41012503625825,
+      "metadata": {
+        "slept_ms": 365.0896552772946,
+        "output_tokens": 256
+      },
+      "parent_id": "5561eb75-1",
+      "step_id": "5561eb75-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 0.8641022910014726,
+      "end_time": 0.9867238330189139,
+      "duration_ms": 122.62154201744124,
+      "metadata": {
+        "slept_ms": 117.56958849870166,
+        "tool_name": "mock_tool"
+      },
+      "parent_id": "5561eb75-1",
+      "step_id": "5561eb75-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 0.9867584160529077,
+      "end_time": 1.1634775830316357,
+      "duration_ms": 176.71916697872803,
+      "metadata": {
+        "slept_ms": 174.1576366823139,
+        "language": "python"
+      },
+      "parent_id": "5561eb75-1",
+      "step_id": "5561eb75-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 1.1635493750218302,
+      "end_time": 1.3344812500290573,
+      "duration_ms": 170.93187500722706,
+      "metadata": {
+        "slept_ms": 169.75924297008376
+      },
+      "parent_id": "5561eb75-1",
+      "step_id": "5561eb75-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 1.325004268437624e-05,
+      "end_time": 1.3345107910572551,
+      "duration_ms": 1334.4975410145707,
+      "metadata": {
+        "profile": "synthetic_step_mix",
+        "jitter": 0.1,
+        "tool_calls": 1
+      },
+      "parent_id": null,
+      "step_id": "5561eb75-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "synthetic-e2e-wallclock",
+    "trace_id": "5561eb75",
+    "total_steps": 9,
+    "total_duration_ms": 1334.4975410145707,
+    "duration_by_type_ms": {
+      "planning": 82.97637500800192,
+      "reasoning": 170.93187500722706,
+      "retrieval": 182.33037501340732,
+      "tool_calling": 122.62154201744124,
+      "code_execution": 176.71916697872803,
+      "prefill": 156.21537499828264,
+      "decode": 367.41012503625825,
+      "embedding": 74.94541699998081,
+      "other": 1334.4975410145707
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 1,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

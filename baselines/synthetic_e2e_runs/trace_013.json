@@ -1,0 +1,163 @@
+{
+  "name": "synthetic-e2e-wallclock",
+  "trace_id": "0da43ae9",
+  "start_time": "2026-01-22T20:55:53.002674",
+  "end_time": "2026-01-22T20:55:54.339118",
+  "total_duration_ms": 1336.4302499685436,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.2249976862221956e-05,
+      "end_time": 0.08535895799286664,
+      "duration_ms": 85.34670801600441,
+      "metadata": {
+        "slept_ms": 80.27724335020112
+      },
+      "parent_id": "0da43ae9-1",
+      "step_id": "0da43ae9-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 0.08540804195217788,
+      "end_time": 0.2719739999738522,
+      "duration_ms": 186.5659580216743,
+      "metadata": {
+        "slept_ms": 181.48311582390488
+      },
+      "parent_id": "0da43ae9-1",
+      "step_id": "0da43ae9-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 0.27202183299232274,
+      "end_time": 0.3418664999771863,
+      "duration_ms": 69.84466698486358,
+      "metadata": {
+        "slept_ms": 68.0550074262422,
+        "embedding_dim": 768
+      },
+      "parent_id": "0da43ae9-1",
+      "step_id": "0da43ae9-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 0.34191541699692607,
+      "end_time": 0.5079452919890173,
+      "duration_ms": 166.0298749920912,
+      "metadata": {
+        "slept_ms": 161.2896255580465,
+        "input_tokens": 1024
+      },
+      "parent_id": "0da43ae9-1",
+      "step_id": "0da43ae9-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode",
+      "step_type": "decode",
+      "start_time": 0.5080223329714499,
+      "end_time": 0.851515041955281,
+      "duration_ms": 343.4927089838311,
+      "metadata": {
+        "slept_ms": 338.36719660477405,
+        "output_tokens": 256
+      },
+      "parent_id": "0da43ae9-1",
+      "step_id": "0da43ae9-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 0.8515996249625459,
+      "end_time": 0.9713218329707161,
+      "duration_ms": 119.72220800817013,
+      "metadata": {
+        "slept_ms": 116.01248440163643,
+        "tool_name": "mock_tool"
+      },
+      "parent_id": "0da43ae9-1",
+      "step_id": "0da43ae9-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 0.9713985419948585,
+      "end_time": 1.1492113329586573,
+      "duration_ms": 177.81279096379876,
+      "metadata": {
+        "slept_ms": 172.70443296860262,
+        "language": "python"
+      },
+      "parent_id": "0da43ae9-1",
+      "step_id": "0da43ae9-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 1.1492725829593837,
+      "end_time": 1.3363972079823725,
+      "duration_ms": 187.12462502298877,
+      "metadata": {
+        "slept_ms": 182.35414392812652
+      },
+      "parent_id": "0da43ae9-1",
+      "step_id": "0da43ae9-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.249989382922649e-06,
+      "end_time": 1.3364364999579266,
+      "duration_ms": 1336.4302499685436,
+      "metadata": {
+        "profile": "synthetic_step_mix",
+        "jitter": 0.1,
+        "tool_calls": 1
+      },
+      "parent_id": null,
+      "step_id": "0da43ae9-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "synthetic-e2e-wallclock",
+    "trace_id": "0da43ae9",
+    "total_steps": 9,
+    "total_duration_ms": 1336.4302499685436,
+    "duration_by_type_ms": {
+      "planning": 85.34670801600441,
+      "reasoning": 187.12462502298877,
+      "retrieval": 186.5659580216743,
+      "tool_calling": 119.72220800817013,
+      "code_execution": 177.81279096379876,
+      "prefill": 166.0298749920912,
+      "decode": 343.4927089838311,
+      "embedding": 69.84466698486358,
+      "other": 1336.4302499685436
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 1,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

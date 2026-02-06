@@ -1,0 +1,47 @@
+{
+  "definition": "Hybrid E2E wall-clock latency per agent run = Trace.total_duration_ms",
+  "workload": "agent skeleton + real decode backend",
+  "runs": 1,
+  "warmup": 0,
+  "decoder": {
+    "type": "python",
+    "model": null,
+    "base_url": null,
+    "decoder_func": "decoders.hf_decoder:hf_generate",
+    "max_tokens": 16,
+    "temperature": 0.0
+  },
+  "config": {
+    "planning_base_ms": 80.0,
+    "retrieval_base_ms": 200.0,
+    "embedding_base_ms": 70.0,
+    "prefill_base_ms": 0.0,
+    "tool_base_ms": 120.0,
+    "code_base_ms": 160.0,
+    "reasoning_base_ms": 180.0,
+    "tool_calls": 1,
+    "jitter": 0.1
+  },
+  "prompt": {
+    "chars": 26,
+    "sha16": "e507d257b764505f",
+    "has_image": false
+  },
+  "env": {
+    "python": "3.10.19 (main, Oct 21 2025, 16:43:05) [GCC 11.2.0]",
+    "platform": "Linux-6.8.0-90-generic-x86_64-with-glibc2.35"
+  },
+  "trace_dir": "baselines/hybrid_e2e_runs",
+  "trace_files": [
+    "baselines/hybrid_e2e_runs/trace_001.json"
+  ],
+  "total_duration_ms": {
+    "n": 1.0,
+    "mean": 1935.1355240214616,
+    "stdev": 0.0,
+    "p50": 1935.1355240214616,
+    "p95": 1935.1355240214616,
+    "min": 1935.1355240214616,
+    "max": 1935.1355240214616
+  }
+}

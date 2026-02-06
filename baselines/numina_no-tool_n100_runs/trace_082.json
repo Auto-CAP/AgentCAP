@@ -1,0 +1,165 @@
+{
+  "name": "numina-no-tool-skeleton",
+  "trace_id": "c8a7de69",
+  "start_time": "2026-02-05T01:22:53.286443",
+  "end_time": "2026-02-05T01:22:55.642259",
+  "total_duration_ms": 2355.7976899901405,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.3330020010471344e-05,
+      "end_time": 1.7159967683255672e-05,
+      "duration_ms": 0.0038299476727843285,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "c8a7de69-1",
+      "step_id": "c8a7de69-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.1449988707900047e-05,
+      "end_time": 2.4390057660639286e-05,
+      "duration_ms": 0.0029400689527392387,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "c8a7de69-1",
+      "step_id": "c8a7de69-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.7580070309340954e-05,
+      "end_time": 3.008998464792967e-05,
+      "duration_ms": 0.0025099143385887146,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "c8a7de69-1",
+      "step_id": "c8a7de69-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.302004188299179e-05,
+      "end_time": 3.539002500474453e-05,
+      "duration_ms": 0.002369983121752739,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "c8a7de69-1",
+      "step_id": "c8a7de69-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode",
+      "step_type": "decode",
+      "start_time": 0.0008511280175298452,
+      "end_time": 2.355517513002269,
+      "duration_ms": 2354.666384984739,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 260,
+        "completion_tokens": 394,
+        "total_tokens": 654,
+        "elapsed_ms": 2354.523501941003,
+        "raw_output": "<think>\nOkay, let's see. Kaleb started with 98 lives. He lost 25 lives. I need to find out how many he has left. So, the problem is straightforward subtraction. \n\nFirst, I'll take the initial number of lives, which is 98. Then subtract the number of lives he lost, which is 25. So 98 minus 25. Let me do the math here. \n\n98 minus 20 is 78, and then minus 5 more would be 73. Wait, is that right? Let me check again. 25 is 20 + 5. So 98 - 20 = 78, then 78 - 5 = 73. Yeah, that seems correct. \n\nAlternatively, I can think of it as 98 - 25. Breaking down 25 into 10 + 15. 98 -10 is 88, then 88 -15 is 73. Same result. \n\nAnother way: 25 is 25, so 98 - 25. If I add 2 to 25 to make it 27, then 98 - 27 would be 71, but since I added 2, I need to add 2 back, making it 73. Hmm, that's a bit more complicated, but still arrives at 73. \n\nI think that's solid. So the answer should be 73. Let me just confirm once more. 25 + 73 = 98. Yes, because 25 + 70 is 95, plus 3 is 98. Perfect. So Kaleb has 73 lives left.\n</think>\n\n\\boxed{73}",
+        "pred": "73",
+        "gold": "73",
+        "em": 1,
+        "no_answer": 0
+      },
+      "parent_id": "c8a7de69-1",
+      "step_id": "c8a7de69-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 2.355734338052571,
+      "end_time": 2.355770998983644,
+      "duration_ms": 0.03666093107312918,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "c8a7de69-1",
+      "step_id": "c8a7de69-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 2.355786419007927,
+      "end_time": 2.3557919589802623,
+      "duration_ms": 0.005539972335100174,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "c8a7de69-1",
+      "step_id": "c8a7de69-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 6.12006988376379e-06,
+      "end_time": 2.3558038100600243,
+      "duration_ms": 2355.7976899901405,
+      "metadata": {
+        "sample_id": 81,
+        "mode": "no-tool",
+        "dataset": "numina",
+        "question_tokens": 44,
+        "pred": "73",
+        "gold": "73",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 260,
+        "total_completion_tokens": 394,
+        "total_tokens": 654,
+        "total_tool_calls": 0,
+        "input_tokens_prompt": 260,
+        "output_tokens": 394
+      },
+      "parent_id": null,
+      "step_id": "c8a7de69-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-no-tool-skeleton",
+    "trace_id": "c8a7de69",
+    "total_steps": 8,
+    "total_duration_ms": 2355.7976899901405,
+    "duration_by_type_ms": {
+      "planning": 0.0038299476727843285,
+      "reasoning": 0.005539972335100174,
+      "retrieval": 0.0029400689527392387,
+      "code_execution": 0.03666093107312918,
+      "prefill": 0.002369983121752739,
+      "decode": 2354.666384984739,
+      "embedding": 0.0025099143385887146,
+      "other": 2355.7976899901405
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 1,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

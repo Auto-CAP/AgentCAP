@@ -1,0 +1,35 @@
+{
+  "definition": "E2E wall-clock latency per agent run = Trace.total_duration_ms",
+  "workload": "synthetic agent execution template (step-mix)",
+  "runs": 20,
+  "warmup": 2,
+  "config": {
+    "retrieval_base_ms": 200.0,
+    "prefill_base_ms": 150.0,
+    "decode_base_ms": 350.0,
+    "tool_calls": 1,
+    "jitter": 0.1
+  },
+  "env": {
+    "python": "3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ]",
+    "platform": "macOS-26.3-arm64-arm-64bit"
+  },
+  "trace_dir": "baselines/synthetic_e2e_runs",
+  "trace_files": [
+    "baselines/synthetic_e2e_runs/trace_001.json",
+    "baselines/synthetic_e2e_runs/trace_002.json",
+    "baselines/synthetic_e2e_runs/trace_003.json",
+    "baselines/synthetic_e2e_runs/trace_004.json",
+    "baselines/synthetic_e2e_runs/trace_005.json",
+    "..."
+  ],
+  "total_duration_ms": {
+    "n": 20.0,
+    "mean": 1343.97874159622,
+    "stdev": 18.96595558040006,
+    "p50": 1349.0768749907147,
+    "p95": 1365.2539038826944,
+    "min": 1304.3087089899927,
+    "max": 1375.2017499646172
+  }
+}

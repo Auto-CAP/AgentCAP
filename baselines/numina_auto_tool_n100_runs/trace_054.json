@@ -1,0 +1,196 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "04d357ce",
+  "start_time": "2026-02-05T03:35:58.531888",
+  "end_time": "2026-02-05T03:36:07.346541",
+  "total_duration_ms": 8814.639449934475,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.2891017831861973e-05,
+      "end_time": 1.6359961591660976e-05,
+      "duration_ms": 0.0034689437597990036,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.033100463449955e-05,
+      "end_time": 2.3441039957106113e-05,
+      "duration_ms": 0.0031100353226065636,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.691103145480156e-05,
+      "end_time": 3.0020950362086296e-05,
+      "duration_ms": 0.0031099189072847366,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.332097548991442e-05,
+      "end_time": 3.6120996810495853e-05,
+      "duration_ms": 0.002800021320581436,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0004588390002027154,
+      "end_time": 6.072249607997946,
+      "duration_ms": 6071.790768997744,
+      "metadata": {
+        "finish_reason": "tool_calls",
+        "prompt_tokens": 423,
+        "completion_tokens": 1038,
+        "total_tokens": 1461,
+        "elapsed_ms": 6071.774119045585,
+        "tool_calls_n": 1
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "tool_call_1",
+      "step_type": "tool_calling",
+      "start_time": 6.07226470799651,
+      "end_time": 6.072355970041826,
+      "duration_ms": 0.09126204531639814,
+      "metadata": {
+        "tool_calls_n": 1,
+        "tool_name": "calculator",
+        "tool_exec_elapsed_ms": 0.0830420758575201
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_2",
+      "step_type": "decode",
+      "start_time": 6.072361359954812,
+      "end_time": 8.81450939795468,
+      "duration_ms": 2742.1480379998684,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 1477,
+        "completion_tokens": 447,
+        "total_tokens": 1924,
+        "elapsed_ms": 2742.132906918414
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 8.814613459981047,
+      "end_time": 8.814633639995009,
+      "duration_ms": 0.020180013962090015,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-9",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 8.814638299983926,
+      "end_time": 8.814641520031728,
+      "duration_ms": 0.003220047801733017,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "04d357ce-1",
+      "step_id": "04d357ce-10",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 5.990033969283104e-06,
+      "end_time": 8.814645439968444,
+      "duration_ms": 8814.639449934475,
+      "metadata": {
+        "sample_id": 53,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 52,
+        "raw_output": "<think>\nOkay, let's see. The user asked for the time it takes for a bullet train to pass a man running in the opposite direction. The train is 240 meters long and moving at 100 km/h, while the man is running at 8 km/h. \n\nFirst, I need to calculate the relative speed. Since they're moving towards each other, their speeds add up. So 100 km/h + 8 km/h = 108 km/h. But the units need to be consistent. The train's length is in meters, so converting the speed to meters per second makes sense.\n\nTo convert 108 km/h to m/s, multiply by 1000 meters per km and divide by 3600 seconds per hour. That's 108 * 1000 / 3600 = 30 m/s. \n\nThen, the time taken to pass the man is the length of the train divided by the relative speed. So 240 meters / 30 m/s = 8 seconds. \n\nThe calculator tool was used to verify the conversion and division, confirming the result is 8.0. So the final answer should be 8 seconds.\n</think>\n\nThe bullet train and the man are moving towards each other, so their relative speed is the sum of their individual speeds:  \n$100 \\, \\text{km/h} + 8 \\, \\text{km/h} = 108 \\, \\text{km/h}$.  \n\nConvert the relative speed to meters per second:  \n$108 \\, \\text{km/h} = \\frac{108 \\times 1000}{3600} = 30 \\, \\text{m/s}$.  \n\nThe time taken for the train to pass the man is the length of the train divided by the relative speed:  \n$\\frac{240 \\, \\text{m}}{30 \\, \\text{m/s}} = 8 \\, \\text{seconds}$.  \n\n\\boxed{8}",
+        "pred": "8",
+        "gold": "8",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 1900,
+        "total_completion_tokens": 1485,
+        "total_tokens": 3385,
+        "total_tool_calls": 1,
+        "input_tokens_prompt": 1900,
+        "output_tokens": 1485
+      },
+      "parent_id": null,
+      "step_id": "04d357ce-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "04d357ce",
+    "total_steps": 10,
+    "total_duration_ms": 8814.639449934475,
+    "duration_by_type_ms": {
+      "planning": 0.0034689437597990036,
+      "reasoning": 0.003220047801733017,
+      "retrieval": 0.0031100353226065636,
+      "tool_calling": 0.09126204531639814,
+      "code_execution": 0.020180013962090015,
+      "prefill": 0.002800021320581436,
+      "decode": 8813.938806997612,
+      "embedding": 0.0031099189072847366,
+      "other": 8814.639449934475
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "tool_calling": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 2,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}

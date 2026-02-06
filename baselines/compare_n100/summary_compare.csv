@@ -1,0 +1,2 @@
+label,avg_output_tokens,avg_question_tokens,em_correct,em_mean,lat_mean_ms,lat_p50_ms,lat_p95_ms,max_output_tokens,model_id,n,tool_call_rate,tool_calls_total,trace_dir,truncated_count,workload
+numina_no-tool_n100_summary,4341.6,87.44,46,0.46,26170.48565778765,13209.305115044117,101482.14201324736,16384.0,Qwen/Qwen3-30B-A3B,100,0.0,0,baselines/numina_no-tool_n100_runs,6,numina split=test (n=100) | mode=no-tool | skeleton=0ms

@@ -1,0 +1,162 @@
+{
+  "name": "numina-tool-skeleton",
+  "trace_id": "0e338bd2",
+  "start_time": "2026-02-05T03:47:09.436273",
+  "end_time": "2026-02-05T03:47:11.043578",
+  "total_duration_ms": 1607.291917083785,
+  "steps": [
+    {
+      "name": "planning",
+      "step_type": "planning",
+      "start_time": 1.30099942907691e-05,
+      "end_time": 1.6250996850430965e-05,
+      "duration_ms": 0.0032410025596618652,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "0e338bd2-1",
+      "step_id": "0e338bd2-2",
+      "thread_id": "main"
+    },
+    {
+      "name": "retrieval",
+      "step_type": "retrieval",
+      "start_time": 2.0440085791051388e-05,
+      "end_time": 2.3311004042625427e-05,
+      "duration_ms": 0.0028709182515740395,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "0e338bd2-1",
+      "step_id": "0e338bd2-3",
+      "thread_id": "main"
+    },
+    {
+      "name": "embedding",
+      "step_type": "embedding",
+      "start_time": 2.6411027647554874e-05,
+      "end_time": 2.9171002097427845e-05,
+      "duration_ms": 0.0027599744498729706,
+      "metadata": {
+        "slept_ms": 0.0,
+        "embedding_dim": 768
+      },
+      "parent_id": "0e338bd2-1",
+      "step_id": "0e338bd2-4",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_prefill",
+      "step_type": "prefill",
+      "start_time": 3.1781033612787724e-05,
+      "end_time": 3.389106132090092e-05,
+      "duration_ms": 0.0021100277081131935,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "0e338bd2-1",
+      "step_id": "0e338bd2-5",
+      "thread_id": "main"
+    },
+    {
+      "name": "llm_decode_1",
+      "step_type": "decode",
+      "start_time": 0.0004353279946371913,
+      "end_time": 1.6071691040415317,
+      "duration_ms": 1606.7337760468945,
+      "metadata": {
+        "finish_reason": "stop",
+        "prompt_tokens": 415,
+        "completion_tokens": 264,
+        "total_tokens": 679,
+        "elapsed_ms": 1606.7171159666032,
+        "tool_calls_n": 0
+      },
+      "parent_id": "0e338bd2-1",
+      "step_id": "0e338bd2-6",
+      "thread_id": "main"
+    },
+    {
+      "name": "code_execution",
+      "step_type": "code_execution",
+      "start_time": 1.6072782160481438,
+      "end_time": 1.607286966056563,
+      "duration_ms": 0.008750008419156075,
+      "metadata": {
+        "slept_ms": 0.0,
+        "language": "python"
+      },
+      "parent_id": "0e338bd2-1",
+      "step_id": "0e338bd2-7",
+      "thread_id": "main"
+    },
+    {
+      "name": "reasoning",
+      "step_type": "reasoning",
+      "start_time": 1.6072916369885206,
+      "end_time": 1.6072945460909978,
+      "duration_ms": 0.002909102477133274,
+      "metadata": {
+        "slept_ms": 0.0
+      },
+      "parent_id": "0e338bd2-1",
+      "step_id": "0e338bd2-8",
+      "thread_id": "main"
+    },
+    {
+      "name": "agent_run",
+      "step_type": "other",
+      "start_time": 5.949987098574638e-06,
+      "end_time": 1.6072978670708835,
+      "duration_ms": 1607.291917083785,
+      "metadata": {
+        "sample_id": 81,
+        "mode": "tool",
+        "dataset": "numina",
+        "question_tokens": 44,
+        "raw_output": "<think>\nOkay, let's see. Kaleb started with 98 lives. He lost 25 lives. I need to find out how many he has left. So, the problem is straightforward subtraction. \n\nFirst, I'll subtract the number of lives he lost from his initial number of lives. That would be 98 minus 25. Let me do the calculation. 98 minus 20 is 78, and then minus 5 more is 73. So, 98 - 25 equals 73. \n\nWait, maybe I should check that again. 25 plus 73 is 98, right? 25 + 70 is 95, plus 3 is 98. Yep, that adds up. So the answer should be 73. I don't think I need the calculator tool here because it's a simple subtraction problem. No complicated steps involved. Just basic arithmetic. So the final answer is 73.\n</think>\n\nKaleb started with 98 lives and lost 25. To find the remaining lives, subtract 25 from 98:\n\n$$\n98 - 25 = 73\n$$\n\n\\boxed{73}",
+        "pred": "73",
+        "gold": "73",
+        "em": 1,
+        "no_answer": 0,
+        "total_prompt_tokens": 415,
+        "total_completion_tokens": 264,
+        "total_tokens": 679,
+        "total_tool_calls": 0,
+        "input_tokens_prompt": 415,
+        "output_tokens": 264
+      },
+      "parent_id": null,
+      "step_id": "0e338bd2-1",
+      "thread_id": "main"
+    }
+  ],
+  "metadata": {},
+  "summary": {
+    "name": "numina-tool-skeleton",
+    "trace_id": "0e338bd2",
+    "total_steps": 8,
+    "total_duration_ms": 1607.291917083785,
+    "duration_by_type_ms": {
+      "planning": 0.0032410025596618652,
+      "reasoning": 0.002909102477133274,
+      "retrieval": 0.0028709182515740395,
+      "code_execution": 0.008750008419156075,
+      "prefill": 0.0021100277081131935,
+      "decode": 1606.7337760468945,
+      "embedding": 0.0027599744498729706,
+      "other": 1607.291917083785
+    },
+    "count_by_type": {
+      "planning": 1,
+      "reasoning": 1,
+      "retrieval": 1,
+      "code_execution": 1,
+      "prefill": 1,
+      "decode": 1,
+      "embedding": 1,
+      "other": 1
+    },
+    "metadata": {}
+  }
+}
