@@ -1,0 +1,32 @@
+name: quantization-tradeoff
+description: "How much quality do we lose at each quantization level?"
+
+models:
+  - id: "deepseek-ai/DeepSeek-V3.2"
+    arch: MoE
+    params_b: 685
+    tp: 8
+  - id: "Qwen/Qwen3-235B-A22B"
+    arch: MoE
+    params_b: 235
+    tp: 4
+  - id: "openai/gpt-oss-120b"
+    arch: dense
+    params_b: 120
+    tp: 4
+  - id: "Qwen/Qwen3-32B"
+    arch: dense
+    params_b: 32
+    tp: 2
+  - id: "Qwen/Qwen3-8B"
+    arch: dense
+    params_b: 8
+    tp: 1
+
+quantizations: ["fp16", "fp8", "int8-w8a8", "int4-awq", "int4-gptq"]
+skill_subsets: ["all"]
+num_retries: [0]
+temperatures: [0.0]
+
+serving_engine: sglang
+repetitions: 3

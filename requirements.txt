@@ -1,4 +1,4 @@
-# Core dependencies (none required for basic functionality)
+pyyaml>=6.0
 
 # Visualization (optional)
 plotly>=5.0.0
