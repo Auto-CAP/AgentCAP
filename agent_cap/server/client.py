@@ -15,6 +15,7 @@ class ChatResponse:
     ttft_ms: float
     model: str
     raw_response: Dict[str, Any]
+    tool_call_count: int = 0
 
 
 class ChatClient:
@@ -53,6 +54,11 @@ class ChatClient:
         usage = raw.get("usage", {})
         choices = raw.get("choices", [])
         message = choices[0].get("message", {}) if choices else {}
+        tool_calls = message.get("tool_calls", [])
+        tool_call_count = len(tool_calls) if tool_calls else 0
+        finish_reason = choices[0].get("finish_reason", "") if choices else ""
+        if finish_reason == "tool_calls" and tool_call_count == 0:
+            tool_call_count = 1
         content = message.get("content", "")
         input_tokens = int(usage.get("prompt_tokens", 0))
         output_tokens = int(usage.get("completion_tokens", 0))
@@ -68,4 +74,5 @@ class ChatClient:
             ttft_ms=latency_ms,
             model=raw.get("model", model),
             raw_response=raw,
+            tool_call_count=tool_call_count,
         )

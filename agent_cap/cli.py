@@ -53,7 +53,9 @@ class ComboConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ComboConfig":
         if "small_model" not in data or "large_model" not in data:
-            raise ValueError("Combo config requires both 'small_model' and 'large_model'")
+            raise ValueError(
+                "Combo config requires both 'small_model' and 'large_model'"
+            )
         return cls(
             name=str(data["name"]),
             description=str(data.get("description", "")),
@@ -102,7 +104,7 @@ def cmd_run(args):
         print("\n--- Dry run: listing all configurations ---")
         for i, cfg in enumerate(config.iter_configs()):
             print(
-                f"  [{i+1}] {cfg['model'].id} q={cfg['quantization']} "
+                f"  [{i + 1}] {cfg['model'].id} q={cfg['quantization']} "
                 f"skills={cfg['skill_subset']} retries={cfg['num_retries']}"
             )
         return
@@ -149,7 +151,12 @@ def cmd_combo(args):
         run_single_pass,
     )
     from agent_cap.db import ResultStore, RunResult
-    from agent_cap.server import ChatClient, GPUMonitor, ModelServerManager, ServerConfig
+    from agent_cap.server import (
+        ChatClient,
+        GPUMonitor,
+        ModelServerManager,
+        ServerConfig,
+    )
 
     config = ComboConfig.from_yaml(args.config)
     benchmark_name, benchmark_count = _parse_benchmark_spec(args.benchmark)
@@ -169,7 +176,9 @@ def cmd_combo(args):
     }
     invalid = [s for s in config.strategies if s not in supported_strategies]
     if invalid:
-        raise ValueError(f"Unknown combo strategies: {invalid}. Supported: {sorted(supported_strategies)}")
+        raise ValueError(
+            f"Unknown combo strategies: {invalid}. Supported: {sorted(supported_strategies)}"
+        )
     if not config.strategies:
         raise ValueError("Combo config must include at least one strategy")
 
@@ -190,9 +199,13 @@ def cmd_combo(args):
             elif strategy == "single-pass-large":
                 plan = f"{strategy}: {_short_model(config.large_model.id)}"
             elif strategy == "best-of-n-small":
-                plan = f"{strategy}: {_short_model(config.small_model.id)} (n=3, temp=0.7)"
+                plan = (
+                    f"{strategy}: {_short_model(config.small_model.id)} (n=3, temp=0.7)"
+                )
             elif strategy == "best-of-n-large":
-                plan = f"{strategy}: {_short_model(config.large_model.id)} (n=3, temp=0.7)"
+                plan = (
+                    f"{strategy}: {_short_model(config.large_model.id)} (n=3, temp=0.7)"
+                )
             elif strategy == "self-critique-small":
                 plan = f"{strategy}: {_short_model(config.small_model.id)} (generate/critique/revise)"
             elif strategy == "self-critique-large":
@@ -261,8 +274,12 @@ def cmd_combo(args):
         if not large_server.wait_until_ready(timeout=600):
             raise RuntimeError("Large model server failed to start")
 
-        small_client = ChatClient(base_url=f"http://localhost:{config.small_model.port}")
-        large_client = ChatClient(base_url=f"http://localhost:{config.large_model.port}")
+        small_client = ChatClient(
+            base_url=f"http://localhost:{config.small_model.port}"
+        )
+        large_client = ChatClient(
+            base_url=f"http://localhost:{config.large_model.port}"
+        )
 
         for strategy in config.strategies:
             print(f"\n--- Strategy: {strategy} ---")
@@ -375,25 +392,37 @@ def cmd_combo(args):
                         raise ValueError(f"Unsupported strategy: {strategy}")
                 except Exception:
                     monitor.stop()
-                    logger.exception("Run failed: strategy=%s task=%s", strategy, task.id)
+                    logger.exception(
+                        "Run failed: strategy=%s task=%s", strategy, task.id
+                    )
                     continue
 
                 gpu_stats = monitor.stop()
                 completed_at = datetime.now().isoformat()
 
-                if strategy in {"single-pass-small", "self-critique-small", "best-of-n-small"}:
+                if strategy in {
+                    "single-pass-small",
+                    "self-critique-small",
+                    "best-of-n-small",
+                }:
                     model_id = config.small_model.id
                     model_params_b = config.small_model.params_b
                     model_arch = config.small_model.arch
                     tensor_parallel = config.small_model.tp
-                elif strategy in {"single-pass-large", "self-critique-large", "best-of-n-large"}:
+                elif strategy in {
+                    "single-pass-large",
+                    "self-critique-large",
+                    "best-of-n-large",
+                }:
                     model_id = config.large_model.id
                     model_params_b = config.large_model.params_b
                     model_arch = config.large_model.arch
                     tensor_parallel = config.large_model.tp
                 else:
                     model_id = f"{config.small_model.id}+{config.large_model.id}"
-                    model_params_b = config.small_model.params_b + config.large_model.params_b
+                    model_params_b = (
+                        config.small_model.params_b + config.large_model.params_b
+                    )
                     model_arch = f"{config.small_model.arch}+{config.large_model.arch}"
                     tensor_parallel = config.small_model.tp + config.large_model.tp
 
@@ -418,7 +447,8 @@ def cmd_combo(args):
                     quality_score=combo_result.quality_score,
                     input_tokens=combo_result.total_input_tokens,
                     output_tokens=combo_result.total_output_tokens,
-                    gpu_seconds=gpu_stats.duration_s * (gpu_stats.avg_gpu_util_pct / 100.0),
+                    gpu_seconds=gpu_stats.duration_s
+                    * (gpu_stats.avg_gpu_util_pct / 100.0),
                     peak_vram_mb=gpu_stats.peak_memory_used_mb,
                     latency_e2e_ms=combo_result.total_latency_ms,
                     avg_gpu_util_pct=gpu_stats.avg_gpu_util_pct,
@@ -433,7 +463,11 @@ def cmd_combo(args):
                         ensure_ascii=False,
                     ),
                     combination_strategy=strategy,
-                    combination_detail=json.dumps([asdict(step) for step in combo_result.steps], ensure_ascii=False),
+                    combination_detail=json.dumps(
+                        [asdict(step) for step in combo_result.steps],
+                        ensure_ascii=False,
+                    ),
+                    tool_call_count=combo_result.tool_call_count,
                     started_at=started_at,
                     completed_at=completed_at,
                 )
@@ -441,7 +475,13 @@ def cmd_combo(args):
                 existing_run_ids.add(run_id)
                 strategy_runs[strategy].append(result)
 
-                status = "PASS" if bool(combo_result.task_success) else "FAIL" if combo_result.task_success is not None else "N/A"
+                status = (
+                    "PASS"
+                    if bool(combo_result.task_success)
+                    else "FAIL"
+                    if combo_result.task_success is not None
+                    else "N/A"
+                )
                 print(
                     f"[{i}/{len(tasks)}] {task.id} -> {status} "
                     f"({combo_result.total_input_tokens}+{combo_result.total_output_tokens} tok, "
@@ -455,9 +495,9 @@ def cmd_combo(args):
     print("\n═══ COMBINATION STRATEGY COMPARISON ═══")
     print(
         f"{'Strategy':<20}  {'Tasks':>5}  {'Pass':>4}  {'Fail':>4}  {'Accuracy%':>9}  "
-        f"{'Avg Latency(s)':>14}  {'Avg Tokens':>10}  {'Total GPU-sec':>13}"
+        f"{'Avg Latency(s)':>14}  {'Avg Tokens':>10}  {'Avg TCs':>8}  {'Total GPU-sec':>13}"
     )
-    print("─" * 98)
+    print("─" * 110)
     for strategy in config.strategies:
         runs = strategy_runs.get(strategy, [])
         tasks_n = len(runs)
@@ -470,14 +510,15 @@ def cmd_combo(args):
             else 0.0
         )
         avg_tokens = (
-            sum(int(r.output_tokens or 0) for r in runs) / tasks_n
-            if tasks_n
-            else 0.0
+            sum(int(r.output_tokens or 0) for r in runs) / tasks_n if tasks_n else 0.0
+        )
+        avg_tool_calls = (
+            sum(int(r.tool_call_count or 0) for r in runs) / tasks_n if tasks_n else 0.0
         )
         total_gpu_sec = sum(float(r.gpu_seconds or 0.0) for r in runs)
         print(
             f"{strategy:<20}  {tasks_n:>5}  {pass_n:>4}  {fail_n:>4}  {accuracy:>8.1f}%  "
-            f"{avg_latency_s:>13.1f}s  {avg_tokens:>10.0f}  {total_gpu_sec:>13.1f}"
+            f"{avg_latency_s:>13.1f}s  {avg_tokens:>10.0f}  {avg_tool_calls:>8.1f}  {total_gpu_sec:>13.1f}"
         )
 
 
@@ -533,18 +574,25 @@ def cmd_metrics(args):
         total_out_tokens = sum(out_tokens)
         avg_in_tokens = _mean(in_tokens)
         avg_out_tokens = _mean(out_tokens)
-        output_tok_per_s = total_out_tokens / total_wall_seconds if total_wall_seconds > 0 else 0.0
+        output_tok_per_s = (
+            total_out_tokens / total_wall_seconds if total_wall_seconds > 0 else 0.0
+        )
 
         gpu_seconds = [float(r.gpu_seconds or 0.0) for r in group_runs]
         avg_gpu_seconds = _mean(gpu_seconds)
         total_gpu_seconds = sum(gpu_seconds)
 
-        peak_vram_gb = max((float(r.peak_vram_mb or 0.0) for r in group_runs), default=0.0) / 1024.0
+        peak_vram_gb = (
+            max((float(r.peak_vram_mb or 0.0) for r in group_runs), default=0.0)
+            / 1024.0
+        )
         avg_gpu_util = _mean([float(r.avg_gpu_util_pct or 0.0) for r in group_runs])
         avg_power_w = _mean([float(r.avg_power_w or 0.0) for r in group_runs])
 
         energy_wh = sum(
-            float(r.avg_power_w or 0.0) * (float(r.latency_e2e_ms or 0.0) / 1000.0) / 3600.0
+            float(r.avg_power_w or 0.0)
+            * (float(r.latency_e2e_ms or 0.0) / 1000.0)
+            / 3600.0
             for r in group_runs
         )
 
@@ -552,11 +600,17 @@ def cmd_metrics(args):
         total_runs = len(group_runs)
         accuracy_pct = (pass_count / total_runs * 100.0) if total_runs else 0.0
 
-        quality_values = [float(r.quality_score) for r in group_runs if r.quality_score is not None]
+        quality_values = [
+            float(r.quality_score) for r in group_runs if r.quality_score is not None
+        ]
         avg_quality = _mean(quality_values)
 
-        quality_per_gpu_sec = avg_quality / avg_gpu_seconds if avg_gpu_seconds > 0 else 0.0
-        tokens_per_gpu_sec = total_out_tokens / total_gpu_seconds if total_gpu_seconds > 0 else 0.0
+        quality_per_gpu_sec = (
+            avg_quality / avg_gpu_seconds if avg_gpu_seconds > 0 else 0.0
+        )
+        tokens_per_gpu_sec = (
+            total_out_tokens / total_gpu_seconds if total_gpu_seconds > 0 else 0.0
+        )
         quality_per_kwh = avg_quality / (energy_wh / 1000.0) if energy_wh > 0 else 0.0
 
         rows.append(
@@ -600,7 +654,9 @@ def cmd_metrics(args):
     )
     print("─" * 106)
     for row in rows:
-        acc_text = f"{row['pass_count']}/{row['total_runs']} = {row['accuracy_pct']:.1f}%"
+        acc_text = (
+            f"{row['pass_count']}/{row['total_runs']} = {row['accuracy_pct']:.1f}%"
+        )
         print(
             f"{row['model_short']:<26.26} {row['arch']:<10.10} {row['params_b']:>8.1f} "
             f"{row['quant']:<10.10} {acc_text:>28} {row['avg_quality']:>9.2f}/5.0"
@@ -695,7 +751,9 @@ def cmd_pareto(args):
                 config_id=key,
                 quality=sum(data["qualities"]) / len(data["qualities"]),
                 gpu_seconds=sum(data["gpu_seconds"]) / len(data["gpu_seconds"]),
-                latency_ms=sum(data["latencies"]) / len(data["latencies"]) if data["latencies"] else 0,
+                latency_ms=sum(data["latencies"]) / len(data["latencies"])
+                if data["latencies"]
+                else 0,
             )
         )
 
@@ -762,9 +820,13 @@ def cmd_reeval(args):
     store.close()
 
     print(f"\nRe-evaluated {updated} runs for '{args.experiment}'")
-    print(f"  Before: {old_pass}/{len(runs)} passed ({old_pass/len(runs)*100:.1f}%)")
+    print(
+        f"  Before: {old_pass}/{len(runs)} passed ({old_pass / len(runs) * 100:.1f}%)"
+    )
     if updated:
-        print(f"  After:  {new_pass}/{updated} passed ({new_pass/updated*100:.1f}%)")
+        print(
+            f"  After:  {new_pass}/{updated} passed ({new_pass / updated * 100:.1f}%)"
+        )
 
 
 def main():
@@ -777,16 +839,29 @@ def main():
     p_run = sub.add_parser("run", help="Run an experiment from YAML config")
     p_run.add_argument("config", help="Path to experiment YAML config")
     p_run.add_argument("--tasks", help="Path to tasks JSON file")
-    p_run.add_argument("--db", default="results/experiments.db", help="Results database path")
-    p_run.add_argument("--dry-run", action="store_true", help="List configs without running")
-    p_run.add_argument("--benchmark", help="Load public benchmark: gsm8k:N or humaneval:N (N = num tasks, default 50)")
+    p_run.add_argument(
+        "--db", default="results/experiments.db", help="Results database path"
+    )
+    p_run.add_argument(
+        "--dry-run", action="store_true", help="List configs without running"
+    )
+    p_run.add_argument(
+        "--benchmark",
+        help="Load public benchmark: gsm8k:N or humaneval:N (N = num tasks, default 50)",
+    )
     p_run.add_argument("-v", "--verbose", action="store_true")
 
     p_combo = sub.add_parser("combo", help="Run multi-agent combination strategies")
     p_combo.add_argument("config", help="Path to combo YAML config")
-    p_combo.add_argument("--benchmark", required=True, help="Benchmark: bigcodebench:50")
-    p_combo.add_argument("--db", default="results/combo.db", help="Results database path")
-    p_combo.add_argument("--dry-run", action="store_true", help="Show plan without running")
+    p_combo.add_argument(
+        "--benchmark", required=True, help="Benchmark: bigcodebench:50"
+    )
+    p_combo.add_argument(
+        "--db", default="results/combo.db", help="Results database path"
+    )
+    p_combo.add_argument(
+        "--dry-run", action="store_true", help="Show plan without running"
+    )
     p_combo.add_argument("-v", "--verbose", action="store_true")
 
     p_metrics = sub.add_parser("metrics", help="Compute metrics from results")
@@ -797,11 +872,17 @@ def main():
     p_pareto.add_argument("experiment", help="Experiment name")
     p_pareto.add_argument("--db", default="results/experiments.db")
 
-    p_reeval = sub.add_parser("reeval", help="Re-evaluate stored results with current evaluator")
+    p_reeval = sub.add_parser(
+        "reeval", help="Re-evaluate stored results with current evaluator"
+    )
     p_reeval.add_argument("experiment", help="Experiment name")
-    p_reeval.add_argument("--benchmark", required=True, help="Benchmark for eval configs: bigcodebench:50")
+    p_reeval.add_argument(
+        "--benchmark", required=True, help="Benchmark for eval configs: bigcodebench:50"
+    )
     p_reeval.add_argument("--db", default="results/experiments.db")
-    p_reeval.add_argument("--dry-run", action="store_true", help="Recompute without writing to DB")
+    p_reeval.add_argument(
+        "--dry-run", action="store_true", help="Recompute without writing to DB"
+    )
     p_reeval.add_argument("-v", "--verbose", action="store_true")
 
     args = parser.parse_args()

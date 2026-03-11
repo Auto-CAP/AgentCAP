@@ -37,6 +37,7 @@ class RunResult:
     trajectory_log: str = ""
     combination_strategy: str = ""
     combination_detail: str = ""
+    tool_call_count: int = 0
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
 
@@ -68,6 +69,7 @@ class ResultStore:
                 avg_gpu_util_pct REAL, avg_power_w REAL,
                 output_text TEXT, trajectory_log TEXT,
                 combination_strategy TEXT, combination_detail TEXT,
+                tool_call_count INTEGER,
                 started_at TEXT, completed_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_runs_experiment ON runs(experiment_name);
@@ -78,9 +80,13 @@ class ResultStore:
         for col, col_type in [
             ("combination_strategy", "TEXT"),
             ("combination_detail", "TEXT"),
+            ("tool_call_count", "INTEGER"),
         ]:
             try:
-                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {col_type} DEFAULT ''")
+                default_value = "0" if col == "tool_call_count" else "''"
+                self._conn.execute(
+                    f"ALTER TABLE runs ADD COLUMN {col} {col_type} DEFAULT {default_value}"
+                )
             except sqlite3.OperationalError:
                 pass
 

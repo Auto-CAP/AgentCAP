@@ -17,6 +17,7 @@ class StepRecord:
     output_tokens: int
     latency_ms: float
     output_text: str
+    tool_call_count: int = 0
 
 
 @dataclass
@@ -30,6 +31,7 @@ class CombinationResult:
     task_success: Optional[bool] = None
     quality_score: Optional[float] = None
     eval_explanation: str = ""
+    tool_call_count: int = 0
 
 
 def _evaluate_output(
@@ -61,14 +63,16 @@ def _record_step(step_name: str, model_id: str, response: ChatResponse) -> StepR
         output_tokens=response.output_tokens,
         latency_ms=response.latency_ms,
         output_text=response.content,
+        tool_call_count=response.tool_call_count,
     )
 
 
-def _totals(steps: List[StepRecord]) -> Tuple[int, int, float]:
+def _totals(steps: List[StepRecord]) -> Tuple[int, int, float, int]:
     total_input_tokens = sum(step.input_tokens for step in steps)
     total_output_tokens = sum(step.output_tokens for step in steps)
     total_latency_ms = sum(step.latency_ms for step in steps)
-    return total_input_tokens, total_output_tokens, total_latency_ms
+    total_tool_calls = sum(step.tool_call_count for step in steps)
+    return total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls
 
 
 def run_single_pass(
@@ -78,10 +82,16 @@ def run_single_pass(
     eval_config: Optional[Dict],
     max_tokens: int = 8192,
 ) -> CombinationResult:
-    response = client.chat(messages, model=model_id, temperature=0.0, max_tokens=max_tokens)
+    response = client.chat(
+        messages, model=model_id, temperature=0.0, max_tokens=max_tokens
+    )
     step = _record_step("generate", model_id, response)
-    task_success, quality_score, eval_explanation = _evaluate_output(response.content, eval_config)
-    total_input_tokens, total_output_tokens, total_latency_ms = _totals([step])
+    task_success, quality_score, eval_explanation = _evaluate_output(
+        response.content, eval_config
+    )
+    total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+        _totals([step])
+    )
 
     logger.debug(
         "single-pass complete: %s",
@@ -98,6 +108,7 @@ def run_single_pass(
         task_success=task_success,
         quality_score=quality_score,
         eval_explanation=eval_explanation,
+        tool_call_count=total_tool_calls,
     )
 
 
@@ -124,16 +135,24 @@ def run_best_of_n(
         steps.append(_record_step(f"sample_{sample_idx}", model_id, response))
         evals.append(_evaluate_output(response.content, eval_config))
 
-    selected_index = next((idx for idx, (ok, _, _) in enumerate(evals) if ok is True), None)
+    selected_index = next(
+        (idx for idx, (ok, _, _) in enumerate(evals) if ok is True), None
+    )
     if selected_index is None:
-        best_score = max((score if score is not None else float("-inf")) for _, score, _ in evals)
+        best_score = max(
+            (score if score is not None else float("-inf")) for _, score, _ in evals
+        )
         selected_index = next(
-            idx for idx, (_, score, _) in enumerate(evals) if (score if score is not None else float("-inf")) == best_score
+            idx
+            for idx, (_, score, _) in enumerate(evals)
+            if (score if score is not None else float("-inf")) == best_score
         )
 
     final_step = steps[selected_index]
     task_success, quality_score, eval_explanation = evals[selected_index]
-    total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+    total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+        _totals(steps)
+    )
 
     logger.debug(
         "best-of-n complete: %s",
@@ -157,6 +176,7 @@ def run_best_of_n(
         task_success=task_success,
         quality_score=quality_score,
         eval_explanation=eval_explanation,
+        tool_call_count=total_tool_calls,
     )
 
 
@@ -211,12 +231,16 @@ def run_adaptive_cascade(
         final_output = small_response.content
         logger.debug(
             "adaptive-cascade accepted small model: %s",
-            json.dumps({"confidence": confidence_score, "threshold": confidence_threshold}),
+            json.dumps(
+                {"confidence": confidence_score, "threshold": confidence_threshold}
+            ),
         )
     else:
         logger.debug(
             "adaptive-cascade escalated to large model: %s",
-            json.dumps({"confidence": confidence_score, "threshold": confidence_threshold}),
+            json.dumps(
+                {"confidence": confidence_score, "threshold": confidence_threshold}
+            ),
         )
         large_response = large_client.chat(
             messages,
@@ -227,8 +251,12 @@ def run_adaptive_cascade(
         steps.append(_record_step("large_generate", large_model_id, large_response))
         final_output = large_response.content
 
-    task_success, quality_score, eval_explanation = _evaluate_output(final_output, eval_config)
-    total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+    task_success, quality_score, eval_explanation = _evaluate_output(
+        final_output, eval_config
+    )
+    total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+        _totals(steps)
+    )
 
     return CombinationResult(
         strategy="adaptive-cascade",
@@ -240,6 +268,7 @@ def run_adaptive_cascade(
         task_success=task_success,
         quality_score=quality_score,
         eval_explanation=eval_explanation,
+        tool_call_count=total_tool_calls,
     )
 
 
@@ -263,9 +292,13 @@ def run_cascade(
     small_step = _record_step("small_generate", small_model_id, small_response)
     steps.append(small_step)
 
-    small_success, small_score, small_explanation = _evaluate_output(small_response.content, eval_config)
+    small_success, small_score, small_explanation = _evaluate_output(
+        small_response.content, eval_config
+    )
     if eval_config and small_success is True:
-        total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+        total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+            _totals(steps)
+        )
         return CombinationResult(
             strategy="cascade",
             final_output=small_response.content,
@@ -276,12 +309,17 @@ def run_cascade(
             task_success=small_success,
             quality_score=small_score,
             eval_explanation=small_explanation,
+            tool_call_count=total_tool_calls,
         )
 
     if eval_config:
-        logger.debug("cascade fallback to large model: %s -> %s", small_model_id, large_model_id)
+        logger.debug(
+            "cascade fallback to large model: %s -> %s", small_model_id, large_model_id
+        )
     else:
-        total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+        total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+            _totals(steps)
+        )
         return CombinationResult(
             strategy="cascade",
             final_output=small_response.content,
@@ -292,6 +330,7 @@ def run_cascade(
             task_success=small_success,
             quality_score=small_score,
             eval_explanation=small_explanation,
+            tool_call_count=total_tool_calls,
         )
 
     large_response = large_client.chat(
@@ -303,8 +342,12 @@ def run_cascade(
     large_step = _record_step("large_generate", large_model_id, large_response)
     steps.append(large_step)
 
-    large_success, large_score, large_explanation = _evaluate_output(large_response.content, eval_config)
-    total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+    large_success, large_score, large_explanation = _evaluate_output(
+        large_response.content, eval_config
+    )
+    total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+        _totals(steps)
+    )
     return CombinationResult(
         strategy="cascade",
         final_output=large_response.content,
@@ -315,6 +358,7 @@ def run_cascade(
         task_success=large_success,
         quality_score=large_score,
         eval_explanation=large_explanation,
+        tool_call_count=total_tool_calls,
     )
 
 
@@ -328,7 +372,9 @@ def run_self_critique(
     steps: List[StepRecord] = []
     original_task_text = _get_task_text(messages)
 
-    initial_response = client.chat(messages, model=model_id, temperature=0.0, max_tokens=max_tokens)
+    initial_response = client.chat(
+        messages, model=model_id, temperature=0.0, max_tokens=max_tokens
+    )
     steps.append(_record_step("generate", model_id, initial_response))
 
     critique_messages = [
@@ -371,8 +417,12 @@ def run_self_critique(
     )
     steps.append(_record_step("revise", model_id, revise_response))
 
-    task_success, quality_score, eval_explanation = _evaluate_output(revise_response.content, eval_config)
-    total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+    task_success, quality_score, eval_explanation = _evaluate_output(
+        revise_response.content, eval_config
+    )
+    total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+        _totals(steps)
+    )
 
     return CombinationResult(
         strategy="self-critique",
@@ -384,6 +434,7 @@ def run_self_critique(
         task_success=task_success,
         quality_score=quality_score,
         eval_explanation=eval_explanation,
+        tool_call_count=total_tool_calls,
     )
 
 
@@ -400,22 +451,34 @@ def run_multi_model_vote(
     evals: List[Tuple[Optional[bool], Optional[float], str]] = []
 
     for client, model_id in clients_and_models:
-        response = client.chat(messages, model=model_id, temperature=0.0, max_tokens=max_tokens)
+        response = client.chat(
+            messages, model=model_id, temperature=0.0, max_tokens=max_tokens
+        )
         steps.append(_record_step("generate", model_id, response))
         evals.append(_evaluate_output(response.content, eval_config))
 
     selected_index = 0
     if eval_config:
-        best_score = max((score if score is not None else float("-inf")) for _, score, _ in evals)
+        best_score = max(
+            (score if score is not None else float("-inf")) for _, score, _ in evals
+        )
         candidate_indices = [
-            idx for idx, (_, score, _) in enumerate(evals) if (score if score is not None else float("-inf")) == best_score
+            idx
+            for idx, (_, score, _) in enumerate(evals)
+            if (score if score is not None else float("-inf")) == best_score
         ]
-        passed_index = next((idx for idx in candidate_indices if evals[idx][0] is True), None)
-        selected_index = passed_index if passed_index is not None else candidate_indices[0]
+        passed_index = next(
+            (idx for idx in candidate_indices if evals[idx][0] is True), None
+        )
+        selected_index = (
+            passed_index if passed_index is not None else candidate_indices[0]
+        )
 
     final_step = steps[selected_index]
     task_success, quality_score, eval_explanation = evals[selected_index]
-    total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+    total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+        _totals(steps)
+    )
 
     return CombinationResult(
         strategy="vote",
@@ -427,6 +490,7 @@ def run_multi_model_vote(
         task_success=task_success,
         quality_score=quality_score,
         eval_explanation=eval_explanation,
+        tool_call_count=total_tool_calls,
     )
 
 
@@ -485,8 +549,12 @@ def run_generate_verify(
         steps.append(_record_step("large_generate", large_model_id, large_response))
         final_output = large_response.content
 
-    task_success, quality_score, eval_explanation = _evaluate_output(final_output, eval_config)
-    total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+    task_success, quality_score, eval_explanation = _evaluate_output(
+        final_output, eval_config
+    )
+    total_input_tokens, total_output_tokens, total_latency_ms, total_tool_calls = (
+        _totals(steps)
+    )
 
     return CombinationResult(
         strategy="generate-verify",
@@ -498,4 +566,5 @@ def run_generate_verify(
         task_success=task_success,
         quality_score=quality_score,
         eval_explanation=eval_explanation,
+        tool_call_count=total_tool_calls,
     )
