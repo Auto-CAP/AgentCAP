@@ -21,10 +21,13 @@ large_model:
 
 strategies:
   - cascade
+  - adaptive-cascade
   - self-critique-small
   - self-critique-large
   - vote
   - generate-verify
+  - best-of-n-small
+  - best-of-n-large
 
 serving_engine: sglang
 max_tokens: 8192

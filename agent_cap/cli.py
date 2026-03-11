@@ -140,6 +140,8 @@ def cmd_run(args):
 def cmd_combo(args):
     from agent_cap.benchmarks import load_benchmark
     from agent_cap.combinations import (
+        run_adaptive_cascade,
+        run_best_of_n,
         run_cascade,
         run_generate_verify,
         run_multi_model_vote,
@@ -156,7 +158,10 @@ def cmd_combo(args):
     supported_strategies = {
         "single-pass-small",
         "single-pass-large",
+        "best-of-n-small",
+        "best-of-n-large",
         "cascade",
+        "adaptive-cascade",
         "self-critique-small",
         "self-critique-large",
         "vote",
@@ -184,6 +189,10 @@ def cmd_combo(args):
                 plan = f"{strategy}: {_short_model(config.small_model.id)}"
             elif strategy == "single-pass-large":
                 plan = f"{strategy}: {_short_model(config.large_model.id)}"
+            elif strategy == "best-of-n-small":
+                plan = f"{strategy}: {_short_model(config.small_model.id)} (n=3, temp=0.7)"
+            elif strategy == "best-of-n-large":
+                plan = f"{strategy}: {_short_model(config.large_model.id)} (n=3, temp=0.7)"
             elif strategy == "self-critique-small":
                 plan = f"{strategy}: {_short_model(config.small_model.id)} (generate/critique/revise)"
             elif strategy == "self-critique-large":
@@ -195,6 +204,11 @@ def cmd_combo(args):
                 )
             elif strategy == "cascade":
                 plan = f"{strategy}: {_short_model(config.small_model.id)} -> {_short_model(config.large_model.id)}"
+            elif strategy == "adaptive-cascade":
+                plan = (
+                    f"{strategy}: {_short_model(config.small_model.id)} self-assess -> "
+                    f"{_short_model(config.large_model.id)} on low confidence"
+                )
             else:
                 plan = (
                     f"{strategy}: generate({_short_model(config.small_model.id)}) "
@@ -280,6 +294,26 @@ def cmd_combo(args):
                             task.eval_config,
                             config.max_tokens,
                         )
+                    elif strategy == "best-of-n-small":
+                        combo_result = run_best_of_n(
+                            task.messages,
+                            small_client,
+                            config.small_model.id,
+                            task.eval_config,
+                            n=3,
+                            temperature=0.7,
+                            max_tokens=config.max_tokens,
+                        )
+                    elif strategy == "best-of-n-large":
+                        combo_result = run_best_of_n(
+                            task.messages,
+                            large_client,
+                            config.large_model.id,
+                            task.eval_config,
+                            n=3,
+                            temperature=0.7,
+                            max_tokens=config.max_tokens,
+                        )
                     elif strategy == "cascade":
                         combo_result = run_cascade(
                             task.messages,
@@ -289,6 +323,17 @@ def cmd_combo(args):
                             config.large_model.id,
                             task.eval_config,
                             config.max_tokens,
+                        )
+                    elif strategy == "adaptive-cascade":
+                        combo_result = run_adaptive_cascade(
+                            task.messages,
+                            small_client,
+                            config.small_model.id,
+                            large_client,
+                            config.large_model.id,
+                            task.eval_config,
+                            confidence_threshold=7,
+                            max_tokens=config.max_tokens,
                         )
                     elif strategy == "self-critique-small":
                         combo_result = run_self_critique(
@@ -336,12 +381,12 @@ def cmd_combo(args):
                 gpu_stats = monitor.stop()
                 completed_at = datetime.now().isoformat()
 
-                if strategy in {"single-pass-small", "self-critique-small"}:
+                if strategy in {"single-pass-small", "self-critique-small", "best-of-n-small"}:
                     model_id = config.small_model.id
                     model_params_b = config.small_model.params_b
                     model_arch = config.small_model.arch
                     tensor_parallel = config.small_model.tp
-                elif strategy in {"single-pass-large", "self-critique-large"}:
+                elif strategy in {"single-pass-large", "self-critique-large", "best-of-n-large"}:
                     model_id = config.large_model.id
                     model_params_b = config.large_model.params_b
                     model_arch = config.large_model.arch
