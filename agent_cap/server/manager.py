@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -14,6 +15,9 @@ class ServerConfig:
     quantization: str
     tp: int = 1
     port: int = 30000
+    python_path: str = "python"
+    env_vars: Dict[str, str] = field(default_factory=dict)
+    extra_flags: List[str] = field(default_factory=list)
     extra_args: Dict[str, str] = field(default_factory=dict)
 
 
@@ -30,7 +34,7 @@ class ModelServerManager:
     def _build_command(self) -> List[str]:
         if self.config.engine == "sglang":
             cmd = [
-                "python",
+                self.config.python_path,
                 "-m",
                 "sglang.launch_server",
                 "--model-path",
@@ -42,7 +46,7 @@ class ModelServerManager:
             ]
         elif self.config.engine == "vllm":
             cmd = [
-                "python",
+                self.config.python_path,
                 "-m",
                 "vllm.entrypoints.openai.api_server",
                 "--model",
@@ -58,6 +62,9 @@ class ModelServerManager:
         if self.config.quantization != "fp16":
             cmd.extend(["--quantization", self.config.quantization])
 
+        cmd.append("--trust-remote-code")
+        cmd.extend(self.config.extra_flags)
+
         for key, value in self.config.extra_args.items():
             cmd.extend([f"--{key}", value])
         return cmd
@@ -72,15 +79,18 @@ class ModelServerManager:
         self.stderr_log_path = Path.cwd() / f"server_{self.config.engine}_{self.config.port}_{stamp}.err.log"
         self._stdout_handle = self.stdout_log_path.open("w", encoding="utf-8")
         self._stderr_handle = self.stderr_log_path.open("w", encoding="utf-8")
+        env = os.environ.copy()
+        env.update(self.config.env_vars)
 
         self.process = subprocess.Popen(
             self.command,
             stdout=self._stdout_handle,
             stderr=self._stderr_handle,
             start_new_session=True,
+            env=env,
         )
 
-    def wait_until_ready(self, timeout: float = 300) -> bool:
+    def wait_until_ready(self, timeout: float = 600) -> bool:
         if not self.process:
             raise RuntimeError("Server has not been launched")
 

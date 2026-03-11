@@ -52,6 +52,8 @@ class ExperimentConfig:
     max_tokens: int = 4096
     gpu_type: str = "H100-80G"
     num_gpus: int = 8
+    python_path: str = "python"
+    cuda_visible_devices: str = ""
     task_filter: Optional[List[str]] = None
 
     @classmethod
@@ -77,6 +79,8 @@ class ExperimentConfig:
             max_tokens=int(data.get("max_tokens", 4096)),
             gpu_type=str(data.get("gpu_type", "H100-80G")),
             num_gpus=int(data.get("num_gpus", 8)),
+            python_path=str(data.get("python_path", "python")),
+            cuda_visible_devices=str(data.get("cuda_visible_devices", "")),
             task_filter=task_filter,
         )
 
@@ -95,6 +99,8 @@ class ExperimentConfig:
             "max_tokens": self.max_tokens,
             "gpu_type": self.gpu_type,
             "num_gpus": self.num_gpus,
+            "python_path": self.python_path,
+            "cuda_visible_devices": self.cuda_visible_devices,
             "task_filter": self.task_filter,
         }
 

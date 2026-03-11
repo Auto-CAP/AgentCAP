@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from agent_cap.config.schema import ExperimentConfig, ModelConfig
 from agent_cap.db.store import ResultStore, RunResult
+from agent_cap.evaluator import EvalConfig, evaluate
 from agent_cap.server.client import ChatClient
 from agent_cap.server.gpu_monitor import GPUMonitor
 from agent_cap.server.manager import ModelServerManager, ServerConfig
@@ -21,6 +22,7 @@ class TaskDef:
     messages: List[Dict[str, Any]]
     category: str = ""
     expected_skills: List[str] = field(default_factory=list)
+    eval_config: Optional[Dict[str, Any]] = None
 
 
 class ExperimentExecutor:
@@ -49,6 +51,11 @@ class ExperimentExecutor:
                 model_id=model_id,
                 quantization=quantization,
                 tp=model.tp,
+                python_path=self.config.python_path,
+                env_vars={"CUDA_VISIBLE_DEVICES": self.config.cuda_visible_devices}
+                if self.config.cuda_visible_devices
+                else {},
+                extra_flags=[],
             )
 
             logger.info(
@@ -119,6 +126,20 @@ class ExperimentExecutor:
         gpu_stats = monitor.stop()
         completed_at = datetime.now().isoformat()
 
+        task_success = None
+        quality_score = None
+        if task.eval_config:
+            eval_cfg = EvalConfig.from_dict(task.eval_config)
+            eval_result = evaluate(response.content, eval_cfg)
+            task_success = eval_result.task_success
+            quality_score = eval_result.quality_score
+            logger.info(
+                "  Eval: %s (score=%.1f) %s",
+                "PASS" if eval_result.task_success else "FAIL",
+                eval_result.quality_score,
+                eval_result.explanation[:80],
+            )
+
         result = RunResult(
             id=run_id,
             experiment_name=self.config.name,
@@ -136,6 +157,8 @@ class ExperimentExecutor:
             task_id=task.id,
             task_name=task.name,
             repetition=rep,
+            task_success=task_success,
+            quality_score=quality_score,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
             latency_e2e_ms=response.latency_ms,

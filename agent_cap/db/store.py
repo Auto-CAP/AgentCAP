@@ -35,6 +35,8 @@ class RunResult:
     avg_power_w: float = 0.0
     output_text: str = ""
     trajectory_log: str = ""
+    combination_strategy: str = ""
+    combination_detail: str = ""
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
 
@@ -65,12 +67,23 @@ class ResultStore:
                 latency_e2e_ms REAL,
                 avg_gpu_util_pct REAL, avg_power_w REAL,
                 output_text TEXT, trajectory_log TEXT,
+                combination_strategy TEXT, combination_detail TEXT,
                 started_at TEXT, completed_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_runs_experiment ON runs(experiment_name);
             CREATE INDEX IF NOT EXISTS idx_runs_model ON runs(model_id, quantization);
             """
         )
+
+        for col, col_type in [
+            ("combination_strategy", "TEXT"),
+            ("combination_detail", "TEXT"),
+        ]:
+            try:
+                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {col_type} DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+
         self._conn.commit()
 
     def save_run(self, run: RunResult) -> None:

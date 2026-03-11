@@ -64,3 +64,7 @@ ENV/
 # Benchmark outputs
 *.html
 *_trace.json
+
+# Runtime outputs
+results/
+server_sglang_*.log
