@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -91,6 +92,148 @@ def run_single_pass(
         strategy="single-pass",
         final_output=response.content,
         steps=[step],
+        total_input_tokens=total_input_tokens,
+        total_output_tokens=total_output_tokens,
+        total_latency_ms=total_latency_ms,
+        task_success=task_success,
+        quality_score=quality_score,
+        eval_explanation=eval_explanation,
+    )
+
+
+def run_best_of_n(
+    messages: List[Dict],
+    client: ChatClient,
+    model_id: str,
+    eval_config: Optional[Dict],
+    n: int = 3,
+    temperature: float = 0.7,
+    max_tokens: int = 8192,
+) -> CombinationResult:
+    steps: List[StepRecord] = []
+    evals: List[Tuple[Optional[bool], Optional[float], str]] = []
+
+    sample_temperature = temperature if temperature > 0 else 0.7
+    for sample_idx in range(1, max(n, 1) + 1):
+        response = client.chat(
+            messages,
+            model=model_id,
+            temperature=sample_temperature,
+            max_tokens=max_tokens,
+        )
+        steps.append(_record_step(f"sample_{sample_idx}", model_id, response))
+        evals.append(_evaluate_output(response.content, eval_config))
+
+    selected_index = next((idx for idx, (ok, _, _) in enumerate(evals) if ok is True), None)
+    if selected_index is None:
+        best_score = max((score if score is not None else float("-inf")) for _, score, _ in evals)
+        selected_index = next(
+            idx for idx, (_, score, _) in enumerate(evals) if (score if score is not None else float("-inf")) == best_score
+        )
+
+    final_step = steps[selected_index]
+    task_success, quality_score, eval_explanation = evals[selected_index]
+    total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+
+    logger.debug(
+        "best-of-n complete: %s",
+        json.dumps(
+            {
+                "model": model_id,
+                "samples": len(steps),
+                "selected_step": final_step.step_name,
+                "latency_ms": total_latency_ms,
+            }
+        ),
+    )
+
+    return CombinationResult(
+        strategy="best-of-n",
+        final_output=final_step.output_text,
+        steps=steps,
+        total_input_tokens=total_input_tokens,
+        total_output_tokens=total_output_tokens,
+        total_latency_ms=total_latency_ms,
+        task_success=task_success,
+        quality_score=quality_score,
+        eval_explanation=eval_explanation,
+    )
+
+
+def run_adaptive_cascade(
+    messages: List[Dict],
+    small_client: ChatClient,
+    small_model_id: str,
+    large_client: ChatClient,
+    large_model_id: str,
+    eval_config: Optional[Dict],
+    confidence_threshold: int = 7,
+    max_tokens: int = 8192,
+) -> CombinationResult:
+    steps: List[StepRecord] = []
+    original_task_text = _get_task_text(messages)
+
+    small_response = small_client.chat(
+        messages,
+        model=small_model_id,
+        temperature=0.0,
+        max_tokens=max_tokens,
+    )
+    steps.append(_record_step("small_generate", small_model_id, small_response))
+
+    confidence_messages = [
+        {
+            "role": "user",
+            "content": (
+                "Rate your confidence in the correctness of this solution on a scale of 0-10 "
+                "(10 = certain it's correct). Reply with ONLY a single integer.\n\n"
+                f"Original task: {original_task_text}\n\n"
+                f"Proposed solution:\n{small_response.content}"
+            ),
+        }
+    ]
+    confidence_response = small_client.chat(
+        confidence_messages,
+        model=small_model_id,
+        temperature=0.0,
+        max_tokens=256,
+    )
+    steps.append(_record_step("self_assess", small_model_id, confidence_response))
+
+    confidence_score = 0
+    for match in re.findall(r"\b\d+\b", confidence_response.content):
+        parsed = int(match)
+        if 0 <= parsed <= 10:
+            confidence_score = parsed
+            break
+
+    if confidence_score >= confidence_threshold:
+        final_output = small_response.content
+        logger.debug(
+            "adaptive-cascade accepted small model: %s",
+            json.dumps({"confidence": confidence_score, "threshold": confidence_threshold}),
+        )
+    else:
+        logger.debug(
+            "adaptive-cascade escalated to large model: %s",
+            json.dumps({"confidence": confidence_score, "threshold": confidence_threshold}),
+        )
+        large_response = large_client.chat(
+            messages,
+            model=large_model_id,
+            temperature=0.0,
+            max_tokens=max_tokens,
+        )
+        steps.append(_record_step("large_generate", large_model_id, large_response))
+        final_output = large_response.content
+
+    task_success, quality_score, eval_explanation = _evaluate_output(final_output, eval_config)
+    total_input_tokens, total_output_tokens, total_latency_ms = _totals(steps)
+
+    return CombinationResult(
+        strategy="adaptive-cascade",
+        final_output=final_output,
+        steps=steps,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
         total_latency_ms=total_latency_ms,
