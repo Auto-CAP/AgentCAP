@@ -20,8 +20,6 @@ large_model:
   cuda_visible_devices: "2,3"
 
 strategies:
-  - single-pass-small
-  - single-pass-large
   - cascade
   - self-critique-small
   - self-critique-large
