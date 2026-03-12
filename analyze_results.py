@@ -22,7 +22,7 @@ import json
 import re
 import sqlite3
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -31,6 +31,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 # Ensure project root is on path
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -39,24 +42,52 @@ if _PROJECT_ROOT.name == "scripts":
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from agent_cap.analysis.pareto import ParetoPoint, compute_pareto_frontier
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 GPU_FALLBACK_MIN = 1e-3
 ESCALATION_STRATEGIES = {"cascade", "adaptive-cascade"}
 
-STRATEGY_COLORS = {
-    "cascade": "#1f77b4",
-    "adaptive-cascade": "#ff7f0e",
-    "vote": "#2ca02c",
-    "generate-verify": "#d62728",
-    "best-of-n-small": "#9467bd",
-    "best-of-n-large": "#8c564b",
-    "self-critique-small": "#e377c2",
-    "self-critique-large": "#7f7f7f",
+MULTI_AGENT = {"cascade", "adaptive-cascade", "vote", "generate-verify"}
+SINGLE_AGENT = {
+    "best-of-n-small",
+    "best-of-n-large",
+    "self-critique-small",
+    "self-critique-large",
 }
+
+STRATEGY_COLORS = {
+    "cascade": "#2196F3",
+    "adaptive-cascade": "#FF9800",
+    "vote": "#4CAF50",
+    "generate-verify": "#9C27B0",
+    "best-of-n-small": "#78909C",
+    "best-of-n-large": "#607D8B",
+    "self-critique-small": "#BDBDBD",
+    "self-critique-large": "#9E9E9E",
+}
+
+STRATEGY_LABELS = {
+    "cascade": "Cascade",
+    "adaptive-cascade": "Adapt-Casc",
+    "vote": "Vote",
+    "generate-verify": "Gen-Verify",
+    "best-of-n-small": "BoN-S",
+    "best-of-n-large": "BoN-L",
+    "self-critique-small": "SC-S",
+    "self-critique-large": "SC-L",
+}
+
+STRATEGY_ORDER = [
+    "cascade",
+    "adaptive-cascade",
+    "vote",
+    "generate-verify",
+    "best-of-n-small",
+    "best-of-n-large",
+    "self-critique-small",
+    "self-critique-large",
+]
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -145,6 +176,62 @@ def _color(name: str) -> str:
     return STRATEGY_COLORS.get(name, "#333333")
 
 
+def _label(name: str) -> str:
+    return STRATEGY_LABELS.get(name, name)
+
+
+def _is_multi_agent(name: str) -> bool:
+    return name in MULTI_AGENT
+
+
+def _strategy_sort_key(name: str) -> tuple[int, str]:
+    try:
+        return (STRATEGY_ORDER.index(name), name)
+    except ValueError:
+        return (len(STRATEGY_ORDER), name)
+
+
+def _ordered_stats(stats: List[StrategyStats]) -> List[StrategyStats]:
+    return sorted(stats, key=lambda s: _strategy_sort_key(s.name))
+
+
+def _add_subtitle(ax: Axes, pair_label: str) -> None:
+    ax.text(
+        0.5,
+        1.02,
+        pair_label,
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=11,
+        color="#666666",
+    )
+
+
+def _bar_style_kwargs(name: str) -> Dict[str, Any]:
+    kw: Dict[str, Any] = {
+        "color": _color(name),
+        "edgecolor": "black",
+        "linewidth": 0.8,
+        "alpha": 0.9,
+    }
+    if name in SINGLE_AGENT:
+        kw["hatch"] = "///"
+    return kw
+
+
+def _group_legend_handles() -> List[Patch]:
+    return [
+        Patch(facecolor="#FFFFFF", edgecolor="black", label="Multi-agent"),
+        Patch(
+            facecolor="#FFFFFF",
+            edgecolor="black",
+            hatch="///",
+            label="Single-agent control",
+        ),
+    ]
+
+
 def _model_short(name: str) -> str:
     tail = name.split("/")[-1]
     m = re.search(r"(\d+(?:\.\d+)?B(?:-[A-Za-z0-9]+)?)", tail)
@@ -215,6 +302,8 @@ def load_runs(db_path: Path) -> List[RunRecord]:
 
 
 def compute_strategy_stats(runs: List[RunRecord]) -> List[StrategyStats]:
+    from agent_cap.analysis.pareto import ParetoPoint, compute_pareto_frontier
+
     by_strat: Dict[str, List[RunRecord]] = {}
     for r in runs:
         by_strat.setdefault(r.strategy, []).append(r)
@@ -316,15 +405,20 @@ def _setup_style():
     plt.rcParams.update(
         {
             "font.size": 12,
+            "axes.titlesize": 14,
+            "axes.labelsize": 12,
+            "xtick.labelsize": 10,
+            "ytick.labelsize": 10,
+            "legend.fontsize": 10,
             "figure.figsize": (10, 6),
             "figure.dpi": 150,
-            "savefig.dpi": 300,
+            "savefig.dpi": 200,
         }
     )
 
 
 def _save(fig, stem: Path):
-    fig.savefig(str(stem) + ".png", dpi=300, bbox_inches="tight")
+    fig.savefig(str(stem) + ".png", dpi=200, bbox_inches="tight")
     fig.savefig(str(stem) + ".pdf", bbox_inches="tight")
     print(f"  Saved: {stem.name}.png / .pdf")
 
@@ -335,22 +429,24 @@ def _save(fig, stem: Path):
 
 
 def plot_pareto(stats: List[StrategyStats], out: Path, label: str):
+    stats = _ordered_stats(stats)
     fig, ax = plt.subplots(figsize=(10, 7))
     for s in stats:
-        mk = "*" if s.is_pareto_optimal else "o"
-        sz = 200 if s.is_pareto_optimal else 80
+        sz = 180 if s.is_pareto_optimal else 110
+        face = _color(s.name) if _is_multi_agent(s.name) else "none"
         ax.scatter(
             s.avg_gpu_seconds,
             s.accuracy * 100,
-            c=_color(s.name),
+            color=_color(s.name),
+            facecolors=face,
             s=sz,
-            marker=mk,
+            marker="o",
             edgecolors="black",
             linewidths=1.0,
             zorder=5,
         )
         ax.annotate(
-            s.name,
+            _label(s.name),
             (s.avg_gpu_seconds, s.accuracy * 100),
             textcoords="offset points",
             xytext=(8, 8),
@@ -372,58 +468,106 @@ def plot_pareto(stats: List[StrategyStats], out: Path, label: str):
 
     ax.set_xlabel("Avg GPU-seconds / task")
     ax.set_ylabel("Accuracy (%)")
-    ax.set_title(f"Cost-Accuracy Pareto Frontier — {label}")
-    ax.legend(loc="best")
+    ax.set_title("Cost-Accuracy Pareto Frontier")
+    _add_subtitle(ax, label)
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="black",
+            markerfacecolor="black",
+            linestyle="None",
+            label="Multi-agent",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="black",
+            markerfacecolor="none",
+            linestyle="None",
+            label="Single-agent control",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            linestyle="--",
+            label="Pareto frontier",
+        ),
+    ]
+    ax.legend(handles=legend_handles, loc="best")
     ax.grid(True, alpha=0.3)
     _save(fig, out / "pareto_frontier")
     plt.close(fig)
 
 
 def plot_strategy_bars(stats: List[StrategyStats], out: Path, label: str):
+    stats = _ordered_stats(stats)
     fig, ax1 = plt.subplots(figsize=(12, 6))
     names = [s.name for s in stats]
+    short_names = [_label(n) for n in names]
     accs = [s.accuracy * 100 for s in stats]
     gpus = [s.avg_gpu_seconds for s in stats]
     x = np.arange(len(names))
     w = 0.35
 
-    ax1.bar(x - w / 2, accs, w, label="Accuracy (%)", color="#4C72B0", alpha=0.85)
+    for i, name in enumerate(names):
+        ax1.bar(
+            x[i] - w / 2,
+            accs[i],
+            w,
+            **_bar_style_kwargs(name),
+        )
     ax1.set_ylabel("Accuracy (%)", color="#4C72B0")
     ax1.tick_params(axis="y", labelcolor="#4C72B0")
 
     ax2 = ax1.twinx()
-    ax2.bar(x + w / 2, gpus, w, label="Avg GPU-s/task", color="#DD8452", alpha=0.85)
+    for i, name in enumerate(names):
+        gpu_style = _bar_style_kwargs(name)
+        gpu_style["alpha"] = 0.45
+        ax2.bar(x[i] + w / 2, gpus[i], w, **gpu_style)
     ax2.set_ylabel("Avg GPU-seconds / task", color="#DD8452")
     ax2.tick_params(axis="y", labelcolor="#DD8452")
 
     ax1.set_xticks(x)
-    ax1.set_xticklabels(names, rotation=35, ha="right", fontsize=10)
-    ax1.set_title(f"Strategy Comparison — {label}")
-    h1, l1 = ax1.get_legend_handles_labels()
-    h2, l2 = ax2.get_legend_handles_labels()
-    ax1.legend(h1 + h2, l1 + l2, loc="upper left")
+    ax1.set_xticklabels(short_names, rotation=25, ha="right")
+    ax1.set_title("Multi-Agent Combination Strategies on BigCodeBench")
+    _add_subtitle(ax1, label)
+    metric_handles = [
+        Patch(facecolor="#666666", edgecolor="black", alpha=0.9, label="Accuracy (%)"),
+        Patch(
+            facecolor="#666666",
+            edgecolor="black",
+            alpha=0.45,
+            label="Avg GPU-s/task",
+        ),
+    ]
+    ax1.legend(handles=metric_handles + _group_legend_handles(), loc="upper left")
     fig.tight_layout()
     _save(fig, out / "strategy_comparison")
     plt.close(fig)
 
 
 def plot_scatter(stats: List[StrategyStats], out: Path, label: str):
+    stats = _ordered_stats(stats)
     fig, ax = plt.subplots(figsize=(10, 7))
     for s in stats:
-        mk = "s" if "self-critique" in s.name or "best-of-n" in s.name else "o"
+        face = _color(s.name) if _is_multi_agent(s.name) else "none"
         ax.scatter(
             s.avg_gpu_seconds,
             s.accuracy * 100,
-            c=_color(s.name),
+            color=_color(s.name),
+            facecolors=face,
             s=120,
-            marker=mk,
+            marker="o",
             edgecolors="black",
             linewidths=0.8,
             zorder=5,
-            label=s.name,
         )
         ax.annotate(
-            s.name,
+            _label(s.name),
             (s.avg_gpu_seconds, s.accuracy * 100),
             textcoords="offset points",
             xytext=(8, 5),
@@ -431,8 +575,31 @@ def plot_scatter(stats: List[StrategyStats], out: Path, label: str):
         )
     ax.set_xlabel("Avg GPU-seconds / task")
     ax.set_ylabel("Accuracy (%)")
-    ax.set_title(f"Cost vs Accuracy — {label}")
-    ax.legend(loc="best", fontsize=8)
+    ax.set_title("Strategy Cost-Accuracy Landscape")
+    _add_subtitle(ax, label)
+    ax.legend(
+        handles=[
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="black",
+                markerfacecolor="black",
+                linestyle="None",
+                label="Multi-agent",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="black",
+                markerfacecolor="none",
+                linestyle="None",
+                label="Single-agent control",
+            ),
+        ],
+        loc="best",
+    )
     ax.grid(True, alpha=0.3)
     _save(fig, out / "cost_accuracy_scatter")
     plt.close(fig)
@@ -443,12 +610,15 @@ def plot_escalation(esc: List[EscalationStats], out: Path, label: str):
         return
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
+    esc = sorted(esc, key=lambda e: _strategy_sort_key(e.strategy))
     names = [e.strategy for e in esc]
+    short_names = [_label(n) for n in names]
     rates = [e.escalation_rate * 100 for e in esc]
-    colors = [_color(n) for n in names]
 
     ax1 = axes[0]
-    bars = ax1.bar(names, rates, color=colors, alpha=0.85, edgecolor="black")
+    bars = []
+    for i, name in enumerate(names):
+        bars.extend(ax1.bar(short_names[i], rates[i], **_bar_style_kwargs(name)))
     for bar, rate in zip(bars, rates):
         ax1.text(
             bar.get_x() + bar.get_width() / 2,
@@ -466,33 +636,59 @@ def plot_escalation(esc: List[EscalationStats], out: Path, label: str):
     w = 0.35
     acc_not = [((e.acc_not_escalated or 0) * 100) for e in esc]
     acc_esc = [((e.acc_escalated or 0) * 100) for e in esc]
-    ax2.bar(x - w / 2, acc_not, w, label="Not Escalated", color="#2ca02c", alpha=0.85)
-    ax2.bar(x + w / 2, acc_esc, w, label="Escalated", color="#d62728", alpha=0.85)
+    for i, name in enumerate(names):
+        base_style = _bar_style_kwargs(name)
+        not_style = dict(base_style)
+        not_style["alpha"] = 0.4
+        esc_style = dict(base_style)
+        esc_style["alpha"] = 0.9
+        ax2.bar(x[i] - w / 2, acc_not[i], w, **not_style)
+        ax2.bar(x[i] + w / 2, acc_esc[i], w, **esc_style)
     ax2.set_xticks(x)
-    ax2.set_xticklabels(names)
+    ax2.set_xticklabels(short_names)
     ax2.set_ylabel("Accuracy (%)")
     ax2.set_title("Accuracy by Escalation")
-    ax2.legend()
+    metric_handles = [
+        Patch(facecolor="#666666", edgecolor="black", alpha=0.4, label="Not Escalated"),
+        Patch(facecolor="#666666", edgecolor="black", alpha=0.9, label="Escalated"),
+    ]
+    ax2.legend(handles=metric_handles + _group_legend_handles(), loc="upper right")
 
-    fig.suptitle(f"Escalation Analysis — {label}", fontsize=14)
+    fig.suptitle("Escalation Behavior in Cascade Strategies", fontsize=14)
+    fig.text(0.5, 0.965, label, ha="center", va="top", fontsize=11, color="#666666")
     fig.tight_layout()
     _save(fig, out / "escalation_analysis")
     plt.close(fig)
 
 
 def plot_tokens(stats: List[StrategyStats], out: Path, label: str):
+    stats = _ordered_stats(stats)
     fig, ax = plt.subplots(figsize=(12, 6))
     names = [s.name for s in stats]
+    short_names = [_label(n) for n in names]
     in_t = [s.avg_input_tokens for s in stats]
     out_t = [s.avg_output_tokens for s in stats]
     x = np.arange(len(names))
-    ax.bar(x, in_t, label="Input Tokens", color="#4C72B0", alpha=0.85)
-    ax.bar(x, out_t, bottom=in_t, label="Output Tokens", color="#DD8452", alpha=0.85)
+    for i, name in enumerate(names):
+        base_style = _bar_style_kwargs(name)
+        in_style = dict(base_style)
+        in_style["alpha"] = 0.8
+        out_style = dict(base_style)
+        out_style["alpha"] = 0.45
+        ax.bar(x[i], in_t[i], **in_style)
+        ax.bar(x[i], out_t[i], bottom=in_t[i], **out_style)
     ax.set_xticks(x)
-    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=10)
+    ax.set_xticklabels(short_names, rotation=25, ha="right")
     ax.set_ylabel("Avg Tokens / Task")
-    ax.set_title(f"Token Usage Breakdown — {label}")
-    ax.legend()
+    ax.set_title("Per-Strategy Token Usage Composition")
+    _add_subtitle(ax, label)
+    token_handles = [
+        Patch(facecolor="#666666", edgecolor="black", alpha=0.8, label="Input Tokens"),
+        Patch(
+            facecolor="#666666", edgecolor="black", alpha=0.45, label="Output Tokens"
+        ),
+    ]
+    ax.legend(handles=token_handles + _group_legend_handles(), loc="upper left")
     fig.tight_layout()
     _save(fig, out / "token_usage")
     plt.close(fig)
@@ -501,7 +697,6 @@ def plot_tokens(stats: List[StrategyStats], out: Path, label: str):
 def plot_cost_per_correct(
     stats: List[StrategyStats], runs: List[RunRecord], out: Path, label: str
 ):
-    """GPU-seconds per correct answer — key efficiency metric for the paper."""
     by_strat: Dict[str, List[RunRecord]] = {}
     for r in runs:
         by_strat.setdefault(r.strategy, []).append(r)
@@ -517,14 +712,18 @@ def plot_cost_per_correct(
     data.sort(key=lambda x: x[1])
     data = [d for d in data if d[1] > 0]
 
+    data.sort(key=lambda x: (_strategy_sort_key(x[0]), x[1]))
+
     fig, ax = plt.subplots(figsize=(12, 6))
     names = [d[0] for d in data]
+    short_names = [_label(n) for n in names]
     costs = [d[1] for d in data]
     accs = [d[2] for d in data]
-    colors = [_color(n) for n in names]
     x = np.arange(len(names))
 
-    bars = ax.bar(x, costs, color=colors, alpha=0.85, edgecolor="black", linewidth=0.5)
+    bars = []
+    for i, name in enumerate(names):
+        bars.extend(ax.bar(x[i], costs[i], **_bar_style_kwargs(name)))
     for i, (bar, acc, correct) in enumerate(zip(bars, accs, [d[3] for d in data])):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
@@ -535,23 +734,25 @@ def plot_cost_per_correct(
         )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=10)
+    ax.set_xticklabels(short_names, rotation=25, ha="right")
     ax.set_ylabel("GPU-seconds per Correct Answer")
-    ax.set_title(f"Cost Efficiency — {label}")
+    ax.set_title("Compute Cost per Correct Solution")
+    _add_subtitle(ax, label)
+    ax.legend(handles=_group_legend_handles(), loc="upper left")
     fig.tight_layout()
     _save(fig, out / "cost_per_correct")
     plt.close(fig)
 
 
 def plot_task_difficulty(runs: List[RunRecord], out: Path, label: str):
-    """Heatmap showing which tasks each strategy solves."""
     by_strat: Dict[str, Dict[str, bool]] = {}
     all_tasks: set = set()
     for r in runs:
         by_strat.setdefault(r.strategy, {})[r.task_id] = r.task_success
         all_tasks.add(r.task_id)
 
-    strat_names = sorted(by_strat.keys())
+    strat_names = sorted(by_strat.keys(), key=_strategy_sort_key)
+    strat_short = [_label(s) for s in strat_names]
     task_list = sorted(all_tasks)
 
     solve_counts = {
@@ -571,21 +772,16 @@ def plot_task_difficulty(runs: List[RunRecord], out: Path, label: str):
     cmap = plt.cm.RdYlGn  # type: ignore[attr-defined]
     ax.imshow(matrix, cmap=cmap, aspect="auto", interpolation="nearest", vmin=0, vmax=1)
     ax.set_yticks(range(len(strat_names)))
-    ax.set_yticklabels(strat_names, fontsize=10)
-    ax.set_xlabel(f"Tasks (sorted by difficulty, {len(task_list)} total)")
-    ax.set_title(f"Task Success Heatmap — {label}")
+    ax.set_yticklabels(strat_short)
+    ax.set_title("Task Difficulty Across Strategies")
+    _add_subtitle(ax, label)
 
     n_easy = sum(1 for t in task_list if solve_counts[t] == len(strat_names))
     n_hard = sum(1 for t in task_list if solve_counts[t] == 0)
-    ax.set_xlabel(f"Tasks (left=easy, right=hard) — {n_easy} easy, {n_hard} unsolvable")
-
-    if len(task_list) <= 60:
-        ax.set_xticks(range(len(task_list)))
-        ax.set_xticklabels(
-            [t.split("-")[-1] for t in task_list], rotation=90, fontsize=6
-        )
-    else:
-        ax.set_xticks([])
+    ax.set_xlabel(
+        f"Tasks sorted by solve count ({len(task_list)} total) — {n_easy} solved by all, {n_hard} solved by none"
+    )
+    ax.set_xticks([])
 
     fig.tight_layout()
     _save(fig, out / "task_difficulty_heatmap")
@@ -806,7 +1002,7 @@ def main() -> None:
     # Summary JSON
     summary = make_summary(db_path, pair_label, benchmark, stats, esc_stats)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    print(f"  Saved summary.json")
+    print("  Saved summary.json")
 
     # Key findings
     print("\n" + "=" * 60)
