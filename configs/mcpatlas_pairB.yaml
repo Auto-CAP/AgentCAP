@@ -1,0 +1,31 @@
+name: qwen-combo-mcpatlas-pairB
+description: "MCP-Atlas combo strategies: Qwen3-30B-A3B (small) vs Qwen3-32B (large)"
+
+small_model:
+  id: "Qwen/Qwen3-30B-A3B"
+  arch: MoE
+  params_b: 30
+  active_b: 3
+  tp: 1
+  port: 30000
+
+large_model:
+  id: "Qwen/Qwen3-32B"
+  arch: dense
+  params_b: 32
+  active_b: 32
+  tp: 1
+  port: 30001
+
+strategies:
+  - cascade
+  - vote
+  - best-of-n-small
+  - best-of-n-large
+  - adaptive-cascade
+
+mcp_server_url: "http://localhost:1984"
+max_turns: 20
+max_tokens: 8192
+gpu_type: "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+serving_engine: sglang
