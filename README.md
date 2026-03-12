@@ -1,115 +1,82 @@
 # AgentCAP
 
-Experiment sweep engine for multi-skill agent evaluation on local GPU clusters.
-
-AgentCAP systematically discovers trade-offs between model size, quantization, skills, and compute cost by sweeping controllable variables across agent tasks. All models run locally via SGLang/vLLM — cost is measured in GPU-seconds, not API dollars.
-
-## Key Features
-
-- **YAML-driven experiment configs** — define sweeps over models, quantizations, skill subsets
-- **Local model serving** — auto-manages SGLang/vLLM processes per experiment
-- **Novel metrics** — EPD (Effective Precision Depth), SDR, EPR for quantization × pipeline depth analysis
-- **Pareto analysis** — compute quality vs. cost frontiers across configurations
-- **SQLite results DB** — query and compare results across experiments
-- **GPU monitoring** — nvidia-smi polling for utilization, VRAM, power
+Multi-agent combination cost-accuracy-performance analysis for local GPU clusters. Evaluates cascade, vote, best-of-n, adaptive-cascade, generate-verify, self-critique strategies across model pairs using BigCodeBench and MCP-Atlas.
 
 ## Installation
 
 ```bash
 pip install -e ".[all]"
 ```
+Note: Requires SGLang in a conda env. Models served locally, no API keys needed for inference. Python path for SGLang env: `/mnt/raid0nvme0/sicheng/miniconda3/envs/sglang/bin/python`.
 
-## Quick Start
+## Quick Start: Run a BigCodeBench Combo Experiment
 
-### 1. Define an experiment
-
-```yaml
-# configs/model_size_frontier.yaml
-name: model-size-frontier
-models:
-  - id: "Qwen/Qwen3-32B"
-    arch: dense
-    params_b: 32
-    tp: 2
-  - id: "Qwen/Qwen3-8B"
-    arch: dense
-    params_b: 8
-    tp: 1
-quantizations: ["fp16"]
-skill_subsets: ["all", "none"]
-serving_engine: sglang
-repetitions: 3
-```
-
-### 2. Preview configurations
-
+### Step 1: Start SGLang servers
+Launch from `/tmp` to avoid import conflicts.
 ```bash
-agent-cap run configs/model_size_frontier.yaml --dry-run
+# GPU 0: Small Model (Qwen3-30B-A3B)
+python -m sglang.launch_server --model-path Qwen/Qwen3-30B-A3B --port 30000 --cuda-visible-devices 0
+
+# GPU 1: Large Model (Qwen3-32B)
+python -m sglang.launch_server --model-path Qwen/Qwen3-32B --port 30001 --cuda-visible-devices 1
 ```
 
-### 3. Run the experiment
-
+### Step 2: Run combo experiment
 ```bash
-agent-cap run configs/model_size_frontier.yaml --tasks tasks.json
+python -m agent_cap combo configs/qwen_combo_pairB.yaml --benchmark bigcodebench:50 --db results/combo.db
 ```
 
-### 4. Analyze results
-
+### Step 3: Analyze results
 ```bash
-agent-cap pareto model-size-frontier
-agent-cap metrics model-size-frontier
+python analyze_results.py --db results/combo.db --output-dir results/analysis/ --pair-label pairB
 ```
 
-## Novel Metrics
+## Run MCP-Atlas (Agentic) Experiments
 
-| Metric | What it measures |
-|--------|-----------------|
-| **EPD** (Effective Precision Depth) | Max pipeline depth where quantized model stays within X% of FP16 quality |
-| **SDR** (Step Degradation Rate) | How fast quality degrades across pipeline steps |
-| **EPR** (Error Propagation Rate) | Whether errors cascade to subsequent steps |
-| **SLR** (Skill Leverage Ratio) | Compute-equivalent value of adding skills |
-| **MCV** (Marginal Compute Value) | Quality improvement per additional GPU-second |
-| **GAR** (GPU Active Ratio) | Fraction of wall-clock time GPU is actually computing |
-
-## Python API
-
-```python
-from agent_cap import (
-    ExperimentConfig, ModelServerManager, ChatClient,
-    compute_sdr, compute_epr, compute_epd,
-    compute_pareto_frontier, ParetoPoint,
-)
-
-# Load config
-config = ExperimentConfig.from_yaml("configs/my_experiment.yaml")
-
-# Compute metrics
-sdr = compute_sdr([4.5, 4.2, 3.8, 3.5, 3.0])  # quality per step
-epd = compute_epd({1: 1.0, 2: 0.98, 3: 0.93, 4: 0.88}, threshold=0.95)  # safe depth = 2
-
-# Pareto analysis
-frontier = compute_pareto_frontier([
-    ParetoPoint("32B-fp16", quality=4.2, gpu_seconds=45),
-    ParetoPoint("8B-fp16", quality=3.8, gpu_seconds=6),
-])
+### Step 1: Start SGLang with tool calling
+Qwen3 requires `--tool-call-parser qwen25`. Max tokens must be >= 8192 for thinking tags.
+```bash
+python -m sglang.launch_server --model-path Qwen/Qwen3-32B --port 30002 --cuda-visible-devices 2 --tool-call-parser qwen25 --context-length 65536
 ```
+
+### Step 2: Start Docker MCP-Atlas env
+```bash
+docker run --rm -d --name mcp-atlas-env -p 1984:1984 mcp-atlas-env
+```
+
+### Step 3: Run combo experiment
+```bash
+python scripts/mcpatlas_combo.py --config configs/mcpatlas_pairB_gpu23.yaml --num-tasks 50 --db results/mcpatlas.db
+```
+
+### Step 4: Score with GPT-4o
+```bash
+cd /home/sicheng/mcp-atlas/services/mcp_eval
+EVAL_LLM_API_KEY=$OPENAI_API_KEY uv run python mcp_evals_scores.py --input-file="/home/sicheng/AgentCAP/results/mcpatlas/cascade.csv" --model-label="pairB-cascade" --evaluator-model="gpt-4o"
+```
+
+## Config Format
+Detailed guide in `configs/README.md`. Key fields:
+- `small_model`/`large_model`: model ID, port, and GPU placement
+- `strategies`: List of methods (e.g., `cascade`, `vote`, `best-of-n-small`)
+- `max_tokens`: Generation limit (suggest 8192+)
 
 ## Project Structure
+```
+agent_cap/       # Core multi-agent logic and CLI
+configs/         # YAML experiment specifications
+results/         # SQLite databases and analysis outputs
+scripts/         # MCP-Atlas and utility scripts
+analyze_results.py # result visualization and Pareto analysis
+```
 
-```
-agent_cap/
-  core/           # Step-level tracing (existing)
-  config/         # YAML experiment config loading
-  server/         # SGLang/vLLM process management + GPU monitor
-  runner/         # Experiment execution loop
-  metrics/        # Novel metrics (SDR, EPR, EPD, SLR, MCV, GAR)
-  analysis/       # Pareto frontiers + automated insights
-  db/             # SQLite results storage
-  cli.py          # CLI entrypoint
-configs/          # Example YAML experiment specs
-examples/         # Usage examples
-```
+## Key Results (Pair A: 4B vs 30B-A3B)
+| Strategy | Pass@1 | GPU-s | $/correct (H100) |
+|---|---|---|---|
+| Best-of-N-Small (4B×3) | 50% | 104.4 | $0.070 |
+| Cascade | 44% | 23.9 | $0.018 |
+| Best-of-N-Large (30B×3) | 44% | 74.7 | $0.057 |
+| Adaptive-Cascade | 42% | 41.6 | $0.033 |
 
 ## Acknowledgement
-
 This project is supported by the Advanced Research and Invention Agency (ARIA)'s grant "Scaling Compute: AI at 1/1000th the cost. Technical Area 4 Benchmarking".
