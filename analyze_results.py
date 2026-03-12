@@ -498,6 +498,100 @@ def plot_tokens(stats: List[StrategyStats], out: Path, label: str):
     plt.close(fig)
 
 
+def plot_cost_per_correct(
+    stats: List[StrategyStats], runs: List[RunRecord], out: Path, label: str
+):
+    """GPU-seconds per correct answer — key efficiency metric for the paper."""
+    by_strat: Dict[str, List[RunRecord]] = {}
+    for r in runs:
+        by_strat.setdefault(r.strategy, []).append(r)
+
+    data = []
+    for s in stats:
+        grp = by_strat.get(s.name, [])
+        total_gpu = sum(r.effective_gpu_seconds for r in grp)
+        correct = s.pass_count
+        cpc = total_gpu / correct if correct > 0 else 0
+        data.append((s.name, cpc, s.accuracy * 100, correct))
+
+    data.sort(key=lambda x: x[1])
+    data = [d for d in data if d[1] > 0]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    names = [d[0] for d in data]
+    costs = [d[1] for d in data]
+    accs = [d[2] for d in data]
+    colors = [_color(n) for n in names]
+    x = np.arange(len(names))
+
+    bars = ax.bar(x, costs, color=colors, alpha=0.85, edgecolor="black", linewidth=0.5)
+    for i, (bar, acc, correct) in enumerate(zip(bars, accs, [d[3] for d in data])):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 3,
+            f"{acc:.0f}%\n({correct})",
+            ha="center",
+            fontsize=9,
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=10)
+    ax.set_ylabel("GPU-seconds per Correct Answer")
+    ax.set_title(f"Cost Efficiency — {label}")
+    fig.tight_layout()
+    _save(fig, out / "cost_per_correct")
+    plt.close(fig)
+
+
+def plot_task_difficulty(runs: List[RunRecord], out: Path, label: str):
+    """Heatmap showing which tasks each strategy solves."""
+    by_strat: Dict[str, Dict[str, bool]] = {}
+    all_tasks: set = set()
+    for r in runs:
+        by_strat.setdefault(r.strategy, {})[r.task_id] = r.task_success
+        all_tasks.add(r.task_id)
+
+    strat_names = sorted(by_strat.keys())
+    task_list = sorted(all_tasks)
+
+    solve_counts = {
+        t: sum(1 for s in strat_names if by_strat.get(s, {}).get(t, False))
+        for t in task_list
+    }
+    task_list.sort(key=lambda t: -solve_counts[t])
+
+    matrix = np.zeros((len(strat_names), len(task_list)))
+    for i, s in enumerate(strat_names):
+        for j, t in enumerate(task_list):
+            matrix[i, j] = 1.0 if by_strat.get(s, {}).get(t, False) else 0.0
+
+    fig, ax = plt.subplots(
+        figsize=(max(14, len(task_list) * 0.3), max(4, len(strat_names) * 0.5 + 2))
+    )
+    cmap = plt.cm.RdYlGn  # type: ignore[attr-defined]
+    ax.imshow(matrix, cmap=cmap, aspect="auto", interpolation="nearest", vmin=0, vmax=1)
+    ax.set_yticks(range(len(strat_names)))
+    ax.set_yticklabels(strat_names, fontsize=10)
+    ax.set_xlabel(f"Tasks (sorted by difficulty, {len(task_list)} total)")
+    ax.set_title(f"Task Success Heatmap — {label}")
+
+    n_easy = sum(1 for t in task_list if solve_counts[t] == len(strat_names))
+    n_hard = sum(1 for t in task_list if solve_counts[t] == 0)
+    ax.set_xlabel(f"Tasks (left=easy, right=hard) — {n_easy} easy, {n_hard} unsolvable")
+
+    if len(task_list) <= 60:
+        ax.set_xticks(range(len(task_list)))
+        ax.set_xticklabels(
+            [t.split("-")[-1] for t in task_list], rotation=90, fontsize=6
+        )
+    else:
+        ax.set_xticks([])
+
+    fig.tight_layout()
+    _save(fig, out / "task_difficulty_heatmap")
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
@@ -706,6 +800,8 @@ def main() -> None:
     plot_scatter(stats, out_dir, pair_label)
     plot_escalation(esc_stats, out_dir, pair_label)
     plot_tokens(stats, out_dir, pair_label)
+    plot_cost_per_correct(stats, runs, out_dir, pair_label)
+    plot_task_difficulty(runs, out_dir, pair_label)
 
     # Summary JSON
     summary = make_summary(db_path, pair_label, benchmark, stats, esc_stats)

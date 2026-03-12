@@ -1,13 +1,30 @@
 #!/usr/bin/env python3
+"""AgentCAP — Experiment Analysis & Paper Figure Generation.
+
+Reads experiment results from SQLite databases and produces:
+  - Paper-quality matplotlib figures (PNG + PDF)
+  - Strategy comparison tables (text + LaTeX)
+  - Pareto frontier analysis
+  - Escalation analysis for cascade strategies
+  - Summary JSON for programmatic consumption
+
+Usage:
+    python analyze_results.py \
+        --db results/qwen_combo.db \
+        --output-dir results/analysis/pairA/ \
+        --pair-label "PairA: 4B vs 30B-A3B"
+"""
+
+from __future__ import annotations
 
 import argparse
 import json
-import math
 import re
 import sqlite3
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 import matplotlib
 
@@ -15,13 +32,35 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+# Ensure project root is on path
+_PROJECT_ROOT = Path(__file__).resolve().parent
+if _PROJECT_ROOT.name == "scripts":
+    _PROJECT_ROOT = _PROJECT_ROOT.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from agent_cap.analysis.pareto import ParetoPoint, compute_pareto_frontier
 
-
-LATEX_NL = "\\\\"
-GPU_FALLBACK_MIN_SECONDS = 1e-3
-GPU_TO_LATENCY_RATIO_FLOOR = 0.05
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+GPU_FALLBACK_MIN = 1e-3
 ESCALATION_STRATEGIES = {"cascade", "adaptive-cascade"}
+
+STRATEGY_COLORS = {
+    "cascade": "#1f77b4",
+    "adaptive-cascade": "#ff7f0e",
+    "vote": "#2ca02c",
+    "generate-verify": "#d62728",
+    "best-of-n-small": "#9467bd",
+    "best-of-n-large": "#8c564b",
+    "self-critique-small": "#e377c2",
+    "self-critique-large": "#7f7f7f",
+}
+
+# ---------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -30,7 +69,7 @@ class RunRecord:
     model_id: str
     strategy: str
     task_id: str
-    task_success: Optional[bool]
+    task_success: bool
     gpu_seconds: float
     latency_ms: float
     input_tokens: int
@@ -39,31 +78,12 @@ class RunRecord:
     tool_call_count: Optional[int]
 
     @property
-    def latency_seconds(self) -> float:
-        return max(0.0, self.latency_ms / 1000.0)
-
-    @property
     def effective_gpu_seconds(self) -> float:
         gpu = max(0.0, self.gpu_seconds)
-        latency_s = self.latency_seconds
-        if latency_s <= 0:
-            return gpu
-        if gpu <= GPU_FALLBACK_MIN_SECONDS:
-            return latency_s
-        if gpu < latency_s * GPU_TO_LATENCY_RATIO_FLOOR:
-            return latency_s
-        return gpu
-
-
-@dataclass
-class EscalationStats:
-    strategy: str
-    escalated: int
-    not_escalated: int
-    escalation_rate: Optional[float]
-    acc_escalated: Optional[float]
-    acc_not_escalated: Optional[float]
-    avg_small_confidence: Optional[float]
+        lat_s = max(0.0, self.latency_ms / 1000.0)
+        if gpu <= GPU_FALLBACK_MIN and lat_s > 0:
+            return lat_s
+        return gpu if gpu > 0 else lat_s
 
 
 @dataclass
@@ -76,1247 +96,733 @@ class StrategyStats:
     avg_latency_s: float
     avg_input_tokens: float
     avg_output_tokens: float
-    avg_tool_calls: Optional[float]
+    avg_tool_calls: Optional[float] = None
     is_pareto_optimal: bool = False
     escalation_rate: Optional[float] = None
-    acc_escalated: Optional[float] = None
-    acc_not_escalated: Optional[float] = None
-    avg_small_confidence: Optional[float] = None
 
 
 @dataclass
-class ExperimentAnalysis:
-    db_path: Path
-    experiment_name: str
-    benchmark_label: str
-    pair_label: str
-    has_tool_call_count: bool
-    strategies: List[StrategyStats]
-    pareto_frontier: List[str]
-    escalation_rows: List[EscalationStats]
-    baselines: List[Dict[str, Any]] = field(default_factory=list)
+class EscalationStats:
+    strategy: str
+    total: int
+    escalated: int
+    not_escalated: int
+    escalation_rate: float
+    acc_escalated: Optional[float]
+    acc_not_escalated: Optional[float]
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        usage=(
-            "analyze_results.py --db DB [--db2 DB2] [--output-dir DIR] "
-            "[--pair-label LABEL] [--format {text,latex,both}] [--baselines DB]"
-        )
-    )
-    parser.add_argument("--db", required=True)
-    parser.add_argument("--db2", default=None)
-    parser.add_argument("--output-dir", default="results/analysis/")
-    parser.add_argument("--pair-label", default=None)
-    parser.add_argument("--format", choices=["text", "latex", "both"], default="both")
-    parser.add_argument("--baselines", default=None)
-    return parser.parse_args()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-def safe_float(value: Any, default: float = 0.0) -> float:
+def _sf(v: Any, d: float = 0.0) -> float:
     try:
-        if value is None:
-            return default
-        return float(value)
+        return float(v) if v is not None else d
     except (TypeError, ValueError):
-        return default
+        return d
 
 
-def safe_int(value: Any, default: int = 0) -> int:
+def _si(v: Any, d: int = 0) -> int:
     try:
-        if value is None:
-            return default
-        return int(value)
+        return int(v) if v is not None else d
     except (TypeError, ValueError):
-        return default
+        return d
 
 
-def safe_mean(values: Sequence[float]) -> float:
-    if not values:
-        return 0.0
-    return float(sum(values) / len(values))
+def _sb(v: Any) -> bool:
+    if v is None:
+        return False
+    return bool(int(v))
 
 
-def safe_ratio(num: float, den: float) -> Optional[float]:
-    if den <= 0:
-        return None
-    return num / den
+def _mean(vals: Sequence[float]) -> float:
+    return float(sum(vals) / len(vals)) if vals else 0.0
 
 
-def to_optional_bool(value: Any) -> Optional[bool]:
-    if value is None:
-        return None
-    try:
-        return bool(int(value))
-    except (TypeError, ValueError):
-        token = str(value).strip().lower()
-        if token in {"true", "yes", "y", "t"}:
-            return True
-        if token in {"false", "no", "n", "f"}:
-            return False
-    return None
+def _color(name: str) -> str:
+    return STRATEGY_COLORS.get(name, "#333333")
 
 
-def detect_columns(conn: sqlite3.Connection, table_name: str = "runs") -> List[str]:
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return [str(row[1]) for row in rows]
+def _model_short(name: str) -> str:
+    tail = name.split("/")[-1]
+    m = re.search(r"(\d+(?:\.\d+)?B(?:-[A-Za-z0-9]+)?)", tail)
+    return m.group(1) if m else tail
 
 
-def list_experiments(conn: sqlite3.Connection) -> List[str]:
-    rows = conn.execute(
-        "SELECT DISTINCT experiment_name FROM runs ORDER BY experiment_name"
-    ).fetchall()
-    names = [str(row[0]) for row in rows if row and row[0] is not None]
-    return names or ["unknown-experiment"]
+def _auto_pair(runs: Sequence[RunRecord]) -> str:
+    mids = sorted({r.model_id for r in runs if r.model_id})
+    for mid in mids:
+        if "+" in mid:
+            parts = [p.strip() for p in mid.split("+") if p.strip()]
+            if len(parts) >= 2:
+                return f"{_model_short(parts[0])} vs {_model_short(parts[1])}"
+    return "unknown"
 
 
-def infer_benchmark_label(experiment_name: str, db_path: Path) -> str:
-    probe = f"{experiment_name}|{db_path.name}".lower()
+def _benchmark(exp_name: str, db_path: Path) -> str:
+    probe = f"{exp_name}|{db_path.name}".lower()
     if "bigcodebench" in probe:
         return "BigCodeBench"
-    if "mcp-atlas" in probe or "mcpatlas" in probe:
+    if "mcp" in probe or "atlas" in probe:
         return "MCP-Atlas"
-    if "gsm8k" in probe:
-        return "GSM8K"
-    if "gpqa" in probe:
-        return "GPQA"
-    return experiment_name
+    return exp_name
 
 
-def extract_size_tag(model_name: str) -> Optional[str]:
-    tail = model_name.split("/")[-1]
-    match = re.search(r"(?<![A-Za-z0-9])(\d+(?:\.\d+)?B(?:-[A-Za-z0-9]+)?)", tail)
-    if match:
-        return match.group(1)
-    return None
+# ---------------------------------------------------------------------------
+# DB Loading
+# ---------------------------------------------------------------------------
 
 
-def extract_model_short(model_name: str) -> str:
-    size = extract_size_tag(model_name)
-    if size:
-        return size
-    return model_name.split("/")[-1]
+def load_runs(db_path: Path) -> List[RunRecord]:
+    conn = sqlite3.connect(str(db_path))
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    has_tc = "tool_call_count" in cols
 
+    q = """SELECT experiment_name, model_id, combination_strategy, task_id,
+                  task_success, gpu_seconds, latency_e2e_ms,
+                  input_tokens, output_tokens, combination_detail
+                  {tc}
+           FROM runs WHERE combination_strategy IS NOT NULL
+    """.format(tc=", tool_call_count" if has_tc else "")
 
-def extract_model_size_value(model_name: str) -> float:
-    size = extract_size_tag(model_name)
-    if not size:
-        return math.inf
-    match = re.match(r"(\d+(?:\.\d+)?)B", size)
-    if not match:
-        return math.inf
-    return safe_float(match.group(1), default=math.inf)
-
-
-def auto_detect_pair_label(runs: Sequence[RunRecord]) -> str:
-    model_ids = sorted({run.model_id for run in runs if run.model_id})
-    for model_id in model_ids:
-        if "+" in model_id:
-            parts = [part.strip() for part in model_id.split("+") if part.strip()]
-            if len(parts) >= 2:
-                return f"{extract_model_short(parts[0])} vs {extract_model_short(parts[1])}"
-    if len(model_ids) >= 2:
-        ordered = sorted(model_ids, key=lambda m: (extract_model_size_value(m), m))
-        return (
-            f"{extract_model_short(ordered[0])} vs {extract_model_short(ordered[-1])}"
-        )
-    if model_ids:
-        return extract_model_short(model_ids[0])
-    return "unknown_pair"
-
-
-def slugify(text: str) -> str:
-    lowered = (text or "").strip().lower()
-    return re.sub(r"[^a-z0-9]+", "-", lowered).strip("-") or "analysis"
-
-
-def latex_escape(text: str) -> str:
-    mapping = {
-        "\\": r"\textbackslash{}",
-        "&": r"\&",
-        "%": r"\%",
-        "$": r"\$",
-        "#": r"\#",
-        "_": r"\_",
-        "{": r"\{",
-        "}": r"\}",
-        "~": r"\textasciitilde{}",
-        "^": r"\textasciicircum{}",
-    }
-    return "".join(mapping.get(ch, ch) for ch in text)
-
-
-def parse_detail_json(raw: str) -> Any:
-    text = (raw or "").strip()
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
-
-
-def parse_confidence_from_text(text: str) -> Optional[float]:
-    if not text:
-        return None
-    for token in re.findall(r"\b\d+\b", text):
-        value = int(token)
-        if 0 <= value <= 10:
-            return float(value)
-    return None
-
-
-def infer_escalation_info(
-    strategy: str,
-    detail_raw: str,
-) -> Tuple[Optional[bool], Optional[float]]:
-    detail = parse_detail_json(detail_raw)
-    if detail is None:
-        return None, None
-
-    escalated: Optional[bool] = None
-    small_confidence: Optional[float] = None
-
-    if isinstance(detail, dict):
-        if "escalated" in detail:
-            escalated = to_optional_bool(detail.get("escalated"))
-        if escalated is None and "winner" in detail:
-            winner = str(detail.get("winner", "")).strip().lower()
-            if winner in {"small", "large"}:
-                escalated = winner == "large"
-        if "small_confidence" in detail:
-            conf = safe_float(detail.get("small_confidence"), default=float("nan"))
-            if not math.isnan(conf):
-                small_confidence = conf
-
-    if isinstance(detail, list):
-        step_names: List[str] = []
-        for item in detail:
-            if not isinstance(item, dict):
-                continue
-            step_name = str(item.get("step_name", "")).strip().lower()
-            if step_name:
-                step_names.append(step_name)
-            if (
-                strategy == "adaptive-cascade"
-                and small_confidence is None
-                and step_name == "self_assess"
-            ):
-                small_confidence = parse_confidence_from_text(
-                    str(item.get("output_text", ""))
-                )
-        if strategy == "cascade" and step_names:
-            escalated = any("large" in name for name in step_names)
-        if strategy == "adaptive-cascade" and step_names:
-            escalated = any(
-                ("escalate" in name) or ("large" in name) for name in step_names
-            )
-
-    return escalated, small_confidence
-
-
-def load_runs(
-    conn: sqlite3.Connection,
-    experiment_name: str,
-) -> Tuple[List[RunRecord], bool]:
-    columns = detect_columns(conn)
-    has_tool_calls = "tool_call_count" in columns
-    has_detail = "combination_detail" in columns
-
-    selected = [
-        "experiment_name",
-        "model_id",
-        "combination_strategy",
-        "task_id",
-        "task_success",
-        "gpu_seconds",
-        "latency_e2e_ms",
-        "input_tokens",
-        "output_tokens",
-    ]
-    if has_detail:
-        selected.append("combination_detail")
-    if has_tool_calls:
-        selected.append("tool_call_count")
-
-    query = (
-        f"SELECT {', '.join(selected)} FROM runs "
-        "WHERE experiment_name = ? ORDER BY combination_strategy, task_id"
-    )
-    rows = conn.execute(query, (experiment_name,)).fetchall()
-
-    out: List[RunRecord] = []
-    for row in rows:
-        item = dict(row)
-        out.append(
+    records = []
+    for row in conn.execute(q).fetchall():
+        tc = _si(row[10]) if has_tc and len(row) > 10 else None
+        records.append(
             RunRecord(
-                experiment_name=str(item.get("experiment_name", experiment_name)),
-                model_id=str(item.get("model_id", "")),
-                strategy=str(item.get("combination_strategy", "") or ""),
-                task_id=str(item.get("task_id", "")),
-                task_success=to_optional_bool(item.get("task_success")),
-                gpu_seconds=safe_float(item.get("gpu_seconds"), default=0.0),
-                latency_ms=safe_float(item.get("latency_e2e_ms"), default=0.0),
-                input_tokens=safe_int(item.get("input_tokens"), default=0),
-                output_tokens=safe_int(item.get("output_tokens"), default=0),
-                combination_detail=str(item.get("combination_detail", "") or ""),
-                tool_call_count=safe_int(item.get("tool_call_count"), default=0)
-                if has_tool_calls
-                else None,
+                experiment_name=str(row[0] or ""),
+                model_id=str(row[1] or ""),
+                strategy=str(row[2] or ""),
+                task_id=str(row[3] or ""),
+                task_success=_sb(row[4]),
+                gpu_seconds=_sf(row[5]),
+                latency_ms=_sf(row[6]),
+                input_tokens=_si(row[7]),
+                output_tokens=_si(row[8]),
+                combination_detail=str(row[9] or ""),
+                tool_call_count=tc,
             )
         )
-    return out, has_tool_calls
+    conn.close()
+    return records
 
 
-def compute_escalation_stats(runs: Sequence[RunRecord]) -> List[EscalationStats]:
-    grouped: Dict[str, List[RunRecord]] = {}
-    for run in runs:
-        if run.strategy in ESCALATION_STRATEGIES:
-            grouped.setdefault(run.strategy, []).append(run)
-
-    out: List[EscalationStats] = []
-    for strategy in sorted(grouped):
-        items = grouped[strategy]
-        esc_idx: List[int] = []
-        non_idx: List[int] = []
-        conf_values: List[float] = []
-
-        for idx, run in enumerate(items):
-            escalated, conf = infer_escalation_info(strategy, run.combination_detail)
-            if conf is not None:
-                conf_values.append(conf)
-            if escalated is None:
-                continue
-            if escalated:
-                esc_idx.append(idx)
-            else:
-                non_idx.append(idx)
-
-        known = len(esc_idx) + len(non_idx)
-        esc_pass = sum(1 for idx in esc_idx if items[idx].task_success)
-        non_pass = sum(1 for idx in non_idx if items[idx].task_success)
-        out.append(
-            EscalationStats(
-                strategy=strategy,
-                escalated=len(esc_idx),
-                not_escalated=len(non_idx),
-                escalation_rate=safe_ratio(len(esc_idx), known),
-                acc_escalated=safe_ratio(esc_pass, len(esc_idx)),
-                acc_not_escalated=safe_ratio(non_pass, len(non_idx)),
-                avg_small_confidence=safe_mean(conf_values) if conf_values else None,
-            )
-        )
-
-    return out
+# ---------------------------------------------------------------------------
+# Analysis
+# ---------------------------------------------------------------------------
 
 
-def compute_strategy_stats(
-    runs: Sequence[RunRecord],
-    has_tool_call_count: bool,
-    escalation_rows: Sequence[EscalationStats],
-) -> Tuple[List[StrategyStats], List[str]]:
-    grouped: Dict[str, List[RunRecord]] = {}
-    for run in runs:
-        strategy = run.strategy.strip()
-        if strategy:
-            grouped.setdefault(strategy, []).append(run)
+def compute_strategy_stats(runs: List[RunRecord]) -> List[StrategyStats]:
+    by_strat: Dict[str, List[RunRecord]] = {}
+    for r in runs:
+        by_strat.setdefault(r.strategy, []).append(r)
 
-    if not grouped:
-        return [], []
+    stats = []
+    for name, grp in sorted(by_strat.items()):
+        n = len(grp)
+        passes = sum(1 for r in grp if r.task_success)
+        gpu_v = [r.effective_gpu_seconds for r in grp]
+        lat_v = [r.latency_ms / 1000.0 for r in grp]
+        in_t = [float(r.input_tokens) for r in grp]
+        out_t = [float(r.output_tokens) for r in grp]
+        tc_v = [r.tool_call_count for r in grp if r.tool_call_count is not None]
 
-    escalation_map = {row.strategy: row for row in escalation_rows}
-    rows: List[StrategyStats] = []
-
-    for strategy, items in grouped.items():
-        tasks = len(items)
-        pass_count = sum(1 for run in items if run.task_success)
-        accuracy = pass_count / tasks if tasks else 0.0
-        avg_gpu = safe_mean([run.effective_gpu_seconds for run in items])
-        avg_latency = safe_mean([run.latency_seconds for run in items])
-        avg_input = safe_mean([float(run.input_tokens) for run in items])
-        avg_output = safe_mean([float(run.output_tokens) for run in items])
-        avg_tool_calls = None
-        if has_tool_call_count:
-            avg_tool_calls = safe_mean(
-                [float(run.tool_call_count or 0) for run in items]
-            )
-
-        esc = escalation_map.get(strategy)
-        rows.append(
+        stats.append(
             StrategyStats(
-                name=strategy,
-                tasks=tasks,
-                pass_count=pass_count,
-                accuracy=accuracy,
-                avg_gpu_seconds=avg_gpu,
-                avg_latency_s=avg_latency,
-                avg_input_tokens=avg_input,
-                avg_output_tokens=avg_output,
-                avg_tool_calls=avg_tool_calls,
-                escalation_rate=esc.escalation_rate if esc else None,
-                acc_escalated=esc.acc_escalated if esc else None,
-                acc_not_escalated=esc.acc_not_escalated if esc else None,
-                avg_small_confidence=esc.avg_small_confidence if esc else None,
+                name=name,
+                tasks=n,
+                pass_count=passes,
+                accuracy=passes / n if n else 0.0,
+                avg_gpu_seconds=_mean(gpu_v),
+                avg_latency_s=_mean(lat_v),
+                avg_input_tokens=_mean(in_t),
+                avg_output_tokens=_mean(out_t),
+                avg_tool_calls=_mean([float(v) for v in tc_v]) if tc_v else None,
             )
         )
 
-    rows.sort(key=lambda row: (-row.accuracy, row.avg_gpu_seconds, row.name))
-
-    points = [
-        ParetoPoint(
-            config_id=row.name,
-            quality=row.accuracy,
-            gpu_seconds=row.avg_gpu_seconds,
-            latency_ms=row.avg_latency_s * 1000.0,
-            metadata={"tasks": row.tasks},
-        )
-        for row in rows
+    # Pareto
+    pts = [
+        ParetoPoint(config_id=s.name, quality=s.accuracy, gpu_seconds=s.avg_gpu_seconds)
+        for s in stats
     ]
-    frontier = compute_pareto_frontier(points)
-    frontier_names = [point.config_id for point in frontier]
-    frontier_set = set(frontier_names)
+    frontier_names = {p.config_id for p in compute_pareto_frontier(pts)}
+    for s in stats:
+        s.is_pareto_optimal = s.name in frontier_names
 
-    for row in rows:
-        row.is_pareto_optimal = row.name in frontier_set
-
-    return rows, frontier_names
+    return stats
 
 
-def load_baselines(db_path: Path) -> List[Dict[str, Any]]:
-    if not db_path.exists():
-        return []
+def compute_escalation(runs: List[RunRecord]) -> List[EscalationStats]:
+    results = []
+    by_strat: Dict[str, List[RunRecord]] = {}
+    for r in runs:
+        if r.strategy in ESCALATION_STRATEGIES:
+            by_strat.setdefault(r.strategy, []).append(r)
 
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
+    for name, grp in sorted(by_strat.items()):
+        esc, nesc = [], []
+        for r in grp:
+            if _was_escalated(r):
+                esc.append(r)
+            else:
+                nesc.append(r)
+        ne, nn = len(esc), len(nesc)
+        total = ne + nn
+        acc_e = (sum(1 for r in esc if r.task_success) / ne) if ne else None
+        acc_n = (sum(1 for r in nesc if r.task_success) / nn) if nn else None
+        results.append(
+            EscalationStats(
+                strategy=name,
+                total=total,
+                escalated=ne,
+                not_escalated=nn,
+                escalation_rate=ne / total if total else 0.0,
+                acc_escalated=acc_e,
+                acc_not_escalated=acc_n,
+            )
+        )
+    return results
+
+
+def _was_escalated(run: RunRecord) -> bool:
+    if not run.combination_detail:
+        return False
     try:
-        rows = conn.execute(
-            "SELECT model_id, task_success, gpu_seconds, latency_e2e_ms FROM runs ORDER BY model_id"
-        ).fetchall()
-    finally:
-        conn.close()
-
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-    for row in rows:
-        model_id = str(row["model_id"] or "")
-        grouped.setdefault(model_id, []).append(dict(row))
-
-    ordered = sorted(grouped.keys(), key=lambda m: (extract_model_size_value(m), m))
-    out: List[Dict[str, Any]] = []
-
-    for idx, model_id in enumerate(ordered):
-        items = grouped[model_id]
-        tasks = len(items)
-        pass_count = 0
-        gpu_vals: List[float] = []
-
-        for item in items:
-            success = to_optional_bool(item.get("task_success"))
-            if success:
-                pass_count += 1
-
-            gpu = safe_float(item.get("gpu_seconds"), 0.0)
-            latency_ms = safe_float(item.get("latency_e2e_ms"), 0.0)
-            if gpu <= 0.0 or gpu < 1e-6:
-                gpu = latency_ms / 1000.0 if latency_ms > 0 else 0.0
-            gpu_vals.append(gpu)
-
-        if len(ordered) == 1:
-            label = "single-pass"
-        elif idx == 0:
-            label = "single-small"
-        elif idx == len(ordered) - 1:
-            label = "single-large"
-        else:
-            label = f"single-{extract_model_short(model_id)}"
-
-        out.append(
-            {
-                "name": label,
-                "model_id": model_id,
-                "model_short": extract_model_short(model_id),
-                "tasks": tasks,
-                "pass_count": pass_count,
-                "accuracy": (pass_count / tasks) if tasks else 0.0,
-                "avg_gpu_seconds": safe_mean(gpu_vals),
-            }
-        )
-
-    return out
-
-
-def analyze_experiment(
-    db_path: Path,
-    experiment_name: str,
-    pair_label_override: Optional[str],
-    baselines: Optional[List[Dict[str, Any]]],
-) -> ExperimentAnalysis:
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        runs, has_tool_calls = load_runs(conn, experiment_name)
-    finally:
-        conn.close()
-
-    if not runs:
-        raise ValueError(
-            f"No runs found for experiment '{experiment_name}' in {db_path}"
-        )
-
-    pair_label = pair_label_override or auto_detect_pair_label(runs)
-    benchmark_label = infer_benchmark_label(experiment_name, db_path)
-    escalation_rows = compute_escalation_stats(runs)
-    strategy_rows, frontier = compute_strategy_stats(
-        runs, has_tool_calls, escalation_rows
-    )
-
-    return ExperimentAnalysis(
-        db_path=db_path,
-        experiment_name=experiment_name,
-        benchmark_label=benchmark_label,
-        pair_label=pair_label,
-        has_tool_call_count=has_tool_calls,
-        strategies=strategy_rows,
-        pareto_frontier=frontier,
-        escalation_rows=escalation_rows,
-        baselines=baselines or [],
-    )
-
-
-def format_text_table(
-    headers: Sequence[str],
-    rows: Sequence[Sequence[str]],
-    aligns: Optional[Sequence[str]] = None,
-) -> str:
-    if aligns is None:
-        aligns = ["left"] * len(headers)
-
-    widths: List[int] = []
-    for i, header in enumerate(headers):
-        max_row = max((len(str(row[i])) for row in rows), default=0)
-        widths.append(max(len(str(header)), max_row))
-
-    def pad(text: str, width: int, align: str) -> str:
-        if align == "right":
-            return text.rjust(width)
-        if align == "center":
-            return text.center(width)
-        return text.ljust(width)
-
-    header_line = " | ".join(
-        pad(str(headers[i]), widths[i], aligns[i]) for i in range(len(headers))
-    )
-    sep_line = "-+-".join("-" * widths[i] for i in range(len(headers)))
-
-    body_lines = []
-    for row in rows:
-        body_lines.append(
-            " | ".join(
-                pad(str(row[i]), widths[i], aligns[i]) for i in range(len(headers))
-            )
-        )
-
-    return "\n".join([header_line, sep_line] + body_lines)
-
-
-def format_latex_table(
-    headers: Sequence[str],
-    rows: Sequence[Sequence[str]],
-    aligns: Optional[Sequence[str]] = None,
-    caption: Optional[str] = None,
-    label: Optional[str] = None,
-) -> str:
-    if aligns is None:
-        aligns = ["left"] * len(headers)
-
-    align_map = {"left": "l", "right": "r", "center": "c"}
-    col_spec = "".join(align_map.get(a, "l") for a in aligns)
-
-    lines: List[str] = [r"\begin{table}[h]", r"\centering"]
-    if caption:
-        lines.append(rf"\caption{{{latex_escape(caption)}}}")
-    if label:
-        lines.append(rf"\label{{{latex_escape(label)}}}")
-
-    lines.extend(
-        [
-            rf"\begin{{tabular}}{{{col_spec}}}",
-            r"\toprule",
-            " & ".join(latex_escape(str(h)) for h in headers) + r" \\",
-            r"\midrule",
-        ]
-    )
-    for row in rows:
-        lines.append(" & ".join(latex_escape(str(c)) for c in row) + r" \\")
-
-    lines.extend([r"\bottomrule", r"\end{tabular}", r"\end{table}"])
-    return "\n".join(lines)
-
-
-def render_strategy_text(analysis: ExperimentAnalysis) -> str:
-    headers = [
-        "Strategy",
-        "Tasks",
-        "Pass",
-        "Accuracy",
-        "Avg GPU-s",
-        "Avg Latency",
-        "Pareto",
-    ]
-    rows: List[List[str]] = []
-
-    for row in analysis.strategies:
-        rows.append(
-            [
-                row.name,
-                str(row.tasks),
-                str(row.pass_count),
-                f"{row.accuracy * 100:.1f}%",
-                f"{row.avg_gpu_seconds:.2f}",
-                f"{row.avg_latency_s:.2f}",
-                "yes" if row.is_pareto_optimal else "no",
-            ]
-        )
-
-    aligns = ["left", "right", "right", "right", "right", "right", "center"]
-    title = f"Strategy comparison ({analysis.benchmark_label}, {analysis.pair_label})"
-    return title + "\n" + format_text_table(headers, rows, aligns)
-
-
-def render_strategy_latex(analysis: ExperimentAnalysis) -> str:
-    headers = [
-        "Strategy",
-        "Tasks",
-        "Pass",
-        "Accuracy",
-        "Avg GPU-s",
-        "Avg Latency(s)",
-        "Pareto",
-    ]
-    rows: List[List[str]] = []
-
-    for row in analysis.strategies:
-        rows.append(
-            [
-                row.name,
-                str(row.tasks),
-                str(row.pass_count),
-                f"{row.accuracy * 100:.1f}\\%",
-                f"{row.avg_gpu_seconds:.2f}",
-                f"{row.avg_latency_s:.2f}",
-                "yes" if row.is_pareto_optimal else "no",
-            ]
-        )
-
-    aligns = ["left", "right", "right", "right", "right", "right", "center"]
-    caption = (
-        f"Strategy comparison for {analysis.pair_label} on {analysis.benchmark_label}"
-    )
-    label = f"tab:{slugify(analysis.benchmark_label)}:{slugify(analysis.pair_label)}:strategy"
-    return format_latex_table(headers, rows, aligns, caption, label)
-
-
-def render_escalation_text(analysis: ExperimentAnalysis) -> str:
-    headers = [
-        "Strategy",
-        "Escalated",
-        "Not Escalated",
-        "Escalation Rate",
-        "Acc (Escalated)",
-        "Acc (Not Escalated)",
-    ]
-
-    rows: List[List[str]] = []
-    for row in analysis.escalation_rows:
-        rows.append(
-            [
-                row.strategy,
-                str(row.escalated),
-                str(row.not_escalated),
-                f"{(row.escalation_rate or 0.0) * 100:.1f}%"
-                if row.escalation_rate is not None
-                else "N/A",
-                f"{(row.acc_escalated or 0.0) * 100:.1f}%"
-                if row.acc_escalated is not None
-                else "N/A",
-                f"{(row.acc_not_escalated or 0.0) * 100:.1f}%"
-                if row.acc_not_escalated is not None
-                else "N/A",
-            ]
-        )
-
-    if not rows:
-        return "Escalation analysis\nNo cascade/adaptive-cascade rows found."
-
-    aligns = ["left", "right", "right", "right", "right", "right"]
-    return "Escalation analysis\n" + format_text_table(headers, rows, aligns)
-
-
-def render_escalation_latex(analysis: ExperimentAnalysis) -> str:
-    headers = [
-        "Strategy",
-        "Escalated",
-        "Not Escalated",
-        "Escalation Rate",
-        "Acc (Escalated)",
-        "Acc (Not Escalated)",
-    ]
-
-    rows: List[List[str]] = []
-    for row in analysis.escalation_rows:
-        rows.append(
-            [
-                row.strategy,
-                str(row.escalated),
-                str(row.not_escalated),
-                f"{(row.escalation_rate or 0.0) * 100:.1f}\\%"
-                if row.escalation_rate is not None
-                else "N/A",
-                f"{(row.acc_escalated or 0.0) * 100:.1f}\\%"
-                if row.acc_escalated is not None
-                else "N/A",
-                f"{(row.acc_not_escalated or 0.0) * 100:.1f}\\%"
-                if row.acc_not_escalated is not None
-                else "N/A",
-            ]
-        )
-
-    aligns = ["left", "right", "right", "right", "right", "right"]
-    caption = f"Escalation statistics on {analysis.benchmark_label}"
-    label = f"tab:{slugify(analysis.benchmark_label)}:{slugify(analysis.pair_label)}:escalation"
-    return format_latex_table(headers, rows, aligns, caption, label)
-
-
-def save_figure(fig: Any, output_dir: Path, stem: str) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(output_dir / f"{stem}.png", dpi=300)
-    fig.savefig(output_dir / f"{stem}.pdf", dpi=300)
-    plt.close(fig)
-
-
-def plot_pareto(analysis: ExperimentAnalysis, output_dir: Path) -> None:
-    if not analysis.strategies:
-        return
-
-    names = [row.name for row in analysis.strategies]
-    cmap = plt.get_cmap("tab10")
-    colors = cmap(np.linspace(0.0, 1.0, max(len(names), 1)))
-
-    fig, ax = plt.subplots()
-    for idx, row in enumerate(analysis.strategies):
-        ax.scatter(
-            row.avg_gpu_seconds,
-            row.accuracy * 100.0,
-            marker="*" if row.is_pareto_optimal else "o",
-            s=220 if row.is_pareto_optimal else 90,
-            color=colors[idx],
-            edgecolor="black",
-            linewidth=0.6,
-            zorder=3,
-        )
-        ax.annotate(
-            row.name,
-            (row.avg_gpu_seconds, row.accuracy * 100.0),
-            xytext=(6, 6),
-            textcoords="offset points",
-        )
-
-    frontier_map = {row.name: row for row in analysis.strategies}
-    frontier_rows = [
-        frontier_map[name] for name in analysis.pareto_frontier if name in frontier_map
-    ]
-    frontier_rows.sort(key=lambda item: item.avg_gpu_seconds)
-
-    if frontier_rows:
-        ax.plot(
-            [row.avg_gpu_seconds for row in frontier_rows],
-            [row.accuracy * 100.0 for row in frontier_rows],
-            linestyle="--",
-            color="black",
-            linewidth=1.5,
-            zorder=2,
-        )
-
-    ax.set_xlabel("Avg GPU-seconds per task")
-    ax.set_ylabel("Accuracy (%)")
-    ax.set_title(f"Pareto Frontier — {analysis.pair_label}")
-    save_figure(fig, output_dir, "pareto_frontier")
-
-
-def plot_strategy_comparison(analysis: ExperimentAnalysis, output_dir: Path) -> None:
-    stats = analysis.strategies
-    if not stats:
-        return
-
-    fig, ax1 = plt.subplots()
-    x = np.arange(len(stats), dtype=float)
-    width = 0.38
-
-    accuracy = [row.accuracy * 100.0 for row in stats]
-    gpu = [row.avg_gpu_seconds for row in stats]
-    labels = [row.name.replace("-", "\n") for row in stats]
-
-    bars1 = ax1.bar(x - width / 2.0, accuracy, width, color="#4C72B0")
-    ax1.set_ylabel("Accuracy (%)")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(labels)
-
-    ax2 = ax1.twinx()
-    bars2 = ax2.bar(x + width / 2.0, gpu, width, color="#DD8452", alpha=0.85)
-    ax2.set_ylabel("Avg GPU-s/task")
-
-    if stats:
-        ax1.legend(
-            [bars1[0], bars2[0]], ["Accuracy (%)", "Avg GPU-s/task"], loc="upper left"
-        )
-
-    ax1.set_title(f"Strategy Comparison — {analysis.pair_label}")
-    save_figure(fig, output_dir, "strategy_comparison")
-
-
-def plot_cost_accuracy(analysis: ExperimentAnalysis, output_dir: Path) -> None:
-    points: List[Tuple[str, float, float, str]] = []
-
-    for row in analysis.strategies:
-        points.append(
-            (row.name, row.avg_gpu_seconds, row.accuracy * 100.0, "multi-agent")
-        )
-
-    for baseline in analysis.baselines:
-        points.append(
-            (
-                str(baseline.get("name", "baseline")),
-                safe_float(baseline.get("avg_gpu_seconds"), 0.0),
-                safe_float(baseline.get("accuracy"), 0.0) * 100.0,
-                "single-agent baseline",
-            )
-        )
-
-    if not points:
-        return
-
-    fig, ax = plt.subplots()
-    for name, x, y, kind in points:
-        color = "#1f77b4" if kind == "multi-agent" else "#2ca02c"
-        ax.scatter(
-            x, y, s=120, color=color, edgecolor="black", linewidth=0.6, alpha=0.85
-        )
-        ax.annotate(name, (x, y), xytext=(6, 6), textcoords="offset points")
-
-    ax.set_xlabel("Avg GPU-seconds per task")
-    ax.set_ylabel("Accuracy (%)")
-    ax.set_title(f"Cost Accuracy Scatter — {analysis.pair_label}")
-    save_figure(fig, output_dir, "cost_accuracy_scatter")
-
-
-def plot_escalation(analysis: ExperimentAnalysis, output_dir: Path) -> None:
-    escalation_stats = analysis.escalation_rows
-    fig, ax = plt.subplots()
-
-    if not escalation_stats:
-        ax.text(0.5, 0.5, "No cascade strategies found", ha="center", va="center")
-        ax.set_axis_off()
-        save_figure(fig, output_dir, "escalation_analysis")
-        return
-
-    x = np.arange(len(escalation_stats), dtype=float)
-    width = 0.25
-    labels = [item.strategy.replace("-", "\n") for item in escalation_stats]
-    rate_values = [
-        (item.escalation_rate * 100.0) if item.escalation_rate is not None else 0.0
-        for item in escalation_stats
-    ]
-    esc_values = [
-        (item.acc_escalated * 100.0) if item.acc_escalated is not None else 0.0
-        for item in escalation_stats
-    ]
-    non_values = [
-        (item.acc_not_escalated * 100.0) if item.acc_not_escalated is not None else 0.0
-        for item in escalation_stats
-    ]
-
-    ax.bar(x - width, rate_values, width, color="#55A868", label="Escalation rate (%)")
-    ax.bar(x, esc_values, width, color="#C44E52", label="Escalated acc (%)")
-    ax.bar(x + width, non_values, width, color="#8172B2", label="Not escalated acc (%)")
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("Percentage")
-    ax.set_title(f"Escalation Analysis — {analysis.pair_label}")
-    ax.legend(loc="best")
-
-    save_figure(fig, output_dir, "escalation_analysis")
-
-
-def plot_tokens(analysis: ExperimentAnalysis, output_dir: Path) -> None:
-    stats = analysis.strategies
-    if not stats:
-        return
-
-    fig, ax = plt.subplots()
-
-    x = np.arange(len(stats), dtype=float)
-    labels = [row.name.replace("-", "\n") for row in stats]
-    input_vals = np.asarray([row.avg_input_tokens for row in stats], dtype=float)
-    output_vals = np.asarray([row.avg_output_tokens for row in stats], dtype=float)
-
-    ax.bar(x, input_vals, color="#17becf", alpha=0.9, label="Input tokens")
-    ax.bar(
-        x,
-        output_vals,
-        bottom=input_vals,
-        color="#bcbd22",
-        alpha=0.9,
-        label="Output tokens",
-    )
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("Average tokens per task")
-    ax.set_title(f"Token Usage Breakdown — {analysis.pair_label}")
-    ax.legend(loc="best")
-
-    save_figure(fig, output_dir, "token_usage")
-
-
-def rank_map(rows: Sequence[StrategyStats]) -> Dict[str, int]:
-    ordered = sorted(
-        rows, key=lambda row: (-row.accuracy, row.avg_gpu_seconds, row.name)
-    )
-    return {row.name: idx + 1 for idx, row in enumerate(ordered)}
-
-
-def render_cross_text(
-    primary: ExperimentAnalysis, secondary: ExperimentAnalysis
-) -> str:
-    left = {row.name: row for row in primary.strategies}
-    right = {row.name: row for row in secondary.strategies}
-    left_rank = rank_map(primary.strategies)
-    right_rank = rank_map(secondary.strategies)
-    all_names = sorted(set(left) | set(right))
-
-    headers = ["Strategy", "A Acc%", "A GPU-s", "A Rank", "B Acc%", "B GPU-s", "B Rank"]
-    rows: List[List[str]] = []
-    for name in all_names:
-        l = left.get(name)
-        r = right.get(name)
-        rows.append(
-            [
-                name,
-                f"{l.accuracy * 100:.1f}" if l else "-",
-                f"{l.avg_gpu_seconds:.2f}" if l else "-",
-                str(left_rank.get(name, "-")),
-                f"{r.accuracy * 100:.1f}" if r else "-",
-                f"{r.avg_gpu_seconds:.2f}" if r else "-",
-                str(right_rank.get(name, "-")),
-            ]
-        )
-
-    title = (
-        f"Cross benchmark: A={primary.benchmark_label}, B={secondary.benchmark_label}"
-    )
-    table = format_text_table(
-        headers, rows, ["left", "right", "right", "right", "right", "right", "right"]
-    )
-    return title + "\n" + table
-
-
-def render_cross_latex(
-    primary: ExperimentAnalysis, secondary: ExperimentAnalysis
-) -> str:
-    left = {row.name: row for row in primary.strategies}
-    right = {row.name: row for row in secondary.strategies}
-    left_rank = rank_map(primary.strategies)
-    right_rank = rank_map(secondary.strategies)
-    all_names = sorted(set(left) | set(right))
-
-    headers = [
-        "Strategy",
-        "A Acc(%)",
-        "A GPU-s",
-        "A Rank",
-        "B Acc(%)",
-        "B GPU-s",
-        "B Rank",
-    ]
-    rows: List[List[str]] = []
-    for name in all_names:
-        l = left.get(name)
-        r = right.get(name)
-        rows.append(
-            [
-                name,
-                f"{l.accuracy * 100:.1f}" if l else "-",
-                f"{l.avg_gpu_seconds:.2f}" if l else "-",
-                str(left_rank.get(name, "-")),
-                f"{r.accuracy * 100:.1f}" if r else "-",
-                f"{r.avg_gpu_seconds:.2f}" if r else "-",
-                str(right_rank.get(name, "-")),
-            ]
-        )
-
-    caption = f"Cross-benchmark comparison: {primary.benchmark_label} vs {secondary.benchmark_label}"
-    label = f"tab:cross:{slugify(primary.benchmark_label)}:{slugify(secondary.benchmark_label)}"
-    return format_latex_table(
-        headers,
-        rows,
-        ["left", "right", "right", "right", "right", "right", "right"],
-        caption,
-        label,
-    )
-
-
-def plot_cross(
-    primary: ExperimentAnalysis, secondary: ExperimentAnalysis, output_dir: Path
-) -> None:
-    fig, ax = plt.subplots()
-
-    payload = [(primary, "#1f77b4", "o"), (secondary, "#d62728", "s")]
-    for analysis, color, marker in payload:
-        ax.scatter(
-            [row.avg_gpu_seconds for row in analysis.strategies],
-            [row.accuracy * 100.0 for row in analysis.strategies],
-            c=color,
-            marker=marker,
-            alpha=0.8,
-            label=analysis.benchmark_label,
-        )
-
-        frontier_map = {row.name: row for row in analysis.strategies}
-        frontier_rows = [
-            frontier_map[name]
-            for name in analysis.pareto_frontier
-            if name in frontier_map
-        ]
-        if frontier_rows:
-            frontier_rows.sort(key=lambda item: item.avg_gpu_seconds)
-            ax.plot(
-                [row.avg_gpu_seconds for row in frontier_rows],
-                [row.accuracy * 100.0 for row in frontier_rows],
-                color=color,
-                linestyle="--",
-                linewidth=1.6,
-            )
-
-    ax.set_xlabel("Avg GPU-seconds per task")
-    ax.set_ylabel("Accuracy (%)")
-    ax.set_title(f"Cross-Benchmark Pareto — {primary.pair_label}")
-    ax.legend(loc="best")
-    save_figure(fig, output_dir, "cross_benchmark_pareto")
-
-
-def generate_summary_json(analysis: ExperimentAnalysis) -> Dict[str, Any]:
-    if not analysis.strategies:
-        return {
-            "db_path": str(analysis.db_path),
-            "pair_label": analysis.pair_label,
-            "benchmark": analysis.benchmark_label,
-            "strategies": [],
-            "pareto_frontier": [],
-            "best_accuracy": {"strategy": None, "accuracy": None},
-            "best_efficiency": {
-                "strategy": None,
-                "accuracy": None,
-                "gpu_seconds": None,
-            },
-            "escalation": [],
-            "baselines": analysis.baselines,
-        }
-
-    best_accuracy = max(analysis.strategies, key=lambda row: row.accuracy)
-    best_eff = max(
-        analysis.strategies,
-        key=lambda row: row.accuracy / max(row.avg_gpu_seconds, 1e-9),
-    )
-
-    return {
-        "db_path": str(analysis.db_path),
-        "pair_label": analysis.pair_label,
-        "benchmark": analysis.benchmark_label,
-        "experiment_name": analysis.experiment_name,
-        "strategies": [
-            {
-                "name": row.name,
-                "tasks": row.tasks,
-                "pass": row.pass_count,
-                "accuracy": row.accuracy,
-                "avg_gpu_seconds": row.avg_gpu_seconds,
-                "avg_latency_s": row.avg_latency_s,
-                "avg_input_tokens": row.avg_input_tokens,
-                "avg_output_tokens": row.avg_output_tokens,
-                "avg_tool_calls": row.avg_tool_calls,
-                "pareto_optimal": row.is_pareto_optimal,
-                "escalation_rate": row.escalation_rate,
-                "acc_escalated": row.acc_escalated,
-                "acc_not_escalated": row.acc_not_escalated,
-                "avg_small_confidence": row.avg_small_confidence,
-            }
-            for row in analysis.strategies
-        ],
-        "pareto_frontier": analysis.pareto_frontier,
-        "best_accuracy": {
-            "strategy": best_accuracy.name,
-            "accuracy": best_accuracy.accuracy,
-        },
-        "best_efficiency": {
-            "strategy": best_eff.name,
-            "accuracy": best_eff.accuracy,
-            "gpu_seconds": best_eff.avg_gpu_seconds,
-        },
-        "escalation": [
-            {
-                "strategy": row.strategy,
-                "escalated": row.escalated,
-                "not_escalated": row.not_escalated,
-                "escalation_rate": row.escalation_rate,
-                "acc_escalated": row.acc_escalated,
-                "acc_not_escalated": row.acc_not_escalated,
-                "avg_small_confidence": row.avg_small_confidence,
-            }
-            for row in analysis.escalation_rows
-        ],
-        "baselines": analysis.baselines,
-    }
-
-
-def write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-
-def write_json(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def save_outputs(
-    analysis: ExperimentAnalysis, output_dir: Path, table_format: str
-) -> None:
-    if table_format in {"text", "both"}:
-        write_text(
-            output_dir / "strategy_comparison.txt", render_strategy_text(analysis)
-        )
-        write_text(
-            output_dir / "escalation_table.txt", render_escalation_text(analysis)
-        )
-
-    if table_format in {"latex", "both"}:
-        write_text(
-            output_dir / "strategy_comparison.tex", render_strategy_latex(analysis)
-        )
-        write_text(
-            output_dir / "escalation_table.tex", render_escalation_latex(analysis)
-        )
-
-    plot_pareto(analysis, output_dir)
-    plot_strategy_comparison(analysis, output_dir)
-    plot_cost_accuracy(analysis, output_dir)
-    plot_escalation(analysis, output_dir)
-    plot_tokens(analysis, output_dir)
-
-    write_json(output_dir / "summary.json", generate_summary_json(analysis))
-
-
-def analyze_db(
-    db_path: Path,
-    pair_label_override: Optional[str],
-    baselines: Optional[List[Dict[str, Any]]],
-) -> List[ExperimentAnalysis]:
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        experiments = list_experiments(conn)
-    finally:
-        conn.close()
-
-    out: List[ExperimentAnalysis] = []
-    for experiment_name in experiments:
-        out.append(
-            analyze_experiment(
-                db_path=db_path,
-                experiment_name=experiment_name,
-                pair_label_override=pair_label_override,
-                baselines=baselines,
-            )
-        )
-    return out
-
-
-def print_primary_text(
-    reports: Sequence[ExperimentAnalysis], table_format: str
-) -> None:
-    if table_format not in {"text", "both"}:
-        return
-
-    for report in reports:
-        print(render_strategy_text(report))
-        print()
-        print(render_escalation_text(report))
-        print()
-
-
-def main() -> None:
+        steps = json.loads(run.combination_detail)
+        if not isinstance(steps, list):
+            return False
+        for step in steps:
+            sn = str(step.get("step_name", "")).lower()
+            if "large" in sn:
+                return True
+        return False
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Figure Style
+# ---------------------------------------------------------------------------
+
+
+def _setup_style():
     try:
         plt.style.use("seaborn-v0_8-whitegrid")
     except OSError:
         pass
-
     plt.rcParams.update(
         {
             "font.size": 12,
             "figure.figsize": (10, 6),
             "figure.dpi": 150,
             "savefig.dpi": 300,
-            "savefig.bbox_inches": "tight",
         }
     )
 
-    args = parse_args()
-    primary_db = Path(args.db)
-    output_dir = Path(args.output_dir)
 
-    if not primary_db.exists():
-        raise FileNotFoundError(f"Primary DB not found: {primary_db}")
+def _save(fig, stem: Path):
+    fig.savefig(str(stem) + ".png", dpi=300, bbox_inches="tight")
+    fig.savefig(str(stem) + ".pdf", bbox_inches="tight")
+    print(f"  Saved: {stem.name}.png / .pdf")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    baselines = load_baselines(Path(args.baselines)) if args.baselines else []
-    primary_reports = analyze_db(primary_db, args.pair_label, baselines)
-    for report in primary_reports:
-        save_outputs(report, output_dir, args.format)
+# ---------------------------------------------------------------------------
+# Plots
+# ---------------------------------------------------------------------------
 
-    print_primary_text(primary_reports, args.format)
 
-    if args.db2:
-        secondary_db = Path(args.db2)
-        if not secondary_db.exists():
-            raise FileNotFoundError(f"Secondary DB not found: {secondary_db}")
-
-        secondary_reports = analyze_db(secondary_db, args.pair_label, None)
-        primary = primary_reports[0]
-        secondary = secondary_reports[0]
-
-        if args.format in {"text", "both"}:
-            write_text(
-                output_dir / "cross_benchmark_comparison.txt",
-                render_cross_text(primary, secondary),
-            )
-            print(render_cross_text(primary, secondary))
-            print()
-
-        if args.format in {"latex", "both"}:
-            write_text(
-                output_dir / "cross_benchmark_comparison.tex",
-                render_cross_latex(primary, secondary),
-            )
-
-        plot_cross(primary, secondary, output_dir)
-        write_json(
-            output_dir / "cross_benchmark_summary.json",
-            {
-                "benchmark_a": generate_summary_json(primary),
-                "benchmark_b": generate_summary_json(secondary),
-            },
+def plot_pareto(stats: List[StrategyStats], out: Path, label: str):
+    fig, ax = plt.subplots(figsize=(10, 7))
+    for s in stats:
+        mk = "*" if s.is_pareto_optimal else "o"
+        sz = 200 if s.is_pareto_optimal else 80
+        ax.scatter(
+            s.avg_gpu_seconds,
+            s.accuracy * 100,
+            c=_color(s.name),
+            s=sz,
+            marker=mk,
+            edgecolors="black",
+            linewidths=1.0,
+            zorder=5,
+        )
+        ax.annotate(
+            s.name,
+            (s.avg_gpu_seconds, s.accuracy * 100),
+            textcoords="offset points",
+            xytext=(8, 8),
+            fontsize=9,
         )
 
+    pareto = sorted(
+        [s for s in stats if s.is_pareto_optimal], key=lambda s: s.avg_gpu_seconds
+    )
+    if len(pareto) >= 2:
+        ax.plot(
+            [s.avg_gpu_seconds for s in pareto],
+            [s.accuracy * 100 for s in pareto],
+            "k--",
+            alpha=0.5,
+            linewidth=1.5,
+            label="Pareto frontier",
+        )
 
-main()
+    ax.set_xlabel("Avg GPU-seconds / task")
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_title(f"Cost-Accuracy Pareto Frontier — {label}")
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+    _save(fig, out / "pareto_frontier")
+    plt.close(fig)
+
+
+def plot_strategy_bars(stats: List[StrategyStats], out: Path, label: str):
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    names = [s.name for s in stats]
+    accs = [s.accuracy * 100 for s in stats]
+    gpus = [s.avg_gpu_seconds for s in stats]
+    x = np.arange(len(names))
+    w = 0.35
+
+    ax1.bar(x - w / 2, accs, w, label="Accuracy (%)", color="#4C72B0", alpha=0.85)
+    ax1.set_ylabel("Accuracy (%)", color="#4C72B0")
+    ax1.tick_params(axis="y", labelcolor="#4C72B0")
+
+    ax2 = ax1.twinx()
+    ax2.bar(x + w / 2, gpus, w, label="Avg GPU-s/task", color="#DD8452", alpha=0.85)
+    ax2.set_ylabel("Avg GPU-seconds / task", color="#DD8452")
+    ax2.tick_params(axis="y", labelcolor="#DD8452")
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(names, rotation=35, ha="right", fontsize=10)
+    ax1.set_title(f"Strategy Comparison — {label}")
+    h1, l1 = ax1.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax1.legend(h1 + h2, l1 + l2, loc="upper left")
+    fig.tight_layout()
+    _save(fig, out / "strategy_comparison")
+    plt.close(fig)
+
+
+def plot_scatter(stats: List[StrategyStats], out: Path, label: str):
+    fig, ax = plt.subplots(figsize=(10, 7))
+    for s in stats:
+        mk = "s" if "self-critique" in s.name or "best-of-n" in s.name else "o"
+        ax.scatter(
+            s.avg_gpu_seconds,
+            s.accuracy * 100,
+            c=_color(s.name),
+            s=120,
+            marker=mk,
+            edgecolors="black",
+            linewidths=0.8,
+            zorder=5,
+            label=s.name,
+        )
+        ax.annotate(
+            s.name,
+            (s.avg_gpu_seconds, s.accuracy * 100),
+            textcoords="offset points",
+            xytext=(8, 5),
+            fontsize=9,
+        )
+    ax.set_xlabel("Avg GPU-seconds / task")
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_title(f"Cost vs Accuracy — {label}")
+    ax.legend(loc="best", fontsize=8)
+    ax.grid(True, alpha=0.3)
+    _save(fig, out / "cost_accuracy_scatter")
+    plt.close(fig)
+
+
+def plot_escalation(esc: List[EscalationStats], out: Path, label: str):
+    if not esc:
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    names = [e.strategy for e in esc]
+    rates = [e.escalation_rate * 100 for e in esc]
+    colors = [_color(n) for n in names]
+
+    ax1 = axes[0]
+    bars = ax1.bar(names, rates, color=colors, alpha=0.85, edgecolor="black")
+    for bar, rate in zip(bars, rates):
+        ax1.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 1,
+            f"{rate:.0f}%",
+            ha="center",
+            fontsize=11,
+        )
+    ax1.set_ylabel("Escalation Rate (%)")
+    ax1.set_title("Escalation Rate")
+    ax1.set_ylim(0, 105)
+
+    ax2 = axes[1]
+    x = np.arange(len(names))
+    w = 0.35
+    acc_not = [((e.acc_not_escalated or 0) * 100) for e in esc]
+    acc_esc = [((e.acc_escalated or 0) * 100) for e in esc]
+    ax2.bar(x - w / 2, acc_not, w, label="Not Escalated", color="#2ca02c", alpha=0.85)
+    ax2.bar(x + w / 2, acc_esc, w, label="Escalated", color="#d62728", alpha=0.85)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(names)
+    ax2.set_ylabel("Accuracy (%)")
+    ax2.set_title("Accuracy by Escalation")
+    ax2.legend()
+
+    fig.suptitle(f"Escalation Analysis — {label}", fontsize=14)
+    fig.tight_layout()
+    _save(fig, out / "escalation_analysis")
+    plt.close(fig)
+
+
+def plot_tokens(stats: List[StrategyStats], out: Path, label: str):
+    fig, ax = plt.subplots(figsize=(12, 6))
+    names = [s.name for s in stats]
+    in_t = [s.avg_input_tokens for s in stats]
+    out_t = [s.avg_output_tokens for s in stats]
+    x = np.arange(len(names))
+    ax.bar(x, in_t, label="Input Tokens", color="#4C72B0", alpha=0.85)
+    ax.bar(x, out_t, bottom=in_t, label="Output Tokens", color="#DD8452", alpha=0.85)
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=10)
+    ax.set_ylabel("Avg Tokens / Task")
+    ax.set_title(f"Token Usage Breakdown — {label}")
+    ax.legend()
+    fig.tight_layout()
+    _save(fig, out / "token_usage")
+    plt.close(fig)
+
+
+def plot_cost_per_correct(
+    stats: List[StrategyStats], runs: List[RunRecord], out: Path, label: str
+):
+    """GPU-seconds per correct answer — key efficiency metric for the paper."""
+    by_strat: Dict[str, List[RunRecord]] = {}
+    for r in runs:
+        by_strat.setdefault(r.strategy, []).append(r)
+
+    data = []
+    for s in stats:
+        grp = by_strat.get(s.name, [])
+        total_gpu = sum(r.effective_gpu_seconds for r in grp)
+        correct = s.pass_count
+        cpc = total_gpu / correct if correct > 0 else 0
+        data.append((s.name, cpc, s.accuracy * 100, correct))
+
+    data.sort(key=lambda x: x[1])
+    data = [d for d in data if d[1] > 0]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    names = [d[0] for d in data]
+    costs = [d[1] for d in data]
+    accs = [d[2] for d in data]
+    colors = [_color(n) for n in names]
+    x = np.arange(len(names))
+
+    bars = ax.bar(x, costs, color=colors, alpha=0.85, edgecolor="black", linewidth=0.5)
+    for i, (bar, acc, correct) in enumerate(zip(bars, accs, [d[3] for d in data])):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 3,
+            f"{acc:.0f}%\n({correct})",
+            ha="center",
+            fontsize=9,
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=10)
+    ax.set_ylabel("GPU-seconds per Correct Answer")
+    ax.set_title(f"Cost Efficiency — {label}")
+    fig.tight_layout()
+    _save(fig, out / "cost_per_correct")
+    plt.close(fig)
+
+
+def plot_task_difficulty(runs: List[RunRecord], out: Path, label: str):
+    """Heatmap showing which tasks each strategy solves."""
+    by_strat: Dict[str, Dict[str, bool]] = {}
+    all_tasks: set = set()
+    for r in runs:
+        by_strat.setdefault(r.strategy, {})[r.task_id] = r.task_success
+        all_tasks.add(r.task_id)
+
+    strat_names = sorted(by_strat.keys())
+    task_list = sorted(all_tasks)
+
+    solve_counts = {
+        t: sum(1 for s in strat_names if by_strat.get(s, {}).get(t, False))
+        for t in task_list
+    }
+    task_list.sort(key=lambda t: -solve_counts[t])
+
+    matrix = np.zeros((len(strat_names), len(task_list)))
+    for i, s in enumerate(strat_names):
+        for j, t in enumerate(task_list):
+            matrix[i, j] = 1.0 if by_strat.get(s, {}).get(t, False) else 0.0
+
+    fig, ax = plt.subplots(
+        figsize=(max(14, len(task_list) * 0.3), max(4, len(strat_names) * 0.5 + 2))
+    )
+    cmap = plt.cm.RdYlGn  # type: ignore[attr-defined]
+    ax.imshow(matrix, cmap=cmap, aspect="auto", interpolation="nearest", vmin=0, vmax=1)
+    ax.set_yticks(range(len(strat_names)))
+    ax.set_yticklabels(strat_names, fontsize=10)
+    ax.set_xlabel(f"Tasks (sorted by difficulty, {len(task_list)} total)")
+    ax.set_title(f"Task Success Heatmap — {label}")
+
+    n_easy = sum(1 for t in task_list if solve_counts[t] == len(strat_names))
+    n_hard = sum(1 for t in task_list if solve_counts[t] == 0)
+    ax.set_xlabel(f"Tasks (left=easy, right=hard) — {n_easy} easy, {n_hard} unsolvable")
+
+    if len(task_list) <= 60:
+        ax.set_xticks(range(len(task_list)))
+        ax.set_xticklabels(
+            [t.split("-")[-1] for t in task_list], rotation=90, fontsize=6
+        )
+    else:
+        ax.set_xticks([])
+
+    fig.tight_layout()
+    _save(fig, out / "task_difficulty_heatmap")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Tables
+# ---------------------------------------------------------------------------
+
+
+def text_table(stats: List[StrategyStats]) -> str:
+    hdr = f"{'Strategy':<22} {'Tasks':>5} {'Pass':>5} {'Acc%':>6} {'GPU-s':>8} {'Lat-s':>8} {'Pareto':>7}"
+    sep = "-" * len(hdr)
+    lines = [hdr, sep]
+    for s in sorted(stats, key=lambda x: -x.accuracy):
+        p = "  *" if s.is_pareto_optimal else ""
+        lines.append(
+            f"{s.name:<22} {s.tasks:>5} {s.pass_count:>5} {s.accuracy * 100:>5.1f}% "
+            f"{s.avg_gpu_seconds:>7.1f} {s.avg_latency_s:>7.1f} {p:>7}"
+        )
+    return "\n".join(lines)
+
+
+def latex_table(stats: List[StrategyStats]) -> str:
+    lines = [
+        r"\begin{table}[t]",
+        r"\centering",
+        r"\caption{Strategy comparison across multi-agent combination methods.}",
+        r"\begin{tabular}{lrrrrl}",
+        r"\toprule",
+        r"Strategy & Tasks & Pass & Acc\% & GPU-s & Pareto \\",
+        r"\midrule",
+    ]
+    for s in sorted(stats, key=lambda x: -x.accuracy):
+        p = r"$\star$" if s.is_pareto_optimal else ""
+        nm = s.name.replace("_", r"\_")
+        lines.append(
+            f"{nm} & {s.tasks} & {s.pass_count} & {s.accuracy * 100:.1f}\\% & {s.avg_gpu_seconds:.1f} & {p} \\\\"
+        )
+    lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
+    return "\n".join(lines)
+
+
+def escalation_text(esc: List[EscalationStats]) -> str:
+    if not esc:
+        return "(no escalation strategies)"
+    hdr = f"{'Strategy':<22} {'Total':>5} {'Esc':>5} {'Not':>5} {'Rate':>7} {'Acc(E)':>7} {'Acc(N)':>7}"
+    sep = "-" * len(hdr)
+    lines = [hdr, sep]
+    for e in esc:
+        ae = f"{e.acc_escalated * 100:.1f}%" if e.acc_escalated is not None else "N/A"
+        an = (
+            f"{e.acc_not_escalated * 100:.1f}%"
+            if e.acc_not_escalated is not None
+            else "N/A"
+        )
+        lines.append(
+            f"{e.strategy:<22} {e.total:>5} {e.escalated:>5} {e.not_escalated:>5} "
+            f"{e.escalation_rate * 100:>5.1f}% {ae:>7} {an:>7}"
+        )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Summary JSON
+# ---------------------------------------------------------------------------
+
+
+def make_summary(
+    db_path: Path,
+    pair_label: str,
+    benchmark: str,
+    stats: List[StrategyStats],
+    esc: List[EscalationStats],
+) -> Dict[str, Any]:
+    best_acc = max(stats, key=lambda s: s.accuracy) if stats else None
+    pareto_names = [s.name for s in stats if s.is_pareto_optimal]
+    pareto_sorted = sorted(
+        [s for s in stats if s.is_pareto_optimal], key=lambda s: s.avg_gpu_seconds
+    )
+    best_eff = pareto_sorted[0] if pareto_sorted else None
+
+    return {
+        "db_path": str(db_path),
+        "pair_label": pair_label,
+        "benchmark": benchmark,
+        "strategies": [
+            {
+                "name": s.name,
+                "tasks": s.tasks,
+                "pass_count": s.pass_count,
+                "accuracy": round(s.accuracy, 4),
+                "avg_gpu_seconds": round(s.avg_gpu_seconds, 2),
+                "avg_latency_s": round(s.avg_latency_s, 2),
+                "avg_input_tokens": round(s.avg_input_tokens, 1),
+                "avg_output_tokens": round(s.avg_output_tokens, 1),
+                "avg_tool_calls": round(s.avg_tool_calls, 2)
+                if s.avg_tool_calls is not None
+                else None,
+                "pareto_optimal": s.is_pareto_optimal,
+            }
+            for s in sorted(stats, key=lambda x: -x.accuracy)
+        ],
+        "pareto_frontier": pareto_names,
+        "best_accuracy": {
+            "strategy": best_acc.name,
+            "accuracy": round(best_acc.accuracy, 4),
+        }
+        if best_acc
+        else None,
+        "best_efficiency": {
+            "strategy": best_eff.name,
+            "accuracy": round(best_eff.accuracy, 4),
+            "gpu_seconds": round(best_eff.avg_gpu_seconds, 2),
+        }
+        if best_eff
+        else None,
+        "escalation": [
+            {
+                "strategy": e.strategy,
+                "total": e.total,
+                "escalated": e.escalated,
+                "not_escalated": e.not_escalated,
+                "escalation_rate": round(e.escalation_rate, 4),
+                "acc_escalated": round(e.acc_escalated, 4)
+                if e.acc_escalated is not None
+                else None,
+                "acc_not_escalated": round(e.acc_not_escalated, 4)
+                if e.acc_not_escalated is not None
+                else None,
+            }
+            for e in esc
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="AgentCAP experiment analysis")
+    p.add_argument("--db", required=True, help="Primary results database")
+    p.add_argument("--output-dir", default="results/analysis/", help="Output directory")
+    p.add_argument(
+        "--pair-label",
+        default=None,
+        help="Label for model pair (auto-detect if omitted)",
+    )
+    p.add_argument(
+        "--format",
+        choices=["text", "latex", "both"],
+        default="both",
+        help="Table format",
+    )
+    return p.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    db_path = Path(args.db)
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Loading runs from {db_path} ...")
+    runs = load_runs(db_path)
+    if not runs:
+        print("ERROR: No runs found.")
+        return
+    print(f"  {len(runs)} runs, {len({r.strategy for r in runs})} strategies")
+
+    pair_label = args.pair_label or _auto_pair(runs)
+    benchmark = _benchmark(runs[0].experiment_name, db_path)
+    print(f"  Pair: {pair_label}  |  Benchmark: {benchmark}")
+
+    _setup_style()
+    stats = compute_strategy_stats(runs)
+    esc_stats = compute_escalation(runs)
+
+    # Attach escalation rate to strategy stats
+    esc_map = {e.strategy: e.escalation_rate for e in esc_stats}
+    for s in stats:
+        if s.name in esc_map:
+            s.escalation_rate = esc_map[s.name]
+
+    # Print tables
+    print("\n" + "=" * 60)
+    print("STRATEGY COMPARISON")
+    print("=" * 60)
+    tt = text_table(stats)
+    print(tt)
+
+    print("\n" + "=" * 60)
+    print("ESCALATION ANALYSIS")
+    print("=" * 60)
+    et = escalation_text(esc_stats)
+    print(et)
+
+    # Save tables
+    if args.format in ("text", "both"):
+        (out_dir / "strategy_table.txt").write_text(tt)
+        (out_dir / "escalation_table.txt").write_text(et)
+    if args.format in ("latex", "both"):
+        (out_dir / "strategy_table.tex").write_text(latex_table(stats))
+
+    # Generate figures
+    print("\nGenerating figures ...")
+    plot_pareto(stats, out_dir, pair_label)
+    plot_strategy_bars(stats, out_dir, pair_label)
+    plot_scatter(stats, out_dir, pair_label)
+    plot_escalation(esc_stats, out_dir, pair_label)
+    plot_tokens(stats, out_dir, pair_label)
+    plot_cost_per_correct(stats, runs, out_dir, pair_label)
+    plot_task_difficulty(runs, out_dir, pair_label)
+
+    # Summary JSON
+    summary = make_summary(db_path, pair_label, benchmark, stats, esc_stats)
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    print(f"  Saved summary.json")
+
+    # Key findings
+    print("\n" + "=" * 60)
+    print("KEY FINDINGS")
+    print("=" * 60)
+    pareto = [s for s in stats if s.is_pareto_optimal]
+    print(f"  Pareto-optimal: {', '.join(s.name for s in pareto)}")
+    best = max(stats, key=lambda s: s.accuracy)
+    print(f"  Highest accuracy: {best.name} ({best.accuracy * 100:.1f}%)")
+    if pareto:
+        cheapest = min(pareto, key=lambda s: s.avg_gpu_seconds)
+        print(
+            f"  Most efficient: {cheapest.name} ({cheapest.accuracy * 100:.1f}% @ {cheapest.avg_gpu_seconds:.1f} GPU-s)"
+        )
+    print("\nDone!")
+
+
+if __name__ == "__main__":
+    main()

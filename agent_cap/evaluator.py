@@ -44,6 +44,7 @@ class EvalResult:
     task_success: bool
     quality_score: float
     explanation: str
+    tool_call_count: int = 0
 
 
 def evaluate(output_text: str, eval_config: EvalConfig) -> EvalResult:
@@ -66,11 +67,15 @@ def evaluate(output_text: str, eval_config: EvalConfig) -> EvalResult:
 
 
 def _strip_think_tags(text: str) -> str:
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    return re.sub(
+        r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL
+    ).strip()
 
 
 def _eval_code_exec(text: str, config: EvalConfig) -> EvalResult:
-    code_blocks = re.findall(r"```python\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    code_blocks = re.findall(
+        r"```python\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL
+    )
     if not code_blocks:
         return EvalResult(False, 0.0, "No Python code block found")
 
@@ -121,7 +126,9 @@ def _extract_numerical_answer(text: str) -> Optional[float]:
     if m:
         return float(m.group(1).replace(",", ""))
 
-    m = re.search(r"(?:the\s+)?answer\s+is[:\s]*([-+]?[\d,]*\.?\d+)", text, re.IGNORECASE)
+    m = re.search(
+        r"(?:the\s+)?answer\s+is[:\s]*([-+]?[\d,]*\.?\d+)", text, re.IGNORECASE
+    )
     if m:
         return float(m.group(1).replace(",", ""))
 
@@ -154,7 +161,9 @@ def _eval_keyword(text: str, config: EvalConfig) -> EvalResult:
 
 
 def _eval_humaneval(text: str, config: EvalConfig) -> EvalResult:
-    code_blocks = re.findall(r"```python\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    code_blocks = re.findall(
+        r"```python\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL
+    )
     if not code_blocks:
         candidate_code = text.strip()
     else:
@@ -187,7 +196,9 @@ def _eval_humaneval(text: str, config: EvalConfig) -> EvalResult:
 
 
 def _eval_bigcodebench(text: str, config: EvalConfig) -> EvalResult:
-    code_blocks = re.findall(r"```python\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    code_blocks = re.findall(
+        r"```python\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL
+    )
     if not code_blocks:
         candidate_code = text.strip()
     else:
@@ -222,7 +233,9 @@ def _eval_bigcodebench(text: str, config: EvalConfig) -> EvalResult:
     ok_match = re.search(r"Ran (\d+) tests? in [\d.]+s\s*\n\s*\n\s*OK", stderr)
     if ok_match:
         total = int(ok_match.group(1))
-        return EvalResult(True, 5.0, f"All {total} BigCodeBench tests passed")
+        return EvalResult(True,
+        5.0,
+        f"All {total} BigCodeBench tests passed")
 
     failed_match = re.search(
         r"Ran (\d+) tests? in [\d.]+s\s*\n\s*\n\s*FAILED\s*\(([^)]*)\)", stderr
@@ -240,7 +253,9 @@ def _eval_bigcodebench(text: str, config: EvalConfig) -> EvalResult:
             errors = int(e_match.group(1))
         passed = total - failures - errors
         score = (passed / total) * 5.0 if total > 0 else 0.0
-        return EvalResult(False, score, f"Tests: {passed}/{total} passed. {stderr[-300:]}")
+        return EvalResult(False,
+        score,
+        f"Tests: {passed}/{total} passed. {stderr[-300:]}")
 
     if "SyntaxError" in stderr:
         return EvalResult(False, 0.0, f"Syntax error: {stderr[:300]}")
@@ -265,7 +280,9 @@ def _eval_multiple_choice(text: str, config: EvalConfig) -> EvalResult:
 
 
 def _extract_multiple_choice_letter(text: str) -> Optional[str]:
-    matches = re.findall(r"(?:the\s+answer\s+is|answer:)\s*([A-J])\b", text, flags=re.IGNORECASE)
+    matches = re.findall(
+        r"(?:the\s+answer\s+is|answer:)\s*([A-J])\b", text, flags=re.IGNORECASE
+    )
     if matches:
         return matches[-1].upper()
 
