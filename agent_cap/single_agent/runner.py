@@ -213,6 +213,8 @@ class SingleAgentRunner:
                     tool_mode,
                 )
                 metrics.batch_size = batch_size
+                for t in tr:
+                    t["batch_size"] = batch_size
                 results.append(metrics)
                 task_results.extend(tr)
                 self._print_summary(metrics)
@@ -255,11 +257,18 @@ class SingleAgentRunner:
             with open(tr_path, "w", encoding="utf-8") as f:
                 for tr in task_results:
                     f.write(json.dumps(tr, ensure_ascii=False, default=str) + "\n")
-            logger.info("Wrote %s (%d tasks)", tr_path, len(task_results))
+            logger.info("Wrote %s (%d entries)", tr_path, len(task_results))
 
-            resolved = sum(1 for tr in task_results if tr.get("resolved"))
-            total = len(task_results)
-            print(f"\n  Resolved: {resolved}/{total} ({100 * resolved / total:.1f}%)")
+            by_bs: Dict[int, List[Dict[str, Any]]] = {}
+            for tr in task_results:
+                bs = tr.get("batch_size", 0)
+                by_bs.setdefault(bs, []).append(tr)
+
+            print("\n  Resolved per batch_size:")
+            for bs in sorted(by_bs):
+                trs = by_bs[bs]
+                r = sum(1 for t in trs if t.get("resolved"))
+                print(f"    bs={bs}: {r}/{len(trs)}")
 
         return out
 
