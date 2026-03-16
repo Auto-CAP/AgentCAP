@@ -264,15 +264,14 @@ class StreamingChatClient:
             (first_token_time - t_start) * 1000 if first_token_time else latency_ms
         )
 
-        # Compute TPOT from inter-token intervals
-        intervals_ms: List[float] = []
-        if len(token_timestamps) >= 2:
-            for i in range(1, len(token_timestamps)):
-                interval = (token_timestamps[i] - token_timestamps[i - 1]) * 1000
-                intervals_ms.append(interval)
-
-        tpot_avg = _mean(intervals_ms)
-        tpot_p99 = _compute_percentile(intervals_ms, 99)
+        # TPOT = (decode_time) / (output_tokens - 1)
+        # SSE streaming can't give per-token TPOT because TCP batches packets
+        tpot_avg = 0.0
+        tpot_p99 = 0.0
+        if output_tokens > 1 and ttft_ms < latency_ms:
+            decode_ms = latency_ms - ttft_ms
+            tpot_avg = decode_ms / (output_tokens - 1)
+            tpot_p99 = tpot_avg
 
         # Infer tool call count
         tool_call_count = len(tool_call_fragments)
