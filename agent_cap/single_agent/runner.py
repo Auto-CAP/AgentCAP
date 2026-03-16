@@ -366,12 +366,13 @@ class SingleAgentRunner:
         final_content = ""
 
         for turn in range(self.config.max_turns):
-            resp = self.client.chat_responses_api(
+            resp = self.client.chat(
                 messages=messages,
                 model=self.config.model_id,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 tools=tools,
+                stream=self.config.stream,
             )
 
             cumulative_input += resp.input_tokens
@@ -388,23 +389,32 @@ class SingleAgentRunner:
                 final_content = resp.content
                 break
 
-            pending_calls = self._extract_tool_calls_responses_api(resp.raw_chunks)
+            if self.config.stream:
+                pending_calls = self._extract_tool_calls_stream(resp.raw_chunks)
+            else:
+                pending_calls = self._extract_tool_calls_non_stream(resp.raw_chunks)
 
             if not pending_calls:
                 final_content = resp.content
                 break
 
-            # Responses API multi-turn: append function_call + function_call_output
-            for tc in pending_calls:
-                messages.append(
-                    {
-                        "type": "function_call",
-                        "call_id": tc["id"],
+            assistant_msg: Dict[str, Any] = {"role": "assistant"}
+            if resp.content:
+                assistant_msg["content"] = resp.content
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
                         "name": tc["name"],
                         "arguments": tc["arguments"],
-                    }
-                )
+                    },
+                }
+                for tc in pending_calls
+            ]
+            messages.append(assistant_msg)
 
+            for tc in pending_calls:
                 try:
                     args = json.loads(tc["arguments"])
                 except (json.JSONDecodeError, TypeError):
@@ -420,9 +430,9 @@ class SingleAgentRunner:
 
                 messages.append(
                     {
-                        "type": "function_call_output",
-                        "call_id": tc["id"],
-                        "output": result.output,
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result.output,
                     }
                 )
 
@@ -455,26 +465,6 @@ class SingleAgentRunner:
             tool_call_count=total_tool_calls,
         )
         return combined, all_tc_latencies, patch
-
-    @staticmethod
-    def _extract_tool_calls_responses_api(
-        raw_events: List[Dict[str, Any]],
-    ) -> List[Dict[str, str]]:
-        result: List[Dict[str, str]] = []
-        for evt_wrapper in raw_events:
-            event_type = evt_wrapper.get("event", "")
-            evt = evt_wrapper.get("data", {})
-            if event_type == "response.output_item.done":
-                item = evt.get("item", {})
-                if item.get("type") == "function_call":
-                    result.append(
-                        {
-                            "id": item.get("call_id", item.get("id", "")),
-                            "name": item.get("name", ""),
-                            "arguments": item.get("arguments", ""),
-                        }
-                    )
-        return [r for r in result if r["name"]]
 
     @staticmethod
     def _extract_tool_calls_stream(
