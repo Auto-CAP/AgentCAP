@@ -80,3 +80,6 @@ scripts/test_persist.txt
 
 # Task workspace
 tasks/
+
+# Orchestrator state
+.sisyphus/
