@@ -274,6 +274,194 @@ class StreamingChatClient:
             raw_chunks=raw_chunks,
         )
 
+    def chat_responses_api(
+        self,
+        input_items: List[Dict[str, Any]],
+        model: str = "default",
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        timeout: int = 600,
+    ) -> StreamingChatResponse:
+        """Streaming request via /v1/responses (OpenAI Responses API).
+
+        Avoids the openai_harmony tool-call parser used by
+        /v1/chat/completions.  Tool definitions use the flat Responses
+        format: ``{type, name, description, parameters}`` (no nested
+        ``function`` key).  Multi-turn tool results are passed as
+        ``{type: "function_call_output", call_id, output}`` items.
+        """
+        url = f"{self.base_url}/v1/responses"
+
+        # Convert chat-completions tool format → responses flat format
+        resp_tools = None
+        if tools:
+            resp_tools = []
+            for t in tools:
+                fn = t.get("function", t)
+                resp_tools.append(
+                    {
+                        "type": "function",
+                        "name": fn.get("name", ""),
+                        "description": fn.get("description", ""),
+                        "parameters": fn.get("parameters", {}),
+                    }
+                )
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "input": input_items,
+            "stream": True,
+            "store": False,
+        }
+        if max_tokens:
+            payload["max_output_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if resp_tools:
+            payload["tools"] = resp_tools
+
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        content_parts: List[str] = []
+        token_timestamps: List[float] = []
+        raw_events: List[Dict[str, Any]] = []
+        tool_calls_collected: List[Dict[str, Any]] = []
+        tc_fragments: Dict[str, Dict[str, str]] = {}  # keyed by call_id
+
+        input_tokens = 0
+        output_tokens = 0
+        resp_model = model
+        first_token_time: Optional[float] = None
+
+        t_start = time.perf_counter()
+
+        try:
+            response = urllib.request.urlopen(req, timeout=timeout)
+            event_type = ""
+
+            for line_bytes in response:
+                line = line_bytes.decode("utf-8").rstrip("\n").rstrip("\r")
+
+                if line.startswith("event: "):
+                    event_type = line[len("event: ") :]
+                    continue
+                if not line.startswith("data: "):
+                    continue
+
+                data_str = line[len("data: ") :]
+                try:
+                    evt = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                raw_events.append({"event": event_type, "data": evt})
+
+                if event_type == "response.output_text.delta":
+                    delta_text = evt.get("delta", "")
+                    if delta_text:
+                        now = time.perf_counter()
+                        token_timestamps.append(now - t_start)
+                        if first_token_time is None:
+                            first_token_time = now
+                        content_parts.append(delta_text)
+
+                elif event_type == "response.output_item.added":
+                    item = evt.get("item", {})
+                    if item.get("type") == "function_call":
+                        cid = item.get("call_id", item.get("id", ""))
+                        tc_fragments[cid] = {
+                            "id": cid,
+                            "name": item.get("name", ""),
+                            "arguments": "",
+                        }
+
+                elif event_type == "response.function_call_arguments.delta":
+                    cid = evt.get("call_id", evt.get("item_id", ""))
+                    if cid in tc_fragments:
+                        tc_fragments[cid]["arguments"] += evt.get("delta", "")
+
+                elif event_type == "response.output_item.done":
+                    item = evt.get("item", {})
+                    if item.get("type") == "function_call":
+                        cid = item.get("call_id", item.get("id", ""))
+                        tc = tc_fragments.pop(cid, None)
+                        if tc:
+                            if not tc["arguments"]:
+                                tc["arguments"] = item.get("arguments", "")
+                            if not tc["name"]:
+                                tc["name"] = item.get("name", "")
+                            tool_calls_collected.append(tc)
+
+                elif event_type == "response.completed":
+                    resp_data = evt.get("response", {})
+                    usage = resp_data.get("usage", {})
+                    if usage:
+                        input_tokens = int(
+                            usage.get("input_tokens", usage.get("prompt_tokens", 0))
+                        )
+                        output_tokens = int(
+                            usage.get(
+                                "output_tokens", usage.get("completion_tokens", 0)
+                            )
+                        )
+                    resp_model = resp_data.get("model", resp_model)
+
+            response.close()
+
+        except Exception as exc:
+            t_end = time.perf_counter()
+            return StreamingChatResponse(
+                content="".join(content_parts),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=input_tokens + output_tokens,
+                latency_ms=(t_end - t_start) * 1000,
+                ttft_ms=(
+                    (first_token_time - t_start) * 1000 if first_token_time else 0.0
+                ),
+                tpot_ms_avg=0.0,
+                tpot_ms_p99=0.0,
+                model=resp_model,
+                tool_call_count=len(tool_calls_collected),
+                raw_chunks=raw_events,
+                error=str(exc),
+            )
+
+        t_end = time.perf_counter()
+        latency_ms = (t_end - t_start) * 1000
+        ttft_ms = (
+            (first_token_time - t_start) * 1000 if first_token_time else latency_ms
+        )
+
+        intervals_ms: List[float] = []
+        if len(token_timestamps) >= 2:
+            for i in range(1, len(token_timestamps)):
+                intervals_ms.append(
+                    (token_timestamps[i] - token_timestamps[i - 1]) * 1000
+                )
+
+        return StreamingChatResponse(
+            content="".join(content_parts),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            latency_ms=latency_ms,
+            ttft_ms=ttft_ms,
+            tpot_ms_avg=_mean(intervals_ms),
+            tpot_ms_p99=_compute_percentile(intervals_ms, 99),
+            model=resp_model,
+            tool_call_count=len(tool_calls_collected),
+            token_timestamps=token_timestamps,
+            raw_chunks=raw_events,
+        )
+
     def _chat_non_stream(
         self,
         messages: List[Dict[str, Any]],
