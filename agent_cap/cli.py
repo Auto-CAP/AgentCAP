@@ -857,7 +857,7 @@ def cmd_single_agent(args):
 
     runner = SingleAgentRunner(config)
     limit = getattr(args, "limit", 0) or 0
-    results, predictions = runner.run(limit=limit)
+    results, task_results = runner.run(limit=limit)
 
     print("\n" + "=" * 70)
     print("Results Summary")
@@ -873,16 +873,8 @@ def cmd_single_agent(args):
             f"CPU={m.avg_cpu_util_pct:>5.1f}%"
         )
 
-    out_dir = runner.save_results(results, predictions, args.output_dir)
+    out_dir = runner.save_results(results, task_results, args.output_dir)
     print(f"\nResults saved to: {out_dir}")
-    if predictions:
-        print(f"SWE-bench predictions: {out_dir}/predictions.jsonl")
-        print(
-            "  To evaluate:\n"
-            "    python -m swebench.harness.run_evaluation \\\n"
-            f"      --predictions_path {out_dir}/predictions.jsonl \\\n"
-            "      --run_id my_run"
-        )
 
 
 def main():

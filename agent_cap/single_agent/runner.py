@@ -1,26 +1,21 @@
 """Single-agent benchmark runner with real multi-turn tool execution.
 
-For each task the runner performs a full agentic loop:
+with_tools mode (agentic):
+    1. Clone repo at base_commit into workspace
+    2. Agent uses tool calls (read/write/shell/grep) to fix the issue
+    3. Run fail_to_pass tests directly → resolved or not
 
-    model generates response
-       ↓ tool_calls?
-    ToolExecutor runs real commands (file I/O, shell, grep)
-       ↓ results appended to messages
-    model continues … (up to max_turns)
-
-After the loop the runner extracts the model's patch from the final
-response and writes SWE-bench-compatible ``predictions.jsonl`` so
-results can be evaluated with the official Docker harness::
-
-    python -m swebench.harness.run_evaluation \\
-        --predictions_path results/single_agent/predictions.jsonl \\
-        --run_id my_run
+no_tools mode (direct patch):
+    1. Model generates a patch in one shot
+    2. Write predictions.jsonl for offline harness evaluation
 """
 
 import csv
 import json
 import logging
+import os
 import re
+import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,12 +38,112 @@ logger = logging.getLogger("agent_cap.single_agent")
 
 
 # ------------------------------------------------------------------
-# Patch extraction helpers
+# Repo + test helpers
 # ------------------------------------------------------------------
 
 
+def _clone_repo(repo: str, base_commit: str, workspace: Path) -> bool:
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    repo_url = f"https://github.com/{repo}.git"
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth=50", repo_url, str(workspace)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        subprocess.run(
+            ["git", "checkout", base_commit],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workspace),
+        )
+        return True
+    except Exception as exc:
+        logger.error("Clone failed for %s@%s: %s", repo, base_commit[:12], exc)
+        return False
+
+
+def _apply_test_patch(test_patch: str, workspace: Path) -> bool:
+    if not test_patch or not test_patch.strip():
+        return True
+    try:
+        proc = subprocess.run(
+            ["git", "apply", "--allow-empty"],
+            input=test_patch,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workspace),
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def _run_tests(
+    fail_to_pass: str, workspace: Path, timeout: int = 120
+) -> Dict[str, Any]:
+    if not fail_to_pass:
+        return {"passed": False, "reason": "no fail_to_pass tests defined"}
+
+    try:
+        tests = (
+            json.loads(fail_to_pass) if isinstance(fail_to_pass, str) else fail_to_pass
+        )
+    except json.JSONDecodeError:
+        tests = [fail_to_pass]
+
+    passed_count = 0
+    total = len(tests)
+    details = []
+
+    for test_spec in tests:
+        test_file = (
+            test_spec.split("::")[0].split(" | ")[0].strip()
+            if "::" in test_spec or " | " in test_spec
+            else test_spec
+        )
+        try:
+            proc = subprocess.run(
+                ["python", "-m", "pytest", test_file, "-x", "--tb=short", "-q"],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(workspace),
+            )
+            ok = proc.returncode == 0
+            if ok:
+                passed_count += 1
+            details.append(
+                {
+                    "test": test_spec[:100],
+                    "passed": ok,
+                    "output": (proc.stdout + proc.stderr)[-500:],
+                }
+            )
+        except subprocess.TimeoutExpired:
+            details.append(
+                {"test": test_spec[:100], "passed": False, "output": "timeout"}
+            )
+        except Exception as exc:
+            details.append(
+                {"test": test_spec[:100], "passed": False, "output": str(exc)}
+            )
+
+    return {
+        "passed": passed_count == total,
+        "passed_count": passed_count,
+        "total": total,
+        "details": details,
+    }
+
+
 def _extract_patch_from_text(text: str) -> str:
-    """Pull the first ```diff block from model output."""
     m = re.search(r"```diff\s*\n(.*?)```", text, re.DOTALL)
     if m:
         return m.group(1).strip()
@@ -58,55 +153,13 @@ def _extract_patch_from_text(text: str) -> str:
     return ""
 
 
-def _git_diff(workspace: Path) -> str:
-    """Run ``git diff`` in the workspace to capture uncommitted changes."""
-    try:
-        proc = subprocess.run(
-            ["git", "diff"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=str(workspace),
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.strip()
-    except Exception:
-        pass
-
-    try:
-        proc = subprocess.run(
-            ["git", "diff", "--cached"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=str(workspace),
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.strip()
-    except Exception:
-        pass
-
-    return ""
-
-
 class SingleAgentRunner:
-    """Run a single-agent performance benchmark across batch sizes.
-
-    Usage::
-
-        config = SingleAgentBenchConfig.from_yaml("configs/single_agent.yaml")
-        runner = SingleAgentRunner(config)
-        results, predictions = runner.run()
-        runner.save_results(results, predictions)
-    """
-
     def __init__(self, config: SingleAgentBenchConfig) -> None:
         self.config = config
         self.client = StreamingChatClient(base_url=config.base_url)
         self._resolve_model_id()
 
     def _resolve_model_id(self) -> None:
-        """Auto-detect model ID from the server if config value doesn't match."""
         server_id = self.client.get_server_model_id()
         if server_id and server_id != self.config.model_id:
             logger.info(
@@ -124,13 +177,7 @@ class SingleAgentRunner:
 
     def run(
         self, limit: int = 0
-    ) -> Tuple[List[BenchmarkMetrics], List[Dict[str, str]]]:
-        """Execute the full benchmark sweep.
-
-        Returns:
-            (metrics_list, predictions) where predictions is a list of
-            SWE-bench-format dicts ready for ``predictions.jsonl``.
-        """
+    ) -> Tuple[List[BenchmarkMetrics], List[Dict[str, Any]]]:
         tasks = load_benchmark(self.config.dataset, self.config.dataset_count)
         if limit > 0:
             tasks = tasks[:limit]
@@ -140,7 +187,7 @@ class SingleAgentRunner:
         eval_configs = [t.eval_config or {} for t in tasks]
 
         results: List[BenchmarkMetrics] = []
-        predictions: List[Dict[str, str]] = []
+        task_results: List[Dict[str, Any]] = []
 
         tool_mode = "with_tools" if self.config.enable_tool_calls else "no_tools"
         logger.info("Mode: %s", tool_mode)
@@ -154,28 +201,27 @@ class SingleAgentRunner:
                     rep + 1,
                     self.config.repetitions,
                 )
-                metrics, preds = self._run_batch(
+                metrics, tr = self._run_batch(
                     all_messages,
                     eval_configs,
                     batch_size,
                     tool_mode,
                 )
                 results.append(metrics)
-                predictions.extend(preds)
+                task_results.extend(tr)
                 self._print_summary(metrics)
 
-        return results, predictions
+        return results, task_results
 
     def save_results(
         self,
         results: List[BenchmarkMetrics],
-        predictions: Optional[List[Dict[str, str]]] = None,
+        task_results: Optional[List[Dict[str, Any]]] = None,
         output_dir: Optional[str] = None,
     ) -> Path:
         out = Path(output_dir or self.config.output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
-        # metrics.json
         json_path = out / "metrics.json"
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(
@@ -188,7 +234,6 @@ class SingleAgentRunner:
             )
         logger.info("Wrote %s", json_path)
 
-        # metrics.csv
         csv_path = out / "metrics.csv"
         if results:
             fieldnames = list(results[0].to_dict().keys())
@@ -199,13 +244,16 @@ class SingleAgentRunner:
                     writer.writerow(m.to_dict())
         logger.info("Wrote %s", csv_path)
 
-        # predictions.jsonl  (SWE-bench harness format)
-        if predictions:
-            pred_path = out / "predictions.jsonl"
-            with open(pred_path, "w", encoding="utf-8") as f:
-                for p in predictions:
-                    f.write(json.dumps(p, ensure_ascii=False) + "\n")
-            logger.info("Wrote %s  (%d predictions)", pred_path, len(predictions))
+        if task_results:
+            tr_path = out / "task_results.jsonl"
+            with open(tr_path, "w", encoding="utf-8") as f:
+                for tr in task_results:
+                    f.write(json.dumps(tr, ensure_ascii=False, default=str) + "\n")
+            logger.info("Wrote %s (%d tasks)", tr_path, len(task_results))
+
+            resolved = sum(1 for tr in task_results if tr.get("resolved"))
+            total = len(task_results)
+            print(f"\n  Resolved: {resolved}/{total} ({100 * resolved / total:.1f}%)")
 
         return out
 
@@ -219,7 +267,7 @@ class SingleAgentRunner:
         eval_configs: List[Dict[str, Any]],
         batch_size: int,
         tool_mode: str,
-    ) -> Tuple[BenchmarkMetrics, List[Dict[str, str]]]:
+    ) -> Tuple[BenchmarkMetrics, List[Dict[str, Any]]]:
         gpu_mon = GPUMonitor(interval=self.config.gpu_monitor_interval)
         cpu_mon = CPUMonitor(interval=self.config.cpu_monitor_interval)
         gpu_mon.start()
@@ -228,7 +276,7 @@ class SingleAgentRunner:
         t_start = time.perf_counter()
 
         if tool_mode == "with_tools":
-            responses, tc_latencies, preds = self._run_batch_with_tools(
+            responses, tc_latencies, tr = self._run_batch_with_tools(
                 all_messages,
                 eval_configs,
                 batch_size,
@@ -243,7 +291,7 @@ class SingleAgentRunner:
                 stop_token_ids=self.config.stop_token_ids,
             )
             tc_latencies = []
-            preds = self._build_predictions(responses, eval_configs)
+            tr = self._build_no_tools_results(responses, eval_configs)
 
         wall_clock_s = time.perf_counter() - t_start
 
@@ -261,47 +309,47 @@ class SingleAgentRunner:
             cpu_max_util=cpu_stats.max_cpu_util_pct,
             tool_call_latencies_ms=tc_latencies or None,
         )
-        return metrics, preds
+        return metrics, tr
 
-    def _build_predictions(
+    def _build_no_tools_results(
         self,
         responses: List[StreamingChatResponse],
         eval_configs: List[Dict[str, Any]],
-    ) -> List[Dict[str, str]]:
-        """Build SWE-bench prediction dicts from no-tool responses."""
-        preds = []
+    ) -> List[Dict[str, Any]]:
+        results = []
         for resp, ec in zip(responses, eval_configs):
             patch = _extract_patch_from_text(resp.content)
-            preds.append(
+            results.append(
                 {
                     "instance_id": ec.get("instance_id", ""),
                     "model_name_or_path": self.config.model_id,
                     "model_patch": patch,
+                    "resolved": None,
                 }
             )
-        return preds
+        return results
 
     def _run_batch_with_tools(
         self,
         all_messages: List[List[Dict[str, Any]]],
         eval_configs: List[Dict[str, Any]],
         concurrency: int,
-    ) -> Tuple[List[StreamingChatResponse], List[float], List[Dict[str, str]]]:
-        """Run all tasks through the agentic loop in parallel."""
+    ) -> Tuple[List[StreamingChatResponse], List[float], List[Dict[str, Any]]]:
         n = len(all_messages)
         all_responses: List[Optional[StreamingChatResponse]] = [None] * n
         all_tc_lats: List[List[float]] = [[] for _ in range(n)]
-        all_patches: List[str] = [""] * n
+        all_task_results: List[Dict[str, Any]] = [{}] * n
 
-        def _run_one(idx: int, msgs: List[Dict[str, Any]]) -> None:
-            resp, lats, patch = self._agentic_loop(list(msgs))
+        def _run_one(idx: int, msgs: List[Dict[str, Any]], ec: Dict[str, Any]) -> None:
+            resp, lats, task_result = self._run_single_task(list(msgs), ec)
             all_responses[idx] = resp
             all_tc_lats[idx] = lats
-            all_patches[idx] = patch
+            all_task_results[idx] = task_result
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {
-                pool.submit(_run_one, i, msgs): i for i, msgs in enumerate(all_messages)
+                pool.submit(_run_one, i, msgs, ec): i
+                for i, (msgs, ec) in enumerate(zip(all_messages, eval_configs))
             }
             for fut in as_completed(futures):
                 exc = fut.exception()
@@ -320,38 +368,121 @@ class SingleAgentRunner:
                         model=self.config.model_id,
                         error=str(exc),
                     )
+                    all_task_results[idx] = {
+                        "instance_id": eval_configs[idx].get("instance_id", ""),
+                        "resolved": False,
+                        "error": str(exc),
+                    }
 
         flat_lats: List[float] = []
         for lats in all_tc_lats:
             flat_lats.extend(lats)
 
-        preds: List[Dict[str, str]] = []
-        for i, ec in enumerate(eval_configs):
-            preds.append(
-                {
-                    "instance_id": ec.get("instance_id", ""),
-                    "model_name_or_path": self.config.model_id,
-                    "model_patch": all_patches[i],
-                }
-            )
-
         return (
             [r for r in all_responses if r is not None],
             flat_lats,
-            preds,
+            all_task_results,
         )
 
     # ------------------------------------------------------------------
-    # Core agentic loop (single task)
+    # Single task: clone → agentic loop → run tests
     # ------------------------------------------------------------------
 
+    def _run_single_task(
+        self,
+        messages: List[Dict[str, Any]],
+        eval_config: Dict[str, Any],
+    ) -> Tuple[StreamingChatResponse, List[float], Dict[str, Any]]:
+        instance_id = eval_config.get("instance_id", "unknown")
+        repo = eval_config.get("repo", "")
+        base_commit = eval_config.get("base_commit", "")
+        test_patch = eval_config.get("test_patch", "")
+        fail_to_pass = eval_config.get("fail_to_pass", "")
+
+        # Each task gets its own workspace
+        task_workspace = Path(self.config.workspace_dir) / instance_id.replace("/", "_")
+
+        # 1. Clone repo at base_commit
+        logger.info("[%s] Cloning %s@%s", instance_id[:30], repo, base_commit[:12])
+        if not _clone_repo(repo, base_commit, task_workspace):
+            return (
+                StreamingChatResponse(
+                    content="",
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                    latency_ms=0,
+                    ttft_ms=0,
+                    tpot_ms_avg=0,
+                    tpot_ms_p99=0,
+                    model=self.config.model_id,
+                    error="clone failed",
+                ),
+                [],
+                {
+                    "instance_id": instance_id,
+                    "resolved": False,
+                    "error": "clone failed",
+                },
+            )
+
+        # 2. Apply test patch (adds the test cases)
+        if test_patch:
+            _apply_test_patch(test_patch, task_workspace)
+
+        # 3. Rewrite prompt for agentic mode
+        agentic_prompt = (
+            f"You are a software engineer. Fix the issue in the repo at "
+            f"{task_workspace}.\n\n"
+            f"{messages[0]['content']}\n\n"
+            "Use the available tools (read_file, write_file, run_shell, "
+            "search_code) to explore the codebase and make the fix. "
+            "The workspace is already set up at the correct commit."
+        )
+        agentic_messages = [{"role": "user", "content": agentic_prompt}]
+
+        # 4. Agentic loop
+        logger.info(
+            "[%s] Starting agentic loop (max_turns=%d)",
+            instance_id[:30],
+            self.config.max_turns,
+        )
+        resp, tc_lats = self._agentic_loop(agentic_messages, task_workspace)
+
+        # 5. Run fail_to_pass tests
+        logger.info("[%s] Running tests...", instance_id[:30])
+        test_result = _run_tests(fail_to_pass, task_workspace)
+        resolved = test_result.get("passed", False)
+
+        status = "RESOLVED" if resolved else "FAILED"
+        logger.info(
+            "[%s] %s (%d/%d tests passed)",
+            instance_id[:30],
+            status,
+            test_result.get("passed_count", 0),
+            test_result.get("total", 0),
+        )
+
+        task_result = {
+            "instance_id": instance_id,
+            "repo": repo,
+            "resolved": resolved,
+            "test_result": test_result,
+            "tool_calls": resp.tool_call_count,
+            "total_tokens": resp.total_tokens,
+            "latency_ms": resp.latency_ms,
+        }
+
+        return resp, tc_lats, task_result
+
     def _agentic_loop(
-        self, messages: List[Dict[str, Any]]
-    ) -> Tuple[StreamingChatResponse, List[float], str]:
-        """Run model ↔ tool loop, return (response, tool_latencies, patch)."""
+        self,
+        messages: List[Dict[str, Any]],
+        workspace: Path,
+    ) -> Tuple[StreamingChatResponse, List[float]]:
         tools = self.config.tool_definitions or TOOL_DEFINITIONS
         executor = ToolExecutor(
-            workspace_dir=self.config.workspace_dir,
+            workspace_dir=str(workspace),
             shell_timeout=self.config.shell_timeout,
         )
 
@@ -441,12 +572,6 @@ class SingleAgentRunner:
                     result.latency_ms,
                 )
 
-        # --- Extract patch ---
-        # Priority: git diff in workspace > diff block in final response
-        patch = _git_diff(Path(self.config.workspace_dir))
-        if not patch:
-            patch = _extract_patch_from_text(final_content)
-
         avg_tpot = sum(all_tpot_avgs) / len(all_tpot_avgs) if all_tpot_avgs else 0.0
 
         combined = StreamingChatResponse(
@@ -461,13 +586,12 @@ class SingleAgentRunner:
             model=self.config.model_id,
             tool_call_count=total_tool_calls,
         )
-        return combined, all_tc_latencies, patch
+        return combined, all_tc_latencies
 
     @staticmethod
     def _extract_tool_calls(
         raw_chunks: List[Dict[str, Any]],
     ) -> List[Dict[str, str]]:
-        """Reassemble tool_calls from streaming delta chunks."""
         fragments: Dict[int, Dict[str, str]] = {}
         for chunk in raw_chunks:
             choices = chunk.get("choices", [])
