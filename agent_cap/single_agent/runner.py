@@ -103,6 +103,20 @@ class SingleAgentRunner:
     def __init__(self, config: SingleAgentBenchConfig) -> None:
         self.config = config
         self.client = StreamingChatClient(base_url=config.base_url)
+        self._resolve_model_id()
+
+    def _resolve_model_id(self) -> None:
+        """Auto-detect model ID from the server if config value doesn't match."""
+        server_id = self.client.get_server_model_id()
+        if server_id and server_id != self.config.model_id:
+            logger.info(
+                "Server model: %s (config had: %s) — using server model",
+                server_id,
+                self.config.model_id,
+            )
+            self.config.model_id = server_id
+        elif server_id:
+            logger.info("Server model confirmed: %s", server_id)
 
     # ------------------------------------------------------------------
     # Public API

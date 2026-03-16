@@ -79,6 +79,23 @@ class StreamingChatClient:
 
     def __init__(self, base_url: str = "http://localhost:30000") -> None:
         self.base_url = base_url.rstrip("/")
+        self._server_model_id: Optional[str] = None
+
+    def get_server_model_id(self) -> Optional[str]:
+        """Query /v1/models to get the model ID the server actually loaded."""
+        if self._server_model_id is not None:
+            return self._server_model_id
+        try:
+            url = f"{self.base_url}/v1/models"
+            req = urllib.request.Request(url, method="GET")
+            resp = urllib.request.urlopen(req, timeout=5)
+            data = json.loads(resp.read().decode("utf-8"))
+            models = data.get("data", [])
+            if models:
+                self._server_model_id = models[0].get("id", None)
+            return self._server_model_id
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Public API
