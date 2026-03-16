@@ -243,7 +243,7 @@ class StreamingChatClient:
             (first_token_time - t_start) * 1000 if first_token_time else latency_ms
         )
 
-        # Compute TPOT from inter-token intervals
+        # Compute TPOT from inter-chunk intervals, with fallback estimation
         intervals_ms: List[float] = []
         if len(token_timestamps) >= 2:
             for i in range(1, len(token_timestamps)):
@@ -252,6 +252,11 @@ class StreamingChatClient:
 
         tpot_avg = _mean(intervals_ms)
         tpot_p99 = _compute_percentile(intervals_ms, 99)
+
+        # Fallback: estimate from (latency - ttft) / (output_tokens - 1)
+        if tpot_avg == 0.0 and output_tokens > 1 and ttft_ms < latency_ms:
+            tpot_avg = (latency_ms - ttft_ms) / (output_tokens - 1)
+            tpot_p99 = tpot_avg
 
         # Infer tool call count
         tool_call_count = len(tool_call_fragments)
@@ -457,6 +462,13 @@ class StreamingChatClient:
                     (token_timestamps[i] - token_timestamps[i - 1]) * 1000
                 )
 
+        tpot_avg = _mean(intervals_ms)
+        tpot_p99 = _compute_percentile(intervals_ms, 99)
+
+        if tpot_avg == 0.0 and output_tokens > 1 and ttft_ms < latency_ms:
+            tpot_avg = (latency_ms - ttft_ms) / (output_tokens - 1)
+            tpot_p99 = tpot_avg
+
         return StreamingChatResponse(
             content="".join(content_parts),
             input_tokens=input_tokens,
@@ -464,8 +476,8 @@ class StreamingChatClient:
             total_tokens=input_tokens + output_tokens,
             latency_ms=latency_ms,
             ttft_ms=ttft_ms,
-            tpot_ms_avg=_mean(intervals_ms),
-            tpot_ms_p99=_compute_percentile(intervals_ms, 99),
+            tpot_ms_avg=tpot_avg,
+            tpot_ms_p99=tpot_p99,
             model=resp_model,
             tool_call_count=len(tool_calls_collected),
             token_timestamps=token_timestamps,
