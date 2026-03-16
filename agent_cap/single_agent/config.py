@@ -52,6 +52,9 @@ class SingleAgentBenchConfig:
     python_path: str = "python"
     cuda_visible_devices: str = ""
     output_dir: str = "results/single_agent"
+    max_turns: int = 20
+    workspace_dir: str = "/tmp/agent_cap_workspace"
+    shell_timeout: int = 30
 
     # ------------------------------------------------------------------
     # Serialisation helpers
@@ -79,6 +82,9 @@ class SingleAgentBenchConfig:
             python_path=str(data.get("python_path", "python")),
             cuda_visible_devices=str(data.get("cuda_visible_devices", "")),
             output_dir=str(data.get("output_dir", "results/single_agent")),
+            max_turns=int(data.get("max_turns", 20)),
+            workspace_dir=str(data.get("workspace_dir", "/tmp/agent_cap_workspace")),
+            shell_timeout=int(data.get("shell_timeout", 30)),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -102,6 +108,9 @@ class SingleAgentBenchConfig:
             "python_path": self.python_path,
             "cuda_visible_devices": self.cuda_visible_devices,
             "output_dir": self.output_dir,
+            "max_turns": self.max_turns,
+            "workspace_dir": self.workspace_dir,
+            "shell_timeout": self.shell_timeout,
         }
 
     @classmethod

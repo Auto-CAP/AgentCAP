@@ -19,9 +19,11 @@ dataset_count: 50
 # Batch-size sweep: test how E2E latency changes with concurrency
 batch_sizes: [1, 2, 4, 8, 16, 32]
 
-# Tool-call testing
+# Tool-call testing (real execution: read_file, write_file, run_shell, search_code)
 enable_tool_calls: true
-# tool_definitions: null  # uses DEFAULT_TOOL_DEFINITIONS from tool_simulator.py
+max_turns: 20
+workspace_dir: /tmp/agent_cap_workspace
+shell_timeout: 30
 
 # Generation parameters
 max_tokens: 4096

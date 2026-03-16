@@ -1,12 +1,12 @@
-"""Single-agent benchmark runner.
+"""Single-agent benchmark runner with real multi-turn tool execution.
 
-Orchestrates a full benchmark sweep:
+For each task the runner performs a full agentic loop:
 
-1. Load tasks from the configured dataset.
-2. For each batch_size in the sweep:
-   a. Run WITHOUT tool calls → collect metrics
-   b. Run WITH tool calls (if enabled) → collect metrics
-3. Aggregate and report all results.
+    model generates response
+       ↓ tool_calls?
+    ToolExecutor runs real commands (file I/O, shell, grep)
+       ↓ results appended to messages
+    model continues … (up to max_turns)
 
 Hardware monitors (GPU via nvidia-smi, CPU via /proc/stat) run in the
 background during each batch.
@@ -16,7 +16,7 @@ import csv
 import json
 import logging
 import time
-from dataclasses import asdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -26,9 +26,10 @@ from agent_cap.server.gpu_monitor import GPUMonitor
 from agent_cap.server.streaming_client import StreamingChatClient, StreamingChatResponse
 from agent_cap.single_agent.config import SingleAgentBenchConfig
 from agent_cap.single_agent.metrics import BenchmarkMetrics, aggregate_metrics
-from agent_cap.single_agent.tool_simulator import (
-    DEFAULT_TOOL_DEFINITIONS,
-    simulate_tool_execution,
+from agent_cap.single_agent.tool_executor import (
+    TOOL_DEFINITIONS,
+    ToolCallResult,
+    ToolExecutor,
 )
 
 logger = logging.getLogger("agent_cap.single_agent")
@@ -42,7 +43,7 @@ class SingleAgentRunner:
         config = SingleAgentBenchConfig.from_yaml("configs/single_agent.yaml")
         runner = SingleAgentRunner(config)
         results = runner.run()
-        runner.save_results(results, "results/single_agent")
+        runner.save_results(results)
     """
 
     def __init__(self, config: SingleAgentBenchConfig) -> None:
@@ -54,11 +55,6 @@ class SingleAgentRunner:
     # ------------------------------------------------------------------
 
     def run(self) -> List[BenchmarkMetrics]:
-        """Execute the full benchmark sweep.
-
-        Returns:
-            List of BenchmarkMetrics (one per batch_size × tool_mode combo).
-        """
         tasks = load_benchmark(self.config.dataset, self.config.dataset_count)
         logger.info("Loaded %d tasks from '%s'", len(tasks), self.config.dataset)
 
@@ -88,19 +84,9 @@ class SingleAgentRunner:
     def save_results(
         self, results: List[BenchmarkMetrics], output_dir: Optional[str] = None
     ) -> Path:
-        """Save benchmark results to CSV + JSON.
-
-        Args:
-            results: Benchmark metrics from ``run()``.
-            output_dir: Override for config.output_dir.
-
-        Returns:
-            Path to the output directory.
-        """
         out = Path(output_dir or self.config.output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
-        # JSON (full)
         json_path = out / "metrics.json"
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(
@@ -113,7 +99,6 @@ class SingleAgentRunner:
             )
         logger.info("Wrote %s", json_path)
 
-        # CSV (flat table)
         csv_path = out / "metrics.csv"
         if results:
             fieldnames = list(results[0].to_dict().keys())
@@ -127,7 +112,7 @@ class SingleAgentRunner:
         return out
 
     # ------------------------------------------------------------------
-    # Internal
+    # Internal – batch orchestration
     # ------------------------------------------------------------------
 
     def _run_batch(
@@ -136,12 +121,6 @@ class SingleAgentRunner:
         batch_size: int,
         tool_mode: str,
     ) -> BenchmarkMetrics:
-        """Run one (batch_size, tool_mode) configuration."""
-        tools = None
-        if tool_mode == "with_tools":
-            tools = self.config.tool_definitions or DEFAULT_TOOL_DEFINITIONS
-
-        # Start hardware monitors
         gpu_mon = GPUMonitor(interval=self.config.gpu_monitor_interval)
         cpu_mon = CPUMonitor(interval=self.config.cpu_monitor_interval)
         gpu_mon.start()
@@ -149,32 +128,22 @@ class SingleAgentRunner:
 
         t_start = time.perf_counter()
 
-        # Send all requests with specified concurrency
-        responses = self.client.chat_batch(
-            messages_list=all_messages,
-            model=self.config.model_id,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-            tools=tools,
-            concurrency=batch_size,
-        )
-
-        t_end = time.perf_counter()
-        wall_clock_s = t_end - t_start
-
-        # Collect tool-call latencies (simulated) if in tool mode
-        tool_call_latencies_ms: List[float] = []
         if tool_mode == "with_tools":
-            for resp in responses:
-                if resp.tool_call_count > 0:
-                    # Simulate tool execution latency per call
-                    for _ in range(resp.tool_call_count):
-                        tc_result = simulate_tool_execution(
-                            "read_file", {"path": "/tmp/example.py"}
-                        )
-                        tool_call_latencies_ms.append(tc_result["latency_ms"])
+            responses, tc_latencies = self._run_batch_with_tools(
+                all_messages, batch_size
+            )
+        else:
+            responses = self.client.chat_batch(
+                messages_list=all_messages,
+                model=self.config.model_id,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                concurrency=batch_size,
+            )
+            tc_latencies = []
 
-        # Stop monitors
+        wall_clock_s = time.perf_counter() - t_start
+
         gpu_stats = gpu_mon.stop()
         cpu_stats = cpu_mon.stop()
 
@@ -187,12 +156,197 @@ class SingleAgentRunner:
             gpu_max_util=gpu_stats.max_gpu_util_pct,
             cpu_avg_util=cpu_stats.avg_cpu_util_pct,
             cpu_max_util=cpu_stats.max_cpu_util_pct,
-            tool_call_latencies_ms=tool_call_latencies_ms or None,
+            tool_call_latencies_ms=tc_latencies or None,
         )
+
+    def _run_batch_with_tools(
+        self,
+        all_messages: List[List[Dict[str, Any]]],
+        concurrency: int,
+    ) -> tuple:
+        """Run all tasks through the multi-turn agentic loop, in parallel."""
+        all_responses: List[Optional[StreamingChatResponse]] = [None] * len(
+            all_messages
+        )
+        all_tc_lats: List[List[float]] = [[] for _ in all_messages]
+
+        def _run_one(idx: int, msgs: List[Dict[str, Any]]) -> None:
+            resp, lats = self._agentic_loop(list(msgs))
+            all_responses[idx] = resp
+            all_tc_lats[idx] = lats
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {
+                pool.submit(_run_one, i, msgs): i for i, msgs in enumerate(all_messages)
+            }
+            for fut in as_completed(futures):
+                exc = fut.exception()
+                if exc:
+                    idx = futures[fut]
+                    logger.error("Task %d failed: %s", idx, exc)
+                    all_responses[idx] = StreamingChatResponse(
+                        content="",
+                        input_tokens=0,
+                        output_tokens=0,
+                        total_tokens=0,
+                        latency_ms=0,
+                        ttft_ms=0,
+                        tpot_ms_avg=0,
+                        tpot_ms_p99=0,
+                        model=self.config.model_id,
+                        error=str(exc),
+                    )
+
+        flat_lats: List[float] = []
+        for lats in all_tc_lats:
+            flat_lats.extend(lats)
+
+        return [r for r in all_responses if r is not None], flat_lats
+
+    # ------------------------------------------------------------------
+    # Core agentic loop (single task)
+    # ------------------------------------------------------------------
+
+    def _agentic_loop(self, messages: List[Dict[str, Any]]) -> tuple:
+        """Run model ↔ tool loop until the model stops calling tools or max_turns."""
+        tools = self.config.tool_definitions or TOOL_DEFINITIONS
+        executor = ToolExecutor(
+            workspace_dir=self.config.workspace_dir,
+            shell_timeout=self.config.shell_timeout,
+        )
+
+        all_tc_latencies: List[float] = []
+        cumulative_input = 0
+        cumulative_output = 0
+        cumulative_latency = 0.0
+        first_ttft: Optional[float] = None
+        all_tpot_avgs: List[float] = []
+        total_tool_calls = 0
+        final_content = ""
+
+        for turn in range(self.config.max_turns):
+            resp = self.client.chat(
+                messages=messages,
+                model=self.config.model_id,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                tools=tools,
+            )
+
+            cumulative_input += resp.input_tokens
+            cumulative_output += resp.output_tokens
+            cumulative_latency += resp.latency_ms
+            if first_ttft is None:
+                first_ttft = resp.ttft_ms
+            if resp.tpot_ms_avg > 0:
+                all_tpot_avgs.append(resp.tpot_ms_avg)
+
+            # No tool calls → model is done
+            if resp.tool_call_count == 0 or not resp.raw_chunks:
+                final_content = resp.content
+                break
+
+            # Extract tool calls from the raw chunks
+            pending_calls = self._extract_tool_calls(resp.raw_chunks)
+
+            if not pending_calls:
+                final_content = resp.content
+                break
+
+            # Append assistant message with tool_calls
+            assistant_msg: Dict[str, Any] = {"role": "assistant"}
+            if resp.content:
+                assistant_msg["content"] = resp.content
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": tc["arguments"],
+                    },
+                }
+                for tc in pending_calls
+            ]
+            messages.append(assistant_msg)
+
+            # Execute each tool call for real
+            for tc in pending_calls:
+                try:
+                    args = json.loads(tc["arguments"])
+                except (json.JSONDecodeError, TypeError):
+                    args = {"raw": tc["arguments"]}
+
+                result = executor.execute(
+                    tool_name=tc["name"],
+                    tool_call_id=tc["id"],
+                    arguments=args,
+                )
+                all_tc_latencies.append(result.latency_ms)
+                total_tool_calls += 1
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result.output,
+                    }
+                )
+
+                logger.debug(
+                    "  turn=%d  tool=%s  ok=%s  %.1fms",
+                    turn,
+                    tc["name"],
+                    result.success,
+                    result.latency_ms,
+                )
+
+        avg_tpot = sum(all_tpot_avgs) / len(all_tpot_avgs) if all_tpot_avgs else 0.0
+
+        combined = StreamingChatResponse(
+            content=final_content,
+            input_tokens=cumulative_input,
+            output_tokens=cumulative_output,
+            total_tokens=cumulative_input + cumulative_output,
+            latency_ms=cumulative_latency,
+            ttft_ms=first_ttft or 0.0,
+            tpot_ms_avg=avg_tpot,
+            tpot_ms_p99=resp.tpot_ms_p99 if resp else 0.0,
+            model=self.config.model_id,
+            tool_call_count=total_tool_calls,
+        )
+        return combined, all_tc_latencies
+
+    @staticmethod
+    def _extract_tool_calls(
+        raw_chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, str]]:
+        """Reassemble tool_calls from streaming delta chunks."""
+        fragments: Dict[int, Dict[str, str]] = {}
+        for chunk in raw_chunks:
+            choices = chunk.get("choices", [])
+            if not choices:
+                continue
+            delta = choices[0].get("delta", {})
+            tc_list = delta.get("tool_calls")
+            if not tc_list:
+                continue
+            for tc in tc_list:
+                idx = tc.get("index", 0)
+                if idx not in fragments:
+                    fragments[idx] = {"id": "", "name": "", "arguments": ""}
+                if tc.get("id"):
+                    fragments[idx]["id"] = tc["id"]
+                fn = tc.get("function", {})
+                if fn.get("name"):
+                    fragments[idx]["name"] = fn["name"]
+                if fn.get("arguments"):
+                    fragments[idx]["arguments"] += fn["arguments"]
+
+        return [v for _, v in sorted(fragments.items()) if v["name"]]
 
     @staticmethod
     def _print_summary(m: BenchmarkMetrics) -> None:
-        """Print a compact one-line summary for a benchmark run."""
         print(
             f"  batch={m.batch_size:<3d}  mode={m.tool_mode:<12s}  "
             f"E2E_avg={m.e2e_latency_avg_ms:>8.1f}ms  "
