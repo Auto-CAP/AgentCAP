@@ -161,76 +161,83 @@ class StreamingChatClient:
                             error=f"HTTP {response.status}: {error_body[:500]}",
                         )
 
+                    done = False
                     async for chunk_bytes in response.content:
-                        chunk_str = chunk_bytes.decode("utf-8").strip()
-                        if not chunk_str or chunk_str.startswith(":"):
-                            continue
-
-                        chunk_str = chunk_str.removeprefix("data: ")
-                        if chunk_str == "[DONE]":
+                        if done:
                             break
-
-                        try:
-                            data = json.loads(chunk_str)
-                        except json.JSONDecodeError:
-                            continue
-
-                        timestamp = time.perf_counter()
-                        raw_chunks.append(data)
-                        resp_model = data.get("model", resp_model)
-
-                        usage = data.get("usage")
-                        if usage:
-                            input_tokens = int(usage.get("prompt_tokens", 0))
-                            output_tokens = int(usage.get("completion_tokens", 0))
-                            total_tokens = int(
-                                usage.get("total_tokens", input_tokens + output_tokens)
+                        for raw_line in chunk_bytes.decode("utf-8").split("\n"):
+                            raw_line = raw_line.strip()
+                            if not raw_line or raw_line.startswith(":"):
+                                continue
+                            raw_line = raw_line.removeprefix("data: ").removeprefix(
+                                "data:"
                             )
+                            if raw_line == "[DONE]":
+                                done = True
+                                break
+                            try:
+                                data = json.loads(raw_line)
+                            except json.JSONDecodeError:
+                                continue
 
-                        choices = data.get("choices", [])
-                        if not choices:
+                            timestamp = time.perf_counter()
+                            raw_chunks.append(data)
+                            resp_model = data.get("model", resp_model)
+
+                            usage = data.get("usage")
+                            if usage:
+                                input_tokens = int(usage.get("prompt_tokens", 0))
+                                output_tokens = int(usage.get("completion_tokens", 0))
+                                total_tokens = int(
+                                    usage.get(
+                                        "total_tokens", input_tokens + output_tokens
+                                    )
+                                )
+
+                            choices = data.get("choices", [])
+                            if not choices:
+                                most_recent_timestamp = timestamp
+                                continue
+
+                            delta = choices[0].get("delta", {})
+                            has_token = False
+
+                            content_piece = delta.get("content")
+                            if content_piece:
+                                content_parts.append(content_piece)
+                                has_token = True
+
+                            reasoning = delta.get("reasoning_content") or delta.get(
+                                "reasoning"
+                            )
+                            if reasoning:
+                                has_token = True
+
+                            tc_deltas = delta.get("tool_calls")
+                            if tc_deltas:
+                                for tc in tc_deltas:
+                                    idx = tc.get("index", 0)
+                                    if idx not in tool_call_fragments:
+                                        tool_call_fragments[idx] = {
+                                            "name": "",
+                                            "arguments": "",
+                                        }
+                                    fn = tc.get("function", {})
+                                    if fn.get("name"):
+                                        tool_call_fragments[idx]["name"] = fn["name"]
+                                    if fn.get("arguments"):
+                                        tool_call_fragments[idx]["arguments"] += fn[
+                                            "arguments"
+                                        ]
+                                        has_token = True
+
+                            if has_token:
+                                if ttft == 0.0:
+                                    ttft = timestamp - st
+                                else:
+                                    itl.append(timestamp - most_recent_timestamp)
+
                             most_recent_timestamp = timestamp
-                            continue
-
-                        delta = choices[0].get("delta", {})
-                        has_token = False
-
-                        content_piece = delta.get("content")
-                        if content_piece:
-                            content_parts.append(content_piece)
-                            has_token = True
-
-                        reasoning = delta.get("reasoning_content") or delta.get(
-                            "reasoning"
-                        )
-                        if reasoning:
-                            has_token = True
-
-                        tc_deltas = delta.get("tool_calls")
-                        if tc_deltas:
-                            for tc in tc_deltas:
-                                idx = tc.get("index", 0)
-                                if idx not in tool_call_fragments:
-                                    tool_call_fragments[idx] = {
-                                        "name": "",
-                                        "arguments": "",
-                                    }
-                                fn = tc.get("function", {})
-                                if fn.get("name"):
-                                    tool_call_fragments[idx]["name"] = fn["name"]
-                                if fn.get("arguments"):
-                                    tool_call_fragments[idx]["arguments"] += fn[
-                                        "arguments"
-                                    ]
-                                    has_token = True
-
-                        if has_token:
-                            if ttft == 0.0:
-                                ttft = timestamp - st
-                            else:
-                                itl.append(timestamp - most_recent_timestamp)
-
-                        most_recent_timestamp = timestamp
 
         except Exception as exc:
             t_end = time.perf_counter()
