@@ -109,20 +109,13 @@ class StreamingChatClient:
         max_tokens: int = 4096,
         tools: Optional[List[Dict[str, Any]]] = None,
         timeout: int = 600,
+        stream: bool = True,
     ) -> StreamingChatResponse:
-        """Send a streaming chat completion request.
+        if not stream:
+            return self._chat_non_stream(
+                messages, model, temperature, max_tokens, tools, timeout
+            )
 
-        Args:
-            messages: OpenAI-format message list.
-            model: Model identifier.
-            temperature: Sampling temperature.
-            max_tokens: Maximum tokens to generate.
-            tools: Optional OpenAI function-calling tool definitions.
-            timeout: HTTP read timeout in seconds.
-
-        Returns:
-            StreamingChatResponse with timing metrics.
-        """
         url = f"{self.base_url}/v1/chat/completions"
         payload: Dict[str, Any] = {
             "model": model,
@@ -281,6 +274,86 @@ class StreamingChatClient:
             raw_chunks=raw_chunks,
         )
 
+    def _chat_non_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        tools: Optional[List[Dict[str, Any]]],
+        timeout: int,
+    ) -> StreamingChatResponse:
+        url = f"{self.base_url}/v1/chat/completions"
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        t_start = time.perf_counter()
+        try:
+            response = urllib.request.urlopen(req, timeout=timeout)
+            body = json.loads(response.read().decode("utf-8"))
+            response.close()
+        except Exception as exc:
+            t_end = time.perf_counter()
+            return StreamingChatResponse(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                latency_ms=(t_end - t_start) * 1000,
+                ttft_ms=0.0,
+                tpot_ms_avg=0.0,
+                tpot_ms_p99=0.0,
+                model=model,
+                error=str(exc),
+            )
+        t_end = time.perf_counter()
+        latency_ms = (t_end - t_start) * 1000
+
+        choice = body.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        content = message.get("content", "") or ""
+        usage = body.get("usage", {})
+        input_tokens = int(usage.get("prompt_tokens", 0))
+        output_tokens = int(usage.get("completion_tokens", 0))
+        total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens))
+
+        tool_call_count = 0
+        tc_list = message.get("tool_calls")
+        if tc_list:
+            tool_call_count = len(tc_list)
+
+        tpot_avg = 0.0
+        if output_tokens > 1:
+            tpot_avg = latency_ms / output_tokens
+
+        return StreamingChatResponse(
+            content=content,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            latency_ms=latency_ms,
+            ttft_ms=latency_ms,
+            tpot_ms_avg=tpot_avg,
+            tpot_ms_p99=tpot_avg,
+            model=body.get("model", model),
+            tool_call_count=tool_call_count,
+            raw_chunks=[body],
+        )
+
     def chat_batch(
         self,
         messages_list: List[List[Dict[str, Any]]],
@@ -290,23 +363,8 @@ class StreamingChatClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         concurrency: int = 1,
         timeout: int = 600,
+        stream: bool = True,
     ) -> List[StreamingChatResponse]:
-        """Send multiple chat requests concurrently.
-
-        Each individual request uses streaming for TTFT/TPOT measurement.
-
-        Args:
-            messages_list: List of message lists (one per request).
-            model: Model identifier.
-            temperature: Sampling temperature.
-            max_tokens: Maximum tokens to generate per request.
-            tools: Optional tool definitions.
-            concurrency: Maximum number of parallel requests.
-            timeout: HTTP read timeout per request.
-
-        Returns:
-            List of StreamingChatResponse, one per input.
-        """
         results: List[Optional[StreamingChatResponse]] = [None] * len(messages_list)
 
         def _run(idx: int, msgs: List[Dict[str, Any]]) -> None:
@@ -317,6 +375,7 @@ class StreamingChatClient:
                 max_tokens=max_tokens,
                 tools=tools,
                 timeout=timeout,
+                stream=stream,
             )
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:

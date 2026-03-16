@@ -11,6 +11,7 @@ dataset_count: 50
 batch_sizes: [1, 2, 4, 8, 16, 32]
 
 enable_tool_calls: true
+stream: false
 max_turns: 5
 workspace_dir: /tmp/agent_cap_workspace
 shell_timeout: 30

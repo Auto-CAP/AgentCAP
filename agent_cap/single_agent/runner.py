@@ -240,6 +240,7 @@ class SingleAgentRunner:
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 concurrency=batch_size,
+                stream=self.config.stream,
             )
             tc_latencies = []
             preds = self._build_predictions(responses, eval_configs)
@@ -371,6 +372,7 @@ class SingleAgentRunner:
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 tools=tools,
+                stream=self.config.stream,
             )
 
             cumulative_input += resp.input_tokens
@@ -387,7 +389,10 @@ class SingleAgentRunner:
                 final_content = resp.content
                 break
 
-            pending_calls = self._extract_tool_calls(resp.raw_chunks)
+            if self.config.stream:
+                pending_calls = self._extract_tool_calls_stream(resp.raw_chunks)
+            else:
+                pending_calls = self._extract_tool_calls_non_stream(resp.raw_chunks)
 
             if not pending_calls:
                 final_content = resp.content
@@ -462,10 +467,9 @@ class SingleAgentRunner:
         return combined, all_tc_latencies, patch
 
     @staticmethod
-    def _extract_tool_calls(
+    def _extract_tool_calls_stream(
         raw_chunks: List[Dict[str, Any]],
     ) -> List[Dict[str, str]]:
-        """Reassemble tool_calls from streaming delta chunks."""
         fragments: Dict[int, Dict[str, str]] = {}
         for chunk in raw_chunks:
             choices = chunk.get("choices", [])
@@ -486,8 +490,29 @@ class SingleAgentRunner:
                     fragments[idx]["name"] = fn["name"]
                 if fn.get("arguments"):
                     fragments[idx]["arguments"] += fn["arguments"]
-
         return [v for _, v in sorted(fragments.items()) if v["name"]]
+
+    @staticmethod
+    def _extract_tool_calls_non_stream(
+        raw_chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, str]]:
+        result: List[Dict[str, str]] = []
+        for body in raw_chunks:
+            choices = body.get("choices", [])
+            if not choices:
+                continue
+            msg = choices[0].get("message", {})
+            tc_list = msg.get("tool_calls", [])
+            for tc in tc_list or []:
+                fn = tc.get("function", {})
+                result.append(
+                    {
+                        "id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "arguments": fn.get("arguments", ""),
+                    }
+                )
+        return [r for r in result if r["name"]]
 
     @staticmethod
     def _print_summary(m: BenchmarkMetrics) -> None:

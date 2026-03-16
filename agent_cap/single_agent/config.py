@@ -55,6 +55,7 @@ class SingleAgentBenchConfig:
     max_turns: int = 5
     workspace_dir: str = "/tmp/agent_cap_workspace"
     shell_timeout: int = 30
+    stream: bool = True
 
     # ------------------------------------------------------------------
     # Serialisation helpers
@@ -85,6 +86,7 @@ class SingleAgentBenchConfig:
             max_turns=int(data.get("max_turns", 20)),
             workspace_dir=str(data.get("workspace_dir", "/tmp/agent_cap_workspace")),
             shell_timeout=int(data.get("shell_timeout", 30)),
+            stream=bool(data.get("stream", True)),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -111,6 +113,7 @@ class SingleAgentBenchConfig:
             "max_turns": self.max_turns,
             "workspace_dir": self.workspace_dir,
             "shell_timeout": self.shell_timeout,
+            "stream": self.stream,
         }
 
     @classmethod
