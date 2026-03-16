@@ -124,7 +124,7 @@ class StreamingChatClient:
         messages: List[Dict[str, Any]],
         model: str = "default",
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         tools: Optional[List[Dict[str, Any]]] = None,
         timeout: int = 600,
         stop_token_ids: Optional[List[int]] = None,
@@ -198,7 +198,6 @@ class StreamingChatClient:
 
                 delta = choices[0].get("delta", {})
 
-                # --- Content tokens ---
                 content_piece = delta.get("content")
                 if content_piece:
                     now = time.perf_counter()
@@ -207,7 +206,15 @@ class StreamingChatClient:
                         first_token_time = now
                     content_parts.append(content_piece)
 
-                # --- Tool call deltas ---
+                reasoning_piece = delta.get("reasoning_content") or delta.get(
+                    "reasoning"
+                )
+                if reasoning_piece:
+                    now = time.perf_counter()
+                    token_timestamps.append(now - t_start)
+                    if first_token_time is None:
+                        first_token_time = now
+
                 tc_deltas = delta.get("tool_calls")
                 if tc_deltas:
                     for tc in tc_deltas:
@@ -222,6 +229,10 @@ class StreamingChatClient:
                             tool_call_fragments[idx]["name"] = fn["name"]
                         if fn.get("arguments"):
                             tool_call_fragments[idx]["arguments"] += fn["arguments"]
+                            now = time.perf_counter()
+                            token_timestamps.append(now - t_start)
+                            if first_token_time is None:
+                                first_token_time = now
 
             response.close()
 
@@ -293,7 +304,7 @@ class StreamingChatClient:
         messages_list: List[List[Dict[str, Any]]],
         model: str = "default",
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         tools: Optional[List[Dict[str, Any]]] = None,
         concurrency: int = 1,
         timeout: int = 600,

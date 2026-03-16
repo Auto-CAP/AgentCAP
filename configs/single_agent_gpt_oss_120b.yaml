@@ -26,7 +26,7 @@ workspace_dir: /tmp/agent_cap_workspace
 shell_timeout: 30
 
 # Generation parameters
-max_tokens: 4096
+max_tokens: 16384
 temperature: 0.0
 repetitions: 1
 
