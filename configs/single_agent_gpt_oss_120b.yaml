@@ -21,7 +21,7 @@ batch_sizes: [1, 2, 4, 8, 16, 32]
 
 # Tool-call testing (real execution: read_file, write_file, run_shell, search_code)
 enable_tool_calls: true
-max_turns: 20
+max_turns: 5
 workspace_dir: /tmp/agent_cap_workspace
 shell_timeout: 30
 

@@ -228,7 +228,7 @@ def _load_bigcodebench(num_tasks: int, seed: int) -> List[TaskDef]:
 def _load_swebench_pro(
     num_tasks: int,
     seed: int,
-    dataset_name: str = "princeton-nlp/SWE-bench_Verified",
+    dataset_name: str = "ScaleAI/SWE-bench_Pro",
 ) -> List[TaskDef]:
     """Load SWE-Bench Pro (Verified) as a list of TaskDef.
 
@@ -251,24 +251,29 @@ def _load_swebench_pro(
         repo = ex.get("repo", "unknown/repo")
         base_commit = ex.get("base_commit", "")
         problem_statement = ex.get("problem_statement", "")
-        hints_text = ex.get("hints_text", "")
+        requirements = ex.get("requirements", "")
+        interface = ex.get("interface", "")
+        repo_language = ex.get("repo_language", "")
         gold_patch = ex.get("patch", "")
         test_patch = ex.get("test_patch", "")
+        fail_to_pass = ex.get("fail_to_pass", "")
 
-        # Build the prompt
-        hint_section = ""
-        if hints_text and hints_text.strip():
-            hint_section = (
-                "\n\n## Hints\n"
-                "The following hints may help locate the relevant code:\n"
-                f"{hints_text.strip()}\n"
-            )
+        extra_sections = ""
+        if requirements and str(requirements).strip():
+            extra_sections += f"\n\n## Requirements\n{str(requirements).strip()}\n"
+        if interface and str(interface).strip():
+            extra_sections += f"\n\n## Interface\n{str(interface).strip()}\n"
+
+        lang_note = ""
+        if repo_language:
+            lang_note = f" (language: {repo_language})"
 
         prompt = (
-            f"You are a software engineer working on the repository **{repo}** "
+            f"You are a software engineer working on the repository "
+            f"**{repo}**{lang_note} "
             f"(base commit: `{base_commit}`).\n\n"
             f"## Issue\n{problem_statement.strip()}\n"
-            f"{hint_section}\n"
+            f"{extra_sections}\n"
             "## Task\n"
             "Analyze the issue above and produce a **unified diff patch** "
             "(the output of `git diff`) that fixes it.\n\n"
@@ -291,6 +296,8 @@ def _load_swebench_pro(
                     "base_commit": base_commit,
                     "expected_patch": gold_patch,
                     "test_patch": test_patch,
+                    "fail_to_pass": fail_to_pass,
+                    "repo_language": repo_language,
                 },
             )
         )

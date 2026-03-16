@@ -52,7 +52,7 @@ class SingleAgentBenchConfig:
     python_path: str = "python"
     cuda_visible_devices: str = ""
     output_dir: str = "results/single_agent"
-    max_turns: int = 20
+    max_turns: int = 5
     workspace_dir: str = "/tmp/agent_cap_workspace"
     shell_timeout: int = 30
 

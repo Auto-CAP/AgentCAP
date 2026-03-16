@@ -85,7 +85,7 @@ def main() -> None:
         return
 
     runner = SingleAgentRunner(config)
-    results = runner.run(limit=args.limit)
+    results, predictions = runner.run(limit=args.limit)
 
     print("\n" + "=" * 70)
     print("Results Summary")
@@ -110,8 +110,16 @@ def main() -> None:
             f"{m.error_count:>4}"
         )
 
-    out_dir = runner.save_results(results, args.output_dir)
+    out_dir = runner.save_results(results, predictions, args.output_dir)
     print(f"\nResults saved to: {out_dir}")
+    if predictions:
+        print(f"SWE-bench predictions: {out_dir}/predictions.jsonl")
+        print(
+            "\n  To evaluate with SWE-bench harness:\n"
+            "    python -m swebench.harness.run_evaluation \\\n"
+            f"      --predictions_path {out_dir}/predictions.jsonl \\\n"
+            "      --run_id my_run"
+        )
 
 
 if __name__ == "__main__":

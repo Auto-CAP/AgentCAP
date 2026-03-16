@@ -8,17 +8,24 @@ For each task the runner performs a full agentic loop:
        ↓ results appended to messages
     model continues … (up to max_turns)
 
-Hardware monitors (GPU via nvidia-smi, CPU via /proc/stat) run in the
-background during each batch.
+After the loop the runner extracts the model's patch from the final
+response and writes SWE-bench-compatible ``predictions.jsonl`` so
+results can be evaluated with the official Docker harness::
+
+    python -m swebench.harness.run_evaluation \\
+        --predictions_path results/single_agent/predictions.jsonl \\
+        --run_id my_run
 """
 
 import csv
 import json
 import logging
+import re
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.server.cpu_monitor import CPUMonitor
@@ -35,6 +42,53 @@ from agent_cap.single_agent.tool_executor import (
 logger = logging.getLogger("agent_cap.single_agent")
 
 
+# ------------------------------------------------------------------
+# Patch extraction helpers
+# ------------------------------------------------------------------
+
+
+def _extract_patch_from_text(text: str) -> str:
+    """Pull the first ```diff block from model output."""
+    m = re.search(r"```diff\s*\n(.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"```\s*\n(diff --git.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _git_diff(workspace: Path) -> str:
+    """Run ``git diff`` in the workspace to capture uncommitted changes."""
+    try:
+        proc = subprocess.run(
+            ["git", "diff"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(workspace),
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--cached"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(workspace),
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    except Exception:
+        pass
+
+    return ""
+
+
 class SingleAgentRunner:
     """Run a single-agent performance benchmark across batch sizes.
 
@@ -42,8 +96,8 @@ class SingleAgentRunner:
 
         config = SingleAgentBenchConfig.from_yaml("configs/single_agent.yaml")
         runner = SingleAgentRunner(config)
-        results = runner.run()
-        runner.save_results(results)
+        results, predictions = runner.run()
+        runner.save_results(results, predictions)
     """
 
     def __init__(self, config: SingleAgentBenchConfig) -> None:
@@ -54,14 +108,25 @@ class SingleAgentRunner:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, limit: int = 0) -> List[BenchmarkMetrics]:
+    def run(
+        self, limit: int = 0
+    ) -> Tuple[List[BenchmarkMetrics], List[Dict[str, str]]]:
+        """Execute the full benchmark sweep.
+
+        Returns:
+            (metrics_list, predictions) where predictions is a list of
+            SWE-bench-format dicts ready for ``predictions.jsonl``.
+        """
         tasks = load_benchmark(self.config.dataset, self.config.dataset_count)
         if limit > 0:
             tasks = tasks[:limit]
         logger.info("Loaded %d tasks from '%s'", len(tasks), self.config.dataset)
 
         all_messages = [t.messages for t in tasks]
+        eval_configs = [t.eval_config or {} for t in tasks]
+
         results: List[BenchmarkMetrics] = []
+        predictions: List[Dict[str, str]] = []
 
         tool_modes = ["no_tools"]
         if self.config.enable_tool_calls:
@@ -77,18 +142,28 @@ class SingleAgentRunner:
                         rep + 1,
                         self.config.repetitions,
                     )
-                    metrics = self._run_batch(all_messages, batch_size, tool_mode)
+                    metrics, preds = self._run_batch(
+                        all_messages,
+                        eval_configs,
+                        batch_size,
+                        tool_mode,
+                    )
                     results.append(metrics)
+                    predictions.extend(preds)
                     self._print_summary(metrics)
 
-        return results
+        return results, predictions
 
     def save_results(
-        self, results: List[BenchmarkMetrics], output_dir: Optional[str] = None
+        self,
+        results: List[BenchmarkMetrics],
+        predictions: Optional[List[Dict[str, str]]] = None,
+        output_dir: Optional[str] = None,
     ) -> Path:
         out = Path(output_dir or self.config.output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
+        # metrics.json
         json_path = out / "metrics.json"
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(
@@ -101,6 +176,7 @@ class SingleAgentRunner:
             )
         logger.info("Wrote %s", json_path)
 
+        # metrics.csv
         csv_path = out / "metrics.csv"
         if results:
             fieldnames = list(results[0].to_dict().keys())
@@ -111,6 +187,14 @@ class SingleAgentRunner:
                     writer.writerow(m.to_dict())
         logger.info("Wrote %s", csv_path)
 
+        # predictions.jsonl  (SWE-bench harness format)
+        if predictions:
+            pred_path = out / "predictions.jsonl"
+            with open(pred_path, "w", encoding="utf-8") as f:
+                for p in predictions:
+                    f.write(json.dumps(p, ensure_ascii=False) + "\n")
+            logger.info("Wrote %s  (%d predictions)", pred_path, len(predictions))
+
         return out
 
     # ------------------------------------------------------------------
@@ -120,9 +204,10 @@ class SingleAgentRunner:
     def _run_batch(
         self,
         all_messages: List[List[Dict[str, Any]]],
+        eval_configs: List[Dict[str, Any]],
         batch_size: int,
         tool_mode: str,
-    ) -> BenchmarkMetrics:
+    ) -> Tuple[BenchmarkMetrics, List[Dict[str, str]]]:
         gpu_mon = GPUMonitor(interval=self.config.gpu_monitor_interval)
         cpu_mon = CPUMonitor(interval=self.config.cpu_monitor_interval)
         gpu_mon.start()
@@ -131,8 +216,10 @@ class SingleAgentRunner:
         t_start = time.perf_counter()
 
         if tool_mode == "with_tools":
-            responses, tc_latencies = self._run_batch_with_tools(
-                all_messages, batch_size
+            responses, tc_latencies, preds = self._run_batch_with_tools(
+                all_messages,
+                eval_configs,
+                batch_size,
             )
         else:
             responses = self.client.chat_batch(
@@ -143,13 +230,14 @@ class SingleAgentRunner:
                 concurrency=batch_size,
             )
             tc_latencies = []
+            preds = self._build_predictions(responses, eval_configs)
 
         wall_clock_s = time.perf_counter() - t_start
 
         gpu_stats = gpu_mon.stop()
         cpu_stats = cpu_mon.stop()
 
-        return aggregate_metrics(
+        metrics = aggregate_metrics(
             responses=responses,
             batch_size=batch_size,
             tool_mode=tool_mode,
@@ -160,22 +248,43 @@ class SingleAgentRunner:
             cpu_max_util=cpu_stats.max_cpu_util_pct,
             tool_call_latencies_ms=tc_latencies or None,
         )
+        return metrics, preds
+
+    def _build_predictions(
+        self,
+        responses: List[StreamingChatResponse],
+        eval_configs: List[Dict[str, Any]],
+    ) -> List[Dict[str, str]]:
+        """Build SWE-bench prediction dicts from no-tool responses."""
+        preds = []
+        for resp, ec in zip(responses, eval_configs):
+            patch = _extract_patch_from_text(resp.content)
+            preds.append(
+                {
+                    "instance_id": ec.get("instance_id", ""),
+                    "model_name_or_path": self.config.model_id,
+                    "model_patch": patch,
+                }
+            )
+        return preds
 
     def _run_batch_with_tools(
         self,
         all_messages: List[List[Dict[str, Any]]],
+        eval_configs: List[Dict[str, Any]],
         concurrency: int,
-    ) -> tuple:
-        """Run all tasks through the multi-turn agentic loop, in parallel."""
-        all_responses: List[Optional[StreamingChatResponse]] = [None] * len(
-            all_messages
-        )
-        all_tc_lats: List[List[float]] = [[] for _ in all_messages]
+    ) -> Tuple[List[StreamingChatResponse], List[float], List[Dict[str, str]]]:
+        """Run all tasks through the agentic loop in parallel."""
+        n = len(all_messages)
+        all_responses: List[Optional[StreamingChatResponse]] = [None] * n
+        all_tc_lats: List[List[float]] = [[] for _ in range(n)]
+        all_patches: List[str] = [""] * n
 
         def _run_one(idx: int, msgs: List[Dict[str, Any]]) -> None:
-            resp, lats = self._agentic_loop(list(msgs))
+            resp, lats, patch = self._agentic_loop(list(msgs))
             all_responses[idx] = resp
             all_tc_lats[idx] = lats
+            all_patches[idx] = patch
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {
@@ -203,14 +312,30 @@ class SingleAgentRunner:
         for lats in all_tc_lats:
             flat_lats.extend(lats)
 
-        return [r for r in all_responses if r is not None], flat_lats
+        preds: List[Dict[str, str]] = []
+        for i, ec in enumerate(eval_configs):
+            preds.append(
+                {
+                    "instance_id": ec.get("instance_id", ""),
+                    "model_name_or_path": self.config.model_id,
+                    "model_patch": all_patches[i],
+                }
+            )
+
+        return (
+            [r for r in all_responses if r is not None],
+            flat_lats,
+            preds,
+        )
 
     # ------------------------------------------------------------------
     # Core agentic loop (single task)
     # ------------------------------------------------------------------
 
-    def _agentic_loop(self, messages: List[Dict[str, Any]]) -> tuple:
-        """Run model ↔ tool loop until the model stops calling tools or max_turns."""
+    def _agentic_loop(
+        self, messages: List[Dict[str, Any]]
+    ) -> Tuple[StreamingChatResponse, List[float], str]:
+        """Run model ↔ tool loop, return (response, tool_latencies, patch)."""
         tools = self.config.tool_definitions or TOOL_DEFINITIONS
         executor = ToolExecutor(
             workspace_dir=self.config.workspace_dir,
@@ -246,19 +371,16 @@ class SingleAgentRunner:
             if resp.tpot_ms_p99 > 0:
                 last_tpot_p99 = resp.tpot_ms_p99
 
-            # No tool calls → model is done
             if resp.tool_call_count == 0 or not resp.raw_chunks:
                 final_content = resp.content
                 break
 
-            # Extract tool calls from the raw chunks
             pending_calls = self._extract_tool_calls(resp.raw_chunks)
 
             if not pending_calls:
                 final_content = resp.content
                 break
 
-            # Append assistant message with tool_calls
             assistant_msg: Dict[str, Any] = {"role": "assistant"}
             if resp.content:
                 assistant_msg["content"] = resp.content
@@ -275,7 +397,6 @@ class SingleAgentRunner:
             ]
             messages.append(assistant_msg)
 
-            # Execute each tool call for real
             for tc in pending_calls:
                 try:
                     args = json.loads(tc["arguments"])
@@ -306,6 +427,12 @@ class SingleAgentRunner:
                     result.latency_ms,
                 )
 
+        # --- Extract patch ---
+        # Priority: git diff in workspace > diff block in final response
+        patch = _git_diff(Path(self.config.workspace_dir))
+        if not patch:
+            patch = _extract_patch_from_text(final_content)
+
         avg_tpot = sum(all_tpot_avgs) / len(all_tpot_avgs) if all_tpot_avgs else 0.0
 
         combined = StreamingChatResponse(
@@ -320,7 +447,7 @@ class SingleAgentRunner:
             model=self.config.model_id,
             tool_call_count=total_tool_calls,
         )
-        return combined, all_tc_latencies
+        return combined, all_tc_latencies, patch
 
     @staticmethod
     def _extract_tool_calls(
