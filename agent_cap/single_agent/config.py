@@ -42,7 +42,7 @@ class SingleAgentBenchConfig:
     batch_sizes: List[int] = field(default_factory=lambda: [1, 2, 4, 8, 16])
     enable_tool_calls: bool = True
     tool_definitions: Optional[List[Dict[str, Any]]] = None
-    max_tokens: int = 4096
+    max_tokens: int = 16384
     temperature: float = 0.0
     repetitions: int = 1
     gpu_monitor_interval: float = 0.5
@@ -73,7 +73,7 @@ class SingleAgentBenchConfig:
             batch_sizes=[int(b) for b in (data.get("batch_sizes") or [1])],
             enable_tool_calls=bool(data.get("enable_tool_calls", True)),
             tool_definitions=data.get("tool_definitions"),
-            max_tokens=int(data.get("max_tokens", 4096)),
+            max_tokens=int(data.get("max_tokens", 16384)),
             temperature=float(data.get("temperature", 0.0)),
             repetitions=int(data.get("repetitions", 1)),
             gpu_monitor_interval=float(data.get("gpu_monitor_interval", 0.5)),
