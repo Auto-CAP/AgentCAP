@@ -829,6 +829,53 @@ def cmd_reeval(args):
         )
 
 
+def cmd_single_agent(args):
+    """Run single-agent performance benchmark."""
+    import json as _json
+
+    from agent_cap.single_agent.config import SingleAgentBenchConfig
+    from agent_cap.single_agent.runner import SingleAgentRunner
+
+    config = SingleAgentBenchConfig.from_yaml(args.config)
+
+    print("=" * 70)
+    print("Single-Agent Benchmark")
+    print("=" * 70)
+    print(f"  Name:        {config.name}")
+    print(f"  Model:       {config.model_id}")
+    print(f"  Engine:      {config.serving_engine}")
+    print(f"  Server:      {config.base_url}")
+    print(f"  Dataset:     {config.dataset} (n={config.dataset_count})")
+    print(f"  Batch sizes: {config.batch_sizes}")
+    print(f"  Tool calls:  {'yes' if config.enable_tool_calls else 'no'}")
+    print("=" * 70)
+
+    if args.dry_run:
+        print("\n--- Dry run: full config ---")
+        print(_json.dumps(config.to_dict(), indent=2))
+        return
+
+    runner = SingleAgentRunner(config)
+    results = runner.run()
+
+    print("\n" + "=" * 70)
+    print("Results Summary")
+    print("=" * 70)
+    for m in results:
+        print(
+            f"  batch={m.batch_size:<3d}  mode={m.tool_mode:<12s}  "
+            f"E2E_avg={m.e2e_latency_avg_ms:>8.1f}ms  "
+            f"RPS={m.requests_per_second:>6.2f}  "
+            f"TTFT_avg={m.ttft_avg_ms:>7.1f}ms  "
+            f"TPOT_avg={m.tpot_avg_ms:>7.1f}ms  "
+            f"GPU={m.avg_gpu_util_pct:>5.1f}%  "
+            f"CPU={m.avg_cpu_util_pct:>5.1f}%"
+        )
+
+    out_dir = runner.save_results(results, args.output_dir)
+    print(f"\nResults saved to: {out_dir}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="agent-cap",
@@ -885,6 +932,19 @@ def main():
     )
     p_reeval.add_argument("-v", "--verbose", action="store_true")
 
+    p_single = sub.add_parser(
+        "single-agent",
+        help="Run single-agent performance benchmark (batch-size sweep)",
+    )
+    p_single.add_argument("config", help="Path to single-agent YAML config")
+    p_single.add_argument(
+        "--output-dir", default=None, help="Override output directory"
+    )
+    p_single.add_argument(
+        "--dry-run", action="store_true", help="Print config without running"
+    )
+    p_single.add_argument("-v", "--verbose", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -903,6 +963,10 @@ def main():
         if hasattr(args, "verbose") and args.verbose:
             logging.basicConfig(level=logging.DEBUG)
         cmd_reeval(args)
+    elif args.command == "single-agent":
+        if hasattr(args, "verbose") and args.verbose:
+            logging.basicConfig(level=logging.DEBUG)
+        cmd_single_agent(args)
     else:
         parser.print_help()
 
