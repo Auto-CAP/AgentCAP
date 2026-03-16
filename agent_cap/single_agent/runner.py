@@ -54,8 +54,10 @@ class SingleAgentRunner:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self) -> List[BenchmarkMetrics]:
+    def run(self, limit: int = 0) -> List[BenchmarkMetrics]:
         tasks = load_benchmark(self.config.dataset, self.config.dataset_count)
+        if limit > 0:
+            tasks = tasks[:limit]
         logger.info("Loaded %d tasks from '%s'", len(tasks), self.config.dataset)
 
         all_messages = [t.messages for t in tasks]
@@ -221,6 +223,7 @@ class SingleAgentRunner:
         cumulative_latency = 0.0
         first_ttft: Optional[float] = None
         all_tpot_avgs: List[float] = []
+        last_tpot_p99 = 0.0
         total_tool_calls = 0
         final_content = ""
 
@@ -240,6 +243,8 @@ class SingleAgentRunner:
                 first_ttft = resp.ttft_ms
             if resp.tpot_ms_avg > 0:
                 all_tpot_avgs.append(resp.tpot_ms_avg)
+            if resp.tpot_ms_p99 > 0:
+                last_tpot_p99 = resp.tpot_ms_p99
 
             # No tool calls → model is done
             if resp.tool_call_count == 0 or not resp.raw_chunks:
@@ -311,7 +316,7 @@ class SingleAgentRunner:
             latency_ms=cumulative_latency,
             ttft_ms=first_ttft or 0.0,
             tpot_ms_avg=avg_tpot,
-            tpot_ms_p99=resp.tpot_ms_p99 if resp else 0.0,
+            tpot_ms_p99=last_tpot_p99,
             model=self.config.model_id,
             tool_call_count=total_tool_calls,
         )
