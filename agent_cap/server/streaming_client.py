@@ -12,7 +12,25 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
+
+
+def _iter_sse_lines(response) -> Iterator[str]:
+    """read1() returns bytes as soon as the OS has them (like C read(2)),
+    avoiding the internal 8KB buffer in HTTPResponse.__iter__/readline()
+    that causes all SSE events to arrive at once with identical timestamps."""
+    buf = b""
+    read = getattr(response, "read1", None) or response.read
+    while True:
+        chunk = read(4096)
+        if not chunk:
+            if buf:
+                yield buf.decode("utf-8", errors="replace").rstrip("\r\n")
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line_bytes, buf = buf.split(b"\n", 1)
+            yield line_bytes.decode("utf-8", errors="replace").rstrip("\r")
 
 
 @dataclass
@@ -149,8 +167,7 @@ class StreamingChatClient:
         try:
             response = urllib.request.urlopen(req, timeout=timeout)
 
-            for line_bytes in response:
-                line = line_bytes.decode("utf-8").rstrip("\n").rstrip("\r")
+            for line in _iter_sse_lines(response):
                 if not line or not line.startswith("data: "):
                     continue
 
