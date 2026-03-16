@@ -77,7 +77,7 @@ class StreamingChatClient:
         print(f"TTFT={resp.ttft_ms:.1f}ms  TPOT_avg={resp.tpot_ms_avg:.1f}ms")
     """
 
-    def __init__(self, base_url: str = "http://localhost:30000") -> None:
+    def __init__(self, base_url: str = "http://localhost:8000") -> None:
         self.base_url = base_url.rstrip("/")
         self._server_model_id: Optional[str] = None
 

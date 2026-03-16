@@ -4,7 +4,7 @@
 name: single-agent-with-tools
 model_id: unsloth/GPT-OSS-120b
 serving_engine: vllm
-base_url: http://localhost:30000
+base_url: http://localhost:8000
 
 dataset: swebench_pro
 dataset_count: 50

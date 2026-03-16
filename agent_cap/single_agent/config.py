@@ -36,7 +36,7 @@ class SingleAgentBenchConfig:
     name: str = "single-agent-bench"
     model_id: str = "unsloth/GPT-OSS-120b"
     serving_engine: str = "vllm"
-    base_url: str = "http://localhost:30000"
+    base_url: str = "http://localhost:8000"
     dataset: str = "swebench_pro"
     dataset_count: int = 50
     batch_sizes: List[int] = field(default_factory=lambda: [1, 2, 4, 8, 16])
@@ -66,7 +66,7 @@ class SingleAgentBenchConfig:
             name=str(data.get("name", "single-agent-bench")),
             model_id=str(data.get("model_id", "unsloth/GPT-OSS-120b")),
             serving_engine=str(data.get("serving_engine", "vllm")),
-            base_url=str(data.get("base_url", "http://localhost:30000")),
+            base_url=str(data.get("base_url", "http://localhost:8000")),
             dataset=str(data.get("dataset", "swebench_pro")),
             dataset_count=int(data.get("dataset_count", 50)),
             batch_sizes=[int(b) for b in (data.get("batch_sizes") or [1])],
