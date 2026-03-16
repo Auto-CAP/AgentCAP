@@ -1,46 +1,27 @@
-"""Streaming OpenAI-compatible chat client with true TTFT and TPOT measurement.
+"""Streaming chat client with true TTFT and TPOT measurement.
 
-Uses SSE (Server-Sent Events) streaming to measure:
-- TTFT: Time To First Token (request sent -> first content chunk received)
-- TPOT: Time Per Output Token (inter-token intervals, avg and p99)
-
-Only uses stdlib — no external dependencies.
+Uses aiohttp for real SSE streaming (same approach as vLLM's own
+benchmark_serving.py). urllib buffers the entire chunked response,
+making all token timestamps identical. aiohttp's
+``async for chunk in response.content`` yields each SSE event as it
+arrives from the TCP stream.
 """
 
+import asyncio
 import json
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Dict, List, Optional
 
+import aiohttp
 
-def _iter_sse_lines(response) -> Iterator[str]:
-    """read1() returns bytes as soon as the OS has them (like C read(2)),
-    avoiding the internal 8KB buffer in HTTPResponse.__iter__/readline()
-    that causes all SSE events to arrive at once with identical timestamps."""
-    buf = b""
-    read = getattr(response, "read1", None) or response.read
-    while True:
-        chunk = read(4096)
-        if not chunk:
-            if buf:
-                yield buf.decode("utf-8", errors="replace").rstrip("\r\n")
-            break
-        buf += chunk
-        while b"\n" in buf:
-            line_bytes, buf = buf.split(b"\n", 1)
-            yield line_bytes.decode("utf-8", errors="replace").rstrip("\r")
+AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60)
 
 
 @dataclass
 class StreamingChatResponse:
-    """Response from a streaming chat completion request.
-
-    Extends the concept of ChatResponse with granular timing metrics
-    obtained from SSE streaming.
-    """
-
     content: str
     input_tokens: int
     output_tokens: int
@@ -51,21 +32,13 @@ class StreamingChatResponse:
     tpot_ms_p99: float
     model: str
     tool_call_count: int = 0
+    itl: List[float] = field(default_factory=list)
     token_timestamps: List[float] = field(default_factory=list)
     raw_chunks: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[str] = None
 
 
 def _compute_percentile(values: List[float], percentile: float) -> float:
-    """Compute the given percentile from a list of values.
-
-    Args:
-        values: List of numeric values.
-        percentile: Percentile to compute (0-100).
-
-    Returns:
-        The percentile value, or 0.0 if the list is empty.
-    """
     if not values:
         return 0.0
     sorted_vals = sorted(values)
@@ -75,32 +48,15 @@ def _compute_percentile(values: List[float], percentile: float) -> float:
 
 
 def _mean(values: List[float]) -> float:
-    """Compute mean of a list, returning 0.0 for empty lists."""
     return sum(values) / len(values) if values else 0.0
 
 
 class StreamingChatClient:
-    """OpenAI-compatible streaming chat client with TTFT/TPOT measurement.
-
-    Sends requests with ``stream=True`` and parses SSE chunks to measure
-    the exact time-to-first-token and per-token generation latency.
-
-    Usage::
-
-        client = StreamingChatClient("http://localhost:8000")
-        resp = client.chat(
-            messages=[{"role": "user", "content": "Hello"}],
-            model="gpt-oss-120b",
-        )
-        print(f"TTFT={resp.ttft_ms:.1f}ms  TPOT_avg={resp.tpot_ms_avg:.1f}ms")
-    """
-
     def __init__(self, base_url: str = "http://localhost:8000") -> None:
         self.base_url = base_url.rstrip("/")
         self._server_model_id: Optional[str] = None
 
     def get_server_model_id(self) -> Optional[str]:
-        """Query /v1/models to get the model ID the server actually loaded."""
         if self._server_model_id is not None:
             return self._server_model_id
         try:
@@ -129,6 +85,32 @@ class StreamingChatClient:
         timeout: int = 600,
         stop_token_ids: Optional[List[int]] = None,
     ) -> StreamingChatResponse:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                self._async_chat(
+                    messages,
+                    model,
+                    temperature,
+                    max_tokens,
+                    tools,
+                    timeout,
+                    stop_token_ids,
+                )
+            )
+        finally:
+            loop.close()
+
+    async def _async_chat(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        tools: Optional[List[Dict[str, Any]]],
+        timeout: int,
+        stop_token_ids: Optional[List[int]],
+    ) -> StreamingChatResponse:
         url = f"{self.base_url}/v1/chat/completions"
         payload: Dict[str, Any] = {
             "model": model,
@@ -143,98 +125,112 @@ class StreamingChatClient:
         if stop_token_ids:
             payload["stop_token_ids"] = stop_token_ids
 
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
         content_parts: List[str] = []
         raw_chunks: List[Dict[str, Any]] = []
-        token_timestamps: List[float] = []
+        itl: List[float] = []
         tool_call_fragments: Dict[int, Dict[str, str]] = {}
 
         input_tokens = 0
         output_tokens = 0
         total_tokens = 0
         resp_model = model
-        first_token_time: Optional[float] = None
+        ttft = 0.0
+        most_recent_timestamp = 0.0
 
-        t_start = time.perf_counter()
+        st = time.perf_counter()
 
         try:
-            response = urllib.request.urlopen(req, timeout=timeout)
+            async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                ) as response:
+                    if response.status != 200:
+                        error_body = await response.text()
+                        return StreamingChatResponse(
+                            content="",
+                            input_tokens=0,
+                            output_tokens=0,
+                            total_tokens=0,
+                            latency_ms=(time.perf_counter() - st) * 1000,
+                            ttft_ms=0.0,
+                            tpot_ms_avg=0.0,
+                            tpot_ms_p99=0.0,
+                            model=model,
+                            error=f"HTTP {response.status}: {error_body[:500]}",
+                        )
 
-            for line in _iter_sse_lines(response):
-                if not line or not line.startswith("data: "):
-                    continue
+                    async for chunk_bytes in response.content:
+                        chunk_str = chunk_bytes.decode("utf-8").strip()
+                        if not chunk_str or chunk_str.startswith(":"):
+                            continue
 
-                data_str = line[len("data: ") :]
-                if data_str.strip() == "[DONE]":
-                    break
+                        chunk_str = chunk_str.removeprefix("data: ")
+                        if chunk_str == "[DONE]":
+                            break
 
-                try:
-                    chunk = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
+                        try:
+                            data = json.loads(chunk_str)
+                        except json.JSONDecodeError:
+                            continue
 
-                raw_chunks.append(chunk)
-                resp_model = chunk.get("model", resp_model)
+                        timestamp = time.perf_counter()
+                        raw_chunks.append(data)
+                        resp_model = data.get("model", resp_model)
 
-                # Extract usage (vLLM sends in last chunk)
-                usage = chunk.get("usage")
-                if usage:
-                    input_tokens = int(usage.get("prompt_tokens", 0))
-                    output_tokens = int(usage.get("completion_tokens", 0))
-                    total_tokens = int(
-                        usage.get("total_tokens", input_tokens + output_tokens)
-                    )
+                        usage = data.get("usage")
+                        if usage:
+                            input_tokens = int(usage.get("prompt_tokens", 0))
+                            output_tokens = int(usage.get("completion_tokens", 0))
+                            total_tokens = int(
+                                usage.get("total_tokens", input_tokens + output_tokens)
+                            )
 
-                choices = chunk.get("choices", [])
-                if not choices:
-                    continue
+                        choices = data.get("choices", [])
+                        if not choices:
+                            most_recent_timestamp = timestamp
+                            continue
 
-                delta = choices[0].get("delta", {})
+                        delta = choices[0].get("delta", {})
+                        has_token = False
 
-                content_piece = delta.get("content")
-                if content_piece:
-                    now = time.perf_counter()
-                    token_timestamps.append(now - t_start)
-                    if first_token_time is None:
-                        first_token_time = now
-                    content_parts.append(content_piece)
+                        content_piece = delta.get("content")
+                        if content_piece:
+                            content_parts.append(content_piece)
+                            has_token = True
 
-                reasoning_piece = delta.get("reasoning_content") or delta.get(
-                    "reasoning"
-                )
-                if reasoning_piece:
-                    now = time.perf_counter()
-                    token_timestamps.append(now - t_start)
-                    if first_token_time is None:
-                        first_token_time = now
+                        reasoning = delta.get("reasoning_content") or delta.get(
+                            "reasoning"
+                        )
+                        if reasoning:
+                            has_token = True
 
-                tc_deltas = delta.get("tool_calls")
-                if tc_deltas:
-                    for tc in tc_deltas:
-                        idx = tc.get("index", 0)
-                        if idx not in tool_call_fragments:
-                            tool_call_fragments[idx] = {
-                                "name": "",
-                                "arguments": "",
-                            }
-                        fn = tc.get("function", {})
-                        if fn.get("name"):
-                            tool_call_fragments[idx]["name"] = fn["name"]
-                        if fn.get("arguments"):
-                            tool_call_fragments[idx]["arguments"] += fn["arguments"]
-                            now = time.perf_counter()
-                            token_timestamps.append(now - t_start)
-                            if first_token_time is None:
-                                first_token_time = now
+                        tc_deltas = delta.get("tool_calls")
+                        if tc_deltas:
+                            for tc in tc_deltas:
+                                idx = tc.get("index", 0)
+                                if idx not in tool_call_fragments:
+                                    tool_call_fragments[idx] = {
+                                        "name": "",
+                                        "arguments": "",
+                                    }
+                                fn = tc.get("function", {})
+                                if fn.get("name"):
+                                    tool_call_fragments[idx]["name"] = fn["name"]
+                                if fn.get("arguments"):
+                                    tool_call_fragments[idx]["arguments"] += fn[
+                                        "arguments"
+                                    ]
+                                    has_token = True
 
-            response.close()
+                        if has_token:
+                            if ttft == 0.0:
+                                ttft = timestamp - st
+                            else:
+                                itl.append(timestamp - most_recent_timestamp)
+
+                        most_recent_timestamp = timestamp
 
         except Exception as exc:
             t_end = time.perf_counter()
@@ -243,37 +239,33 @@ class StreamingChatClient:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                latency_ms=(t_end - t_start) * 1000,
-                ttft_ms=(
-                    (first_token_time - t_start) * 1000
-                    if first_token_time
-                    else (t_end - t_start) * 1000
-                ),
+                latency_ms=(t_end - st) * 1000,
+                ttft_ms=ttft * 1000,
                 tpot_ms_avg=0.0,
                 tpot_ms_p99=0.0,
                 model=resp_model,
                 tool_call_count=len(tool_call_fragments),
-                token_timestamps=token_timestamps,
+                itl=[x * 1000 for x in itl],
                 raw_chunks=raw_chunks,
                 error=str(exc),
             )
 
-        t_end = time.perf_counter()
-        latency_ms = (t_end - t_start) * 1000
-        ttft_ms = (
-            (first_token_time - t_start) * 1000 if first_token_time else latency_ms
+        latency = (
+            most_recent_timestamp - st
+            if most_recent_timestamp > st
+            else time.perf_counter() - st
         )
 
-        # TPOT = (decode_time) / (output_tokens - 1)
-        # SSE streaming can't give per-token TPOT because TCP batches packets
-        tpot_avg = 0.0
-        tpot_p99 = 0.0
-        if output_tokens > 1 and ttft_ms < latency_ms:
-            decode_ms = latency_ms - ttft_ms
-            tpot_avg = decode_ms / (output_tokens - 1)
-            tpot_p99 = tpot_avg
+        tpot_avg = _mean(itl) * 1000 if itl else 0.0
+        tpot_p99 = _compute_percentile([x * 1000 for x in itl], 99)
 
-        # Infer tool call count
+        # Fallback: use formula if aiohttp still batched (shouldn't happen)
+        if tpot_avg == 0.0 and output_tokens > 1 and ttft > 0:
+            decode_s = latency - ttft
+            if decode_s > 0:
+                tpot_avg = (decode_s / (output_tokens - 1)) * 1000
+                tpot_p99 = tpot_avg
+
         tool_call_count = len(tool_call_fragments)
         finish_reason = ""
         if raw_chunks:
@@ -288,13 +280,13 @@ class StreamingChatClient:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
-            latency_ms=latency_ms,
-            ttft_ms=ttft_ms,
+            latency_ms=latency * 1000,
+            ttft_ms=ttft * 1000,
             tpot_ms_avg=tpot_avg,
             tpot_ms_p99=tpot_p99,
             model=resp_model,
             tool_call_count=tool_call_count,
-            token_timestamps=token_timestamps,
+            itl=[x * 1000 for x in itl],
             raw_chunks=raw_chunks,
         )
 
