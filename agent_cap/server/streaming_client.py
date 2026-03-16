@@ -181,6 +181,7 @@ class StreamingChatClient:
                                 continue
 
                             timestamp = time.perf_counter()
+                            elapsed_ms = (timestamp - st) * 1000
                             raw_chunks.append(data)
                             resp_model = data.get("model", resp_model)
 
@@ -193,25 +194,35 @@ class StreamingChatClient:
                                         "total_tokens", input_tokens + output_tokens
                                     )
                                 )
+                                print(
+                                    f"      [{elapsed_ms:>8.1f}ms] usage: in={input_tokens} out={output_tokens}"
+                                )
+                                most_recent_timestamp = timestamp
+                                continue
 
                             choices = data.get("choices", [])
                             if not choices:
+                                print(f"      [{elapsed_ms:>8.1f}ms] no-choices chunk")
                                 most_recent_timestamp = timestamp
                                 continue
 
                             delta = choices[0].get("delta", {})
+                            finish = choices[0].get("finish_reason")
                             has_token = False
+                            token_desc = ""
 
                             content_piece = delta.get("content")
                             if content_piece:
                                 content_parts.append(content_piece)
                                 has_token = True
+                                token_desc = f"content={repr(content_piece[:40])}"
 
                             reasoning = delta.get("reasoning_content") or delta.get(
                                 "reasoning"
                             )
                             if reasoning:
                                 has_token = True
+                                token_desc = f"reasoning={repr(str(reasoning)[:40])}"
 
                             tc_deltas = delta.get("tool_calls")
                             if tc_deltas:
@@ -225,11 +236,20 @@ class StreamingChatClient:
                                     fn = tc.get("function", {})
                                     if fn.get("name"):
                                         tool_call_fragments[idx]["name"] = fn["name"]
+                                        token_desc = f"tool_name={fn['name']}"
                                     if fn.get("arguments"):
                                         tool_call_fragments[idx]["arguments"] += fn[
                                             "arguments"
                                         ]
                                         has_token = True
+                                        token_desc = (
+                                            f"tool_args={repr(fn['arguments'][:40])}"
+                                        )
+
+                            if finish:
+                                print(f"      [{elapsed_ms:>8.1f}ms] finish={finish}")
+                            elif token_desc:
+                                print(f"      [{elapsed_ms:>8.1f}ms] {token_desc}")
 
                             if has_token:
                                 if ttft == 0.0:

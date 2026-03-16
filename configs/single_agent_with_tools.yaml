@@ -8,7 +8,7 @@ base_url: http://localhost:8000
 
 dataset: swebench_pro
 dataset_count: 50
-batch_sizes: [1, 2, 4, 8, 16, 32]
+batch_sizes: [1]
 
 enable_tool_calls: true
 # GPT-OSS stop tokens: </call>=200012, </return>=200002 (PR #35076 client-side fix)
