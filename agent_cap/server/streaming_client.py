@@ -152,7 +152,10 @@ class StreamingChatClient:
         try:
             response = urllib.request.urlopen(req, timeout=timeout)
 
-            for line_bytes in response:
+            while True:
+                line_bytes = response.readline()
+                if not line_bytes:
+                    break
                 line = line_bytes.decode("utf-8").rstrip("\n").rstrip("\r")
                 if not line or not line.startswith("data: "):
                     continue
@@ -169,7 +172,6 @@ class StreamingChatClient:
                 raw_chunks.append(chunk)
                 resp_model = chunk.get("model", resp_model)
 
-                # Extract usage (vLLM sends in last chunk)
                 usage = chunk.get("usage")
                 if usage:
                     input_tokens = int(usage.get("prompt_tokens", 0))
@@ -184,7 +186,6 @@ class StreamingChatClient:
 
                 delta = choices[0].get("delta", {})
 
-                # --- Content tokens ---
                 content_piece = delta.get("content")
                 if content_piece:
                     now = time.perf_counter()
@@ -193,7 +194,6 @@ class StreamingChatClient:
                         first_token_time = now
                     content_parts.append(content_piece)
 
-                # --- Tool call deltas ---
                 tc_deltas = delta.get("tool_calls")
                 if tc_deltas:
                     for tc in tc_deltas:
@@ -252,11 +252,6 @@ class StreamingChatClient:
 
         tpot_avg = _mean(intervals_ms)
         tpot_p99 = _compute_percentile(intervals_ms, 99)
-
-        # Fallback: estimate from (latency - ttft) / (output_tokens - 1)
-        if tpot_avg == 0.0 and output_tokens > 1 and ttft_ms < latency_ms:
-            tpot_avg = (latency_ms - ttft_ms) / (output_tokens - 1)
-            tpot_p99 = tpot_avg
 
         # Infer tool call count
         tool_call_count = len(tool_call_fragments)
@@ -355,7 +350,10 @@ class StreamingChatClient:
             response = urllib.request.urlopen(req, timeout=timeout)
             event_type = ""
 
-            for line_bytes in response:
+            while True:
+                line_bytes = response.readline()
+                if not line_bytes:
+                    break
                 line = line_bytes.decode("utf-8").rstrip("\n").rstrip("\r")
 
                 if line.startswith("event: "):
@@ -464,10 +462,6 @@ class StreamingChatClient:
 
         tpot_avg = _mean(intervals_ms)
         tpot_p99 = _compute_percentile(intervals_ms, 99)
-
-        if tpot_avg == 0.0 and output_tokens > 1 and ttft_ms < latency_ms:
-            tpot_avg = (latency_ms - ttft_ms) / (output_tokens - 1)
-            tpot_p99 = tpot_avg
 
         return StreamingChatResponse(
             content="".join(content_parts),
