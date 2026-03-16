@@ -1,0 +1,27 @@
+# Single-Agent Benchmark — WITH tool calls (agentic loop)
+# Model uses read_file/write_file/run_shell/search_code, up to max_turns rounds.
+
+name: single-agent-with-tools
+model_id: unsloth/GPT-OSS-120b
+serving_engine: vllm
+base_url: http://localhost:30000
+
+dataset: swebench_pro
+dataset_count: 50
+batch_sizes: [1, 2, 4, 8, 16, 32]
+
+enable_tool_calls: true
+max_turns: 5
+workspace_dir: /tmp/agent_cap_workspace
+shell_timeout: 30
+
+max_tokens: 4096
+temperature: 0.0
+repetitions: 1
+
+gpu_monitor_interval: 0.5
+cpu_monitor_interval: 0.5
+tp: 8
+gpu_type: H100-80G
+
+output_dir: results/single_agent_with_tools

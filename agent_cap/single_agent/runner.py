@@ -142,29 +142,27 @@ class SingleAgentRunner:
         results: List[BenchmarkMetrics] = []
         predictions: List[Dict[str, str]] = []
 
-        tool_modes = ["no_tools"]
-        if self.config.enable_tool_calls:
-            tool_modes.append("with_tools")
+        tool_mode = "with_tools" if self.config.enable_tool_calls else "no_tools"
+        logger.info("Mode: %s", tool_mode)
 
         for batch_size in self.config.batch_sizes:
-            for tool_mode in tool_modes:
-                for rep in range(self.config.repetitions):
-                    logger.info(
-                        "batch_size=%d  tool_mode=%s  rep=%d/%d",
-                        batch_size,
-                        tool_mode,
-                        rep + 1,
-                        self.config.repetitions,
-                    )
-                    metrics, preds = self._run_batch(
-                        all_messages,
-                        eval_configs,
-                        batch_size,
-                        tool_mode,
-                    )
-                    results.append(metrics)
-                    predictions.extend(preds)
-                    self._print_summary(metrics)
+            for rep in range(self.config.repetitions):
+                logger.info(
+                    "batch_size=%d  tool_mode=%s  rep=%d/%d",
+                    batch_size,
+                    tool_mode,
+                    rep + 1,
+                    self.config.repetitions,
+                )
+                metrics, preds = self._run_batch(
+                    all_messages,
+                    eval_configs,
+                    batch_size,
+                    tool_mode,
+                )
+                results.append(metrics)
+                predictions.extend(preds)
+                self._print_summary(metrics)
 
         return results, predictions
 
