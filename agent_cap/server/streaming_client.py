@@ -109,20 +109,8 @@ class StreamingChatClient:
         max_tokens: int = 4096,
         tools: Optional[List[Dict[str, Any]]] = None,
         timeout: int = 600,
+        stop_token_ids: Optional[List[int]] = None,
     ) -> StreamingChatResponse:
-        """Send a streaming chat completion request.
-
-        Args:
-            messages: OpenAI-format message list.
-            model: Model identifier.
-            temperature: Sampling temperature.
-            max_tokens: Maximum tokens to generate.
-            tools: Optional OpenAI function-calling tool definitions.
-            timeout: HTTP read timeout in seconds.
-
-        Returns:
-            StreamingChatResponse with timing metrics.
-        """
         url = f"{self.base_url}/v1/chat/completions"
         payload: Dict[str, Any] = {
             "model": model,
@@ -134,6 +122,8 @@ class StreamingChatClient:
         }
         if tools:
             payload["tools"] = tools
+        if stop_token_ids:
+            payload["stop_token_ids"] = stop_token_ids
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -290,23 +280,8 @@ class StreamingChatClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         concurrency: int = 1,
         timeout: int = 600,
+        stop_token_ids: Optional[List[int]] = None,
     ) -> List[StreamingChatResponse]:
-        """Send multiple chat requests concurrently.
-
-        Each individual request uses streaming for TTFT/TPOT measurement.
-
-        Args:
-            messages_list: List of message lists (one per request).
-            model: Model identifier.
-            temperature: Sampling temperature.
-            max_tokens: Maximum tokens to generate per request.
-            tools: Optional tool definitions.
-            concurrency: Maximum number of parallel requests.
-            timeout: HTTP read timeout per request.
-
-        Returns:
-            List of StreamingChatResponse, one per input.
-        """
         results: List[Optional[StreamingChatResponse]] = [None] * len(messages_list)
 
         def _run(idx: int, msgs: List[Dict[str, Any]]) -> None:
@@ -317,6 +292,7 @@ class StreamingChatClient:
                 max_tokens=max_tokens,
                 tools=tools,
                 timeout=timeout,
+                stop_token_ids=stop_token_ids,
             )
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:

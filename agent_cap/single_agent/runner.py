@@ -240,6 +240,7 @@ class SingleAgentRunner:
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 concurrency=batch_size,
+                stop_token_ids=self.config.stop_token_ids,
             )
             tc_latencies = []
             preds = self._build_predictions(responses, eval_configs)
@@ -371,6 +372,7 @@ class SingleAgentRunner:
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 tools=tools,
+                stop_token_ids=self.config.stop_token_ids,
             )
 
             cumulative_input += resp.input_tokens
