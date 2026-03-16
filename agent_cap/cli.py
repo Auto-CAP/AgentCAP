@@ -856,7 +856,8 @@ def cmd_single_agent(args):
         return
 
     runner = SingleAgentRunner(config)
-    results = runner.run()
+    limit = getattr(args, "limit", 0) or 0
+    results = runner.run(limit=limit)
 
     print("\n" + "=" * 70)
     print("Results Summary")
@@ -944,6 +945,12 @@ def main():
         "--dry-run", action="store_true", help="Print config without running"
     )
     p_single.add_argument("-v", "--verbose", action="store_true")
+    p_single.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Only run first N tasks (0 = all, useful for quick testing)",
+    )
 
     args = parser.parse_args()
 

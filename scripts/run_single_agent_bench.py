@@ -48,6 +48,12 @@ def main() -> None:
         action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Only run first N tasks (0 = all, useful for quick testing)",
+    )
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
@@ -79,7 +85,7 @@ def main() -> None:
         return
 
     runner = SingleAgentRunner(config)
-    results = runner.run()
+    results = runner.run(limit=args.limit)
 
     print("\n" + "=" * 70)
     print("Results Summary")
