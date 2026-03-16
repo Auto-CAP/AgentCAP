@@ -192,11 +192,16 @@ class SingleAgentRunner:
         tool_mode = "with_tools" if self.config.enable_tool_calls else "no_tools"
         logger.info("Mode: %s", tool_mode)
 
+        num_tasks = len(tasks)
+
         for batch_size in self.config.batch_sizes:
+            effective_bs = min(batch_size, num_tasks)
             for rep in range(self.config.repetitions):
                 logger.info(
-                    "batch_size=%d  tool_mode=%s  rep=%d/%d",
+                    "batch_size=%d (effective=%d, tasks=%d)  tool_mode=%s  rep=%d/%d",
                     batch_size,
+                    effective_bs,
+                    num_tasks,
                     tool_mode,
                     rep + 1,
                     self.config.repetitions,
@@ -204,9 +209,10 @@ class SingleAgentRunner:
                 metrics, tr = self._run_batch(
                     all_messages,
                     eval_configs,
-                    batch_size,
+                    effective_bs,
                     tool_mode,
                 )
+                metrics.batch_size = batch_size
                 results.append(metrics)
                 task_results.extend(tr)
                 self._print_summary(metrics)
@@ -509,6 +515,15 @@ class SingleAgentRunner:
             cumulative_input += resp.input_tokens
             cumulative_output += resp.output_tokens
             cumulative_latency += resp.latency_ms
+            logger.info(
+                "  turn=%d  in_tok=%d  out_tok=%d  ttft=%.1fms  latency=%.1fms  tool_calls=%d",
+                turn,
+                resp.input_tokens,
+                resp.output_tokens,
+                resp.ttft_ms,
+                resp.latency_ms,
+                resp.tool_call_count,
+            )
             if first_ttft is None:
                 first_ttft = resp.ttft_ms
             if resp.tpot_ms_avg > 0:
