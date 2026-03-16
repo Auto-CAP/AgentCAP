@@ -12,7 +12,30 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
+
+
+def _iter_sse_lines(response) -> Iterator[str]:
+    """Yield SSE lines in real-time using unbuffered read1().
+
+    Python's HTTPResponse wraps the socket in BufferedIOBase. Both
+    __iter__ and readline() can over-buffer, causing all SSE events
+    to arrive at once.  read1() returns data as soon as the OS has
+    any bytes available (like C's read(2)), giving us true per-token
+    timestamps for TTFT/TPOT.
+    """
+    buf = b""
+    read = getattr(response, "read1", None) or response.read
+    while True:
+        chunk = read(4096)
+        if not chunk:
+            if buf:
+                yield buf.decode("utf-8", errors="replace").rstrip("\r\n")
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line_bytes, buf = buf.split(b"\n", 1)
+            yield line_bytes.decode("utf-8", errors="replace").rstrip("\r")
 
 
 @dataclass
@@ -152,11 +175,7 @@ class StreamingChatClient:
         try:
             response = urllib.request.urlopen(req, timeout=timeout)
 
-            while True:
-                line_bytes = response.readline()
-                if not line_bytes:
-                    break
-                line = line_bytes.decode("utf-8").rstrip("\n").rstrip("\r")
+            for line in _iter_sse_lines(response):
                 if not line or not line.startswith("data: "):
                     continue
 
@@ -350,12 +369,7 @@ class StreamingChatClient:
             response = urllib.request.urlopen(req, timeout=timeout)
             event_type = ""
 
-            while True:
-                line_bytes = response.readline()
-                if not line_bytes:
-                    break
-                line = line_bytes.decode("utf-8").rstrip("\n").rstrip("\r")
-
+            for line in _iter_sse_lines(response):
                 if line.startswith("event: "):
                     event_type = line[len("event: ") :]
                     continue
