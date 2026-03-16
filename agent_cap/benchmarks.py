@@ -1,4 +1,4 @@
-"""Load public benchmarks (GSM8K, HumanEval) as TaskDef lists."""
+"""Load public benchmarks (GSM8K, HumanEval, SWE-Bench Pro, etc.) as TaskDef lists."""
 
 import random
 import re
@@ -21,6 +21,7 @@ def load_benchmark(name: str, num_tasks: int = 50, seed: int = 42) -> List[TaskD
         "gpqa": _load_gpqa,
         "mmlu_pro": _load_mmlu_pro,
         "bigcodebench": _load_bigcodebench,
+        "swebench_pro": _load_swebench_pro,
     }
     if name not in loaders:
         raise ValueError(f"Unknown benchmark: {name}. Supported: {list(loaders)}")
@@ -218,6 +219,78 @@ def _load_bigcodebench(num_tasks: int, seed: int) -> List[TaskDef]:
                     "type": "bigcodebench",
                     "test_code": packed_test,
                     "entry_point": entry_point,
+                },
+            )
+        )
+    return tasks
+
+
+def _load_swebench_pro(
+    num_tasks: int,
+    seed: int,
+    dataset_name: str = "princeton-nlp/SWE-bench_Verified",
+) -> List[TaskDef]:
+    """Load SWE-Bench Pro (Verified) as a list of TaskDef.
+
+    Each task presents a GitHub issue and asks the model to produce a
+    unified-diff patch that resolves it.
+
+    Args:
+        num_tasks: Number of tasks to sample (0 = all).
+        seed: Random seed for reproducible sampling.
+        dataset_name: HuggingFace dataset identifier.
+    """
+    from datasets import load_dataset
+
+    ds = load_dataset(dataset_name, split="test")
+    samples = _sample(list(ds), num_tasks, seed)
+
+    tasks: List[TaskDef] = []
+    for i, ex in enumerate(samples):
+        instance_id = ex.get("instance_id", f"swebench-{i}")
+        repo = ex.get("repo", "unknown/repo")
+        base_commit = ex.get("base_commit", "")
+        problem_statement = ex.get("problem_statement", "")
+        hints_text = ex.get("hints_text", "")
+        gold_patch = ex.get("patch", "")
+        test_patch = ex.get("test_patch", "")
+
+        # Build the prompt
+        hint_section = ""
+        if hints_text and hints_text.strip():
+            hint_section = (
+                "\n\n## Hints\n"
+                "The following hints may help locate the relevant code:\n"
+                f"{hints_text.strip()}\n"
+            )
+
+        prompt = (
+            f"You are a software engineer working on the repository **{repo}** "
+            f"(base commit: `{base_commit}`).\n\n"
+            f"## Issue\n{problem_statement.strip()}\n"
+            f"{hint_section}\n"
+            "## Task\n"
+            "Analyze the issue above and produce a **unified diff patch** "
+            "(the output of `git diff`) that fixes it.\n\n"
+            "Requirements:\n"
+            "- Output ONLY the patch in a ```diff code block.\n"
+            "- The patch must apply cleanly to the base commit.\n"
+            "- Do not include unrelated changes.\n"
+        )
+
+        tasks.append(
+            TaskDef(
+                id=f"swebench_pro-{instance_id}",
+                name=f"[{repo}] {problem_statement[:60]}",
+                messages=[{"role": "user", "content": prompt}],
+                category="software_engineering",
+                eval_config={
+                    "type": "swebench",
+                    "instance_id": instance_id,
+                    "repo": repo,
+                    "base_commit": base_commit,
+                    "expected_patch": gold_patch,
+                    "test_patch": test_patch,
                 },
             )
         )
