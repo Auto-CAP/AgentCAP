@@ -515,14 +515,11 @@ class SingleAgentRunner:
             cumulative_input += resp.input_tokens
             cumulative_output += resp.output_tokens
             cumulative_latency += resp.latency_ms
-            logger.info(
-                "  turn=%d  in_tok=%d  out_tok=%d  ttft=%.1fms  latency=%.1fms  tool_calls=%d",
-                turn,
-                resp.input_tokens,
-                resp.output_tokens,
-                resp.ttft_ms,
-                resp.latency_ms,
-                resp.tool_call_count,
+            print(
+                f"    turn={turn}  in_tok={resp.input_tokens}  "
+                f"out_tok={resp.output_tokens}  ttft={resp.ttft_ms:.1f}ms  "
+                f"tpot={resp.tpot_ms_avg:.2f}ms  latency={resp.latency_ms:.1f}ms  "
+                f"tool_calls={resp.tool_call_count}"
             )
             if first_ttft is None:
                 first_ttft = resp.ttft_ms
