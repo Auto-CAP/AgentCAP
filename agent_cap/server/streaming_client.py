@@ -208,6 +208,10 @@ class StreamingChatClient:
                             tool_call_fragments[idx]["name"] = fn["name"]
                         if fn.get("arguments"):
                             tool_call_fragments[idx]["arguments"] += fn["arguments"]
+                            now = time.perf_counter()
+                            token_timestamps.append(now - t_start)
+                            if first_token_time is None:
+                                first_token_time = now
 
             response.close()
 
@@ -385,7 +389,13 @@ class StreamingChatClient:
                 elif event_type == "response.function_call_arguments.delta":
                     cid = evt.get("call_id", evt.get("item_id", ""))
                     if cid in tc_fragments:
-                        tc_fragments[cid]["arguments"] += evt.get("delta", "")
+                        delta_arg = evt.get("delta", "")
+                        tc_fragments[cid]["arguments"] += delta_arg
+                        if delta_arg:
+                            now = time.perf_counter()
+                            token_timestamps.append(now - t_start)
+                            if first_token_time is None:
+                                first_token_time = now
 
                 elif event_type == "response.output_item.done":
                     item = evt.get("item", {})
