@@ -230,9 +230,17 @@ class SingleAgentRunner:
                 if ws.setup():
                     workspaces[i] = ws
                 else:
-                    logger.error(
-                        "Environment setup failed for %s", ec.get("instance_id")
+                    logger.warning(
+                        "Skipping %s (image not available)", ec.get("instance_id")
                     )
+
+            ready = sum(1 for w in workspaces if w is not None)
+            logger.info(
+                "%d/%d tasks ready, %d skipped", ready, num_tasks, num_tasks - ready
+            )
+            if ready == 0:
+                logger.error("No tasks ready. Did you push the Docker images?")
+                return [], []
 
         # Deduplicate batch sizes (bs > num_tasks is same as num_tasks)
         seen_effective: set = set()
