@@ -24,7 +24,7 @@ repetitions: 1
 
 gpu_monitor_interval: 0.5
 cpu_monitor_interval: 0.5
-tp: 8
+tp: 1
 gpu_type: H100-80G
 
 output_dir: results/single_agent_with_tools
