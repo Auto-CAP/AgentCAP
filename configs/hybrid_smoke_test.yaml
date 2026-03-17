@@ -1,0 +1,20 @@
+name: smoke-qwen32b-plans-qwen4b
+description: "Smoke test: Qwen3-32B plans, Qwen3-4B executes"
+experiment_type: plan-execute
+
+planner:
+  id: Qwen/Qwen3-32B
+  base_url: http://localhost:30000
+  is_local: true
+  throughput_tok_per_sec: 22.3
+
+executor:
+  id: Qwen/Qwen3-4B
+  base_url: http://localhost:30001
+  is_local: true
+  throughput_tok_per_sec: 136.7
+
+mcp_server_url: http://localhost:1984
+max_turns: 20
+max_tokens: 8192
+plan_max_tokens: 4096

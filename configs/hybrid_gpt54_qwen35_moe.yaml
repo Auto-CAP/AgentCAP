@@ -1,0 +1,22 @@
+name: gpt54-qwen35moe
+description: "GPT-5.4 plans, Qwen3.5-35B-A3B MoE executes"
+experiment_type: plan-execute
+
+planner:
+  id: gpt-5.4
+  base_url: https://api.openai.com
+  api_key: ${OPENAI_API_KEY}
+  is_local: false
+  input_price_per_1m: 2.5
+  output_price_per_1m: 15.0
+
+executor:
+  id: Qwen/Qwen3.5-35B-A3B
+  base_url: http://localhost:30000
+  is_local: true
+  throughput_tok_per_sec: 0
+
+mcp_server_url: http://localhost:1984
+max_turns: 20
+max_tokens: 8192
+plan_max_tokens: 4096

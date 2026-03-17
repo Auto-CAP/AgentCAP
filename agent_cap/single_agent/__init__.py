@@ -8,8 +8,7 @@ different batch sizes, with and without tool calls, collecting:
 - Agentic-specific: Total input / output tokens, tool call count, avg tool latency
 - Hardware: GPU utilisation, CPU utilisation
 
-Tool calls are REAL — read_file, write_file, run_shell, search_code all
-execute against an actual workspace directory.
+Tool calls execute inside Docker containers (SWE-bench Pro pre-built images).
 """
 
 from agent_cap.single_agent.config import SingleAgentBenchConfig

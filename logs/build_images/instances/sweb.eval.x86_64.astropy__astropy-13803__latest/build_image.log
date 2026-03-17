@@ -1,0 +1,59 @@
+2026-03-17 15:28:47,934 - INFO - Building image sweb.eval.x86_64.astropy__astropy-13803:latest
+Using dockerfile:
+FROM --platform=linux/x86_64 sweb.env.py.x86_64.428468730904ff6b4232aa:latest
+
+COPY ./setup_repo.sh /root/
+RUN sed -i -e 's/\r$//' /root/setup_repo.sh
+RUN /bin/bash /root/setup_repo.sh
+
+WORKDIR /testbed/
+
+Adding (1) setup scripts to image build repo
+2026-03-17 15:28:47,934 - INFO - [SETUP SCRIPT] setup_repo.sh:
+#!/bin/bash
+set -euxo pipefail
+git clone -o origin  --single-branch https://github.com/astropy/astropy /testbed
+chmod -R 777 /testbed
+cd /testbed
+git reset --hard 192be538570db75f1f3bf5abe0c7631750e6addc
+git remote remove origin
+TARGET_TIMESTAMP=$(git show -s --format=%ci 192be538570db75f1f3bf5abe0c7631750e6addc)
+git tag -l | while read tag; do TAG_COMMIT=$(git rev-list -n 1 "$tag"); TAG_TIME=$(git show -s --format=%ci "$TAG_COMMIT"); if [[ "$TAG_TIME" > "$TARGET_TIMESTAMP" ]]; then git tag -d "$tag"; fi; done
+git reflog expire --expire=now --all
+git gc --prune=now --aggressive
+AFTER_TIMESTAMP=$(date -d "$TARGET_TIMESTAMP + 1 second" '+%Y-%m-%d %H:%M:%S')
+COMMIT_COUNT=$(git log --oneline --all --since="$AFTER_TIMESTAMP" | wc -l)
+[ "$COMMIT_COUNT" -eq 0 ] || exit 1
+source /opt/miniconda3/bin/activate
+conda activate testbed
+echo "Current environment: $CONDA_DEFAULT_ENV"
+sed -i 's/requires = \["setuptools",/requires = \["setuptools==68.0.0",/' pyproject.toml
+python -m pip install -e .[test] --verbose
+git config --global user.email setup@swebench.config
+git config --global user.name SWE-bench
+git commit --allow-empty -am SWE-bench
+
+2026-03-17 15:28:47,934 - INFO - Building docker image sweb.eval.x86_64.astropy__astropy-13803:latest in logs/build_images/instances/sweb.eval.x86_64.astropy__astropy-13803__latest with platform linux/x86_64
+2026-03-17 15:28:47,943 - INFO - Step 1/5 : FROM --platform=linux/x86_64 sweb.env.py.x86_64.428468730904ff6b4232aa:latest
+2026-03-17 15:28:47,943 - INFO - 
+2026-03-17 15:28:47,951 - INFO - ---> 145a5b463e5d
+2026-03-17 15:28:47,951 - INFO - Step 2/5 : COPY ./setup_repo.sh /root/
+2026-03-17 15:28:47,951 - INFO - 
+2026-03-17 15:28:54,019 - INFO - ---> cc167991b25e
+2026-03-17 15:28:54,019 - INFO - Step 3/5 : RUN sed -i -e 's/\r$//' /root/setup_repo.sh
+2026-03-17 15:28:54,019 - INFO - 
+2026-03-17 15:28:54,050 - INFO - ---> Running in 3f2b3f14d0a6
+2026-03-17 15:28:59,437 - INFO - ---> Removed intermediate container 3f2b3f14d0a6
+2026-03-17 15:28:59,437 - INFO - ---> 248bc359745e
+2026-03-17 15:28:59,437 - INFO - Step 4/5 : RUN /bin/bash /root/setup_repo.sh
+2026-03-17 15:28:59,437 - INFO - 
+2026-03-17 15:28:59,460 - INFO - ---> Running in b96b979808b6
+2026-03-17 15:28:59,560 - INFO - + git clone -o origin --single-branch https://github.com/astropy/astropy /testbed
+2026-03-17 15:28:59,561 - INFO - Cloning into '/testbed'...
+2026-03-17 15:29:07,772 - INFO - + chmod -R 777 /testbed
+2026-03-17 15:29:07,787 - INFO - + cd /testbed
++ git reset --hard 192be538570db75f1f3bf5abe0c7631750e6addc
+2026-03-17 15:29:07,789 - INFO - fatal: Could not parse object '192be538570db75f1f3bf5abe0c7631750e6addc'.
+2026-03-17 15:29:08,101 - INFO - ---> Removed intermediate container b96b979808b6
+2026-03-17 15:29:08,103 - ERROR - Error: The command '/bin/sh -c /bin/bash /root/setup_repo.sh' returned a non-zero code: 128
+2026-03-17 15:29:08,103 - ERROR - docker.errors.BuildError during sweb.eval.x86_64.astropy__astropy-13803:latest: The command '/bin/sh -c /bin/bash /root/setup_repo.sh' returned a non-zero code: 128

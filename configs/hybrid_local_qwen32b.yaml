@@ -1,0 +1,13 @@
+name: local-qwen32b
+description: "Baseline: Qwen3-32B alone (no planner)"
+experiment_type: local-only
+
+executor:
+  id: Qwen/Qwen3-32B
+  base_url: http://localhost:30000
+  is_local: true
+  throughput_tok_per_sec: 22.3
+
+mcp_server_url: http://localhost:1984
+max_turns: 20
+max_tokens: 8192

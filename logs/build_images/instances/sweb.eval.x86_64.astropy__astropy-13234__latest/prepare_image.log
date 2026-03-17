@@ -1,0 +1,3 @@
+2026-03-17 15:24:54,312 - INFO - Environment image sweb.env.py.x86_64.428468730904ff6b4232aa:latest found for astropy__astropy-13234
+Building instance image sweb.eval.x86_64.astropy__astropy-13234:latest for astropy__astropy-13234
+2026-03-17 15:24:54,343 - INFO - Image sweb.eval.x86_64.astropy__astropy-13234:latest already exists, skipping build.

@@ -1,0 +1,58 @@
+2026-03-17 15:14:12,986 - INFO - Building image sweb.eval.x86_64.astropy__astropy-13132:latest
+Using dockerfile:
+FROM --platform=linux/x86_64 sweb.env.py.x86_64.428468730904ff6b4232aa:latest
+
+COPY ./setup_repo.sh /root/
+RUN sed -i -e 's/\r$//' /root/setup_repo.sh
+RUN /bin/bash /root/setup_repo.sh
+
+WORKDIR /testbed/
+
+Adding (1) setup scripts to image build repo
+2026-03-17 15:14:12,986 - INFO - [SETUP SCRIPT] setup_repo.sh:
+#!/bin/bash
+set -euxo pipefail
+git clone -o origin  --single-branch https://github.com/astropy/astropy /testbed
+chmod -R 777 /testbed
+cd /testbed
+git reset --hard 3a0cd2d8cd7b459cdc1e1b97a14f3040ccc1fffc
+git remote remove origin
+TARGET_TIMESTAMP=$(git show -s --format=%ci 3a0cd2d8cd7b459cdc1e1b97a14f3040ccc1fffc)
+git tag -l | while read tag; do TAG_COMMIT=$(git rev-list -n 1 "$tag"); TAG_TIME=$(git show -s --format=%ci "$TAG_COMMIT"); if [[ "$TAG_TIME" > "$TARGET_TIMESTAMP" ]]; then git tag -d "$tag"; fi; done
+git reflog expire --expire=now --all
+git gc --prune=now --aggressive
+AFTER_TIMESTAMP=$(date -d "$TARGET_TIMESTAMP + 1 second" '+%Y-%m-%d %H:%M:%S')
+COMMIT_COUNT=$(git log --oneline --all --since="$AFTER_TIMESTAMP" | wc -l)
+[ "$COMMIT_COUNT" -eq 0 ] || exit 1
+source /opt/miniconda3/bin/activate
+conda activate testbed
+echo "Current environment: $CONDA_DEFAULT_ENV"
+sed -i 's/requires = \["setuptools",/requires = \["setuptools==68.0.0",/' pyproject.toml
+python -m pip install -e .[test] --verbose
+git config --global user.email setup@swebench.config
+git config --global user.name SWE-bench
+git commit --allow-empty -am SWE-bench
+
+2026-03-17 15:14:12,986 - INFO - Building docker image sweb.eval.x86_64.astropy__astropy-13132:latest in logs/build_images/instances/sweb.eval.x86_64.astropy__astropy-13132__latest with platform linux/x86_64
+2026-03-17 15:14:12,996 - INFO - Step 1/5 : FROM --platform=linux/x86_64 sweb.env.py.x86_64.428468730904ff6b4232aa:latest
+2026-03-17 15:14:12,996 - INFO - 
+2026-03-17 15:14:13,005 - INFO - ---> 145a5b463e5d
+2026-03-17 15:14:13,005 - INFO - Step 2/5 : COPY ./setup_repo.sh /root/
+2026-03-17 15:14:13,005 - INFO - 
+2026-03-17 15:14:13,494 - INFO - ---> Using cache
+2026-03-17 15:14:13,494 - INFO - ---> 8ab4ec438ba0
+2026-03-17 15:14:13,495 - INFO - Step 3/5 : RUN sed -i -e 's/\r$//' /root/setup_repo.sh
+2026-03-17 15:14:13,495 - INFO - 
+2026-03-17 15:14:13,514 - INFO - ---> Using cache
+2026-03-17 15:14:13,514 - INFO - ---> 39ee4736e701
+2026-03-17 15:14:13,514 - INFO - Step 4/5 : RUN /bin/bash /root/setup_repo.sh
+2026-03-17 15:14:13,514 - INFO - 
+2026-03-17 15:14:13,535 - INFO - ---> Using cache
+2026-03-17 15:14:13,535 - INFO - ---> b03ccdf292cd
+2026-03-17 15:14:13,535 - INFO - Step 5/5 : WORKDIR /testbed/
+2026-03-17 15:14:13,535 - INFO - 
+2026-03-17 15:14:13,635 - INFO - ---> Using cache
+2026-03-17 15:14:13,635 - INFO - ---> 08fc4e49c7a2
+2026-03-17 15:14:13,636 - INFO - Successfully built 08fc4e49c7a2
+2026-03-17 15:14:13,647 - INFO - Successfully tagged sweb.eval.x86_64.astropy__astropy-13132:latest
+2026-03-17 15:14:13,647 - INFO - Image built successfully!

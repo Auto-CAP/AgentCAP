@@ -1,0 +1,2 @@
+2026-03-17 15:40:18,218 - INFO - Environment image sweb.env.py.x86_64.428468730904ff6b4232aa:latest found for astropy__astropy-8715
+Building instance image sweb.eval.x86_64.astropy__astropy-8715:latest for astropy__astropy-8715

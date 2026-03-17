@@ -13,9 +13,7 @@ no_tools mode (direct patch):
 import csv
 import json
 import logging
-import os
 import re
-import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,138 +34,6 @@ from agent_cap.single_agent.tool_executor import (
 from agent_cap.single_agent.docker_env import DockerWorkspace
 
 logger = logging.getLogger("agent_cap.single_agent")
-
-
-# ------------------------------------------------------------------
-# Repo + test helpers
-# ------------------------------------------------------------------
-
-
-def _clone_repo(repo: str, base_commit: str, workspace: Path) -> bool:
-    if workspace.exists():
-        shutil.rmtree(workspace)
-    workspace.mkdir(parents=True, exist_ok=True)
-
-    repo_url = f"https://github.com/{repo}.git"
-    try:
-        subprocess.run(
-            ["git", "clone", "--depth=50", repo_url, str(workspace)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        subprocess.run(
-            ["git", "checkout", base_commit],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(workspace),
-        )
-        return True
-    except Exception as exc:
-        logger.error("Clone failed for %s@%s: %s", repo, base_commit[:12], exc)
-        return False
-
-
-def _apply_test_patch(test_patch: str, workspace: Path) -> bool:
-    if not test_patch or not test_patch.strip():
-        return True
-    try:
-        proc = subprocess.run(
-            ["git", "apply", "--allow-empty"],
-            input=test_patch,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(workspace),
-        )
-        return proc.returncode == 0
-    except Exception:
-        return False
-
-
-def _run_tests(
-    fail_to_pass: str, workspace: Path, timeout: int = 120
-) -> Dict[str, Any]:
-    if not fail_to_pass:
-        return {"passed": False, "reason": "no fail_to_pass tests defined"}
-
-    try:
-        tests = (
-            json.loads(fail_to_pass) if isinstance(fail_to_pass, str) else fail_to_pass
-        )
-    except json.JSONDecodeError:
-        tests = [fail_to_pass]
-
-    passed_count = 0
-    total = len(tests)
-    details = []
-
-    for test_spec in tests:
-        test_file = (
-            test_spec.split("::")[0].split(" | ")[0].strip()
-            if "::" in test_spec or " | " in test_spec
-            else test_spec
-        )
-        try:
-            proc = subprocess.run(
-                ["python", "-m", "pytest", test_file, "-x", "--tb=short", "-q"],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=str(workspace),
-            )
-            ok = proc.returncode == 0
-            if ok:
-                passed_count += 1
-            details.append(
-                {
-                    "test": test_spec[:100],
-                    "passed": ok,
-                    "output": (proc.stdout + proc.stderr)[-500:],
-                }
-            )
-        except subprocess.TimeoutExpired:
-            details.append(
-                {"test": test_spec[:100], "passed": False, "output": "timeout"}
-            )
-        except Exception as exc:
-            details.append(
-                {"test": test_spec[:100], "passed": False, "output": str(exc)}
-            )
-
-    return {
-        "passed": passed_count == total,
-        "passed_count": passed_count,
-        "total": total,
-        "details": details,
-    }
-
-
-def _git_diff(workspace: Path) -> str:
-    try:
-        proc = subprocess.run(
-            ["git", "diff"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=str(workspace),
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.strip()
-    except Exception:
-        pass
-    return ""
-
-
-def _extract_patch_from_text(text: str) -> str:
-    m = re.search(r"```diff\s*\n(.*?)```", text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r"```\s*\n(diff --git.*?)```", text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    return ""
 
 
 class SingleAgentRunner:
@@ -433,7 +299,8 @@ class SingleAgentRunner:
     ) -> List[Dict[str, Any]]:
         results = []
         for resp, ec in zip(responses, eval_configs):
-            patch = _extract_patch_from_text(resp.content)
+            m = re.search(r"```diff\s*\n(.*?)```", resp.content, re.DOTALL)
+            patch = m.group(1).strip() if m else ""
             results.append(
                 {
                     "instance_id": ec.get("instance_id", ""),

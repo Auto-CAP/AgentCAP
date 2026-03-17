@@ -22,7 +22,6 @@ def load_benchmark(name: str, num_tasks: int = 50, seed: int = 42) -> List[TaskD
         "mmlu_pro": _load_mmlu_pro,
         "bigcodebench": _load_bigcodebench,
         "swebench_pro": _load_swebench_pro,
-        "swebench_oracle": _load_swebench_oracle,
     }
     if name not in loaders:
         raise ValueError(f"Unknown benchmark: {name}. Supported: {list(loaders)}")
@@ -300,36 +299,6 @@ def _load_swebench_pro(
                     "fail_to_pass": fail_to_pass,
                     "repo_language": repo_language,
                     "dockerhub_tag": ex.get("dockerhub_tag", ""),
-                },
-            )
-        )
-    return tasks
-
-
-def _load_swebench_oracle(num_tasks: int, seed: int) -> List[TaskDef]:
-    from datasets import load_dataset
-
-    ds = load_dataset("princeton-nlp/SWE-bench_oracle", split="test")
-    samples = _sample(list(ds), num_tasks, seed)
-
-    tasks: List[TaskDef] = []
-    for ex in samples:
-        instance_id = ex["instance_id"]
-        tasks.append(
-            TaskDef(
-                id=instance_id,
-                name=f"[{ex.get('repo', '')}] {ex.get('problem_statement', '')[:60]}",
-                messages=[{"role": "user", "content": ex["text"]}],
-                category="software_engineering",
-                eval_config={
-                    "type": "swebench",
-                    "instance_id": instance_id,
-                    "repo": ex.get("repo", ""),
-                    "base_commit": ex.get("base_commit", ""),
-                    "expected_patch": ex.get("patch", ""),
-                    "test_patch": ex.get("test_patch", ""),
-                    "FAIL_TO_PASS": ex.get("FAIL_TO_PASS", ""),
-                    "PASS_TO_PASS": ex.get("PASS_TO_PASS", ""),
                 },
             )
         )
