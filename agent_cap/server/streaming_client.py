@@ -71,6 +71,46 @@ class StreamingChatClient:
         except Exception:
             return None
 
+    def scrape_server_metrics(self) -> Dict[str, float]:
+        """Scrape vLLM Prometheus /metrics for server-side TTFT/TPOT."""
+        try:
+            url = f"{self.base_url}/metrics"
+            req = urllib.request.Request(url, method="GET")
+            resp = urllib.request.urlopen(req, timeout=5)
+            text = resp.read().decode("utf-8")
+        except Exception:
+            return {}
+
+        result: Dict[str, float] = {}
+        for line in text.split("\n"):
+            if line.startswith("#"):
+                continue
+            if "time_to_first_token_seconds_sum" in line:
+                result["ttft_sum"] = float(line.split()[-1])
+            elif "time_to_first_token_seconds_count" in line:
+                result["ttft_count"] = float(line.split()[-1])
+            elif "time_per_output_token_seconds_sum" in line:
+                result["tpot_sum"] = float(line.split()[-1])
+            elif "time_per_output_token_seconds_count" in line:
+                result["tpot_count"] = float(line.split()[-1])
+        return result
+
+    def compute_server_tpot(
+        self, before: Dict[str, float], after: Dict[str, float]
+    ) -> tuple:
+        """Compute avg TTFT/TPOT from delta of two /metrics scrapes."""
+        ttft_avg = 0.0
+        tpot_avg = 0.0
+        d_ttft_sum = after.get("ttft_sum", 0) - before.get("ttft_sum", 0)
+        d_ttft_count = after.get("ttft_count", 0) - before.get("ttft_count", 0)
+        d_tpot_sum = after.get("tpot_sum", 0) - before.get("tpot_sum", 0)
+        d_tpot_count = after.get("tpot_count", 0) - before.get("tpot_count", 0)
+        if d_ttft_count > 0:
+            ttft_avg = (d_ttft_sum / d_ttft_count) * 1000
+        if d_tpot_count > 0:
+            tpot_avg = (d_tpot_sum / d_tpot_count) * 1000
+        return ttft_avg, tpot_avg
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------

@@ -288,6 +288,7 @@ class SingleAgentRunner:
         gpu_mon.start()
         cpu_mon.start()
 
+        metrics_before = self.client.scrape_server_metrics()
         t_start = time.perf_counter()
 
         if tool_mode == "with_tools":
@@ -309,9 +310,14 @@ class SingleAgentRunner:
             tr = self._build_no_tools_results(responses, eval_configs)
 
         wall_clock_s = time.perf_counter() - t_start
+        metrics_after = self.client.scrape_server_metrics()
 
         gpu_stats = gpu_mon.stop()
         cpu_stats = cpu_mon.stop()
+
+        server_ttft_ms, server_tpot_ms = self.client.compute_server_tpot(
+            metrics_before, metrics_after
+        )
 
         metrics = aggregate_metrics(
             responses=responses,
@@ -324,6 +330,14 @@ class SingleAgentRunner:
             cpu_max_util=cpu_stats.max_cpu_util_pct,
             tool_call_latencies_ms=tc_latencies or None,
         )
+
+        if server_tpot_ms > 0:
+            metrics.tpot_avg_ms = server_tpot_ms
+            metrics.tpot_p99_ms = server_tpot_ms
+        if server_ttft_ms > 0 and metrics.ttft_avg_ms == 0:
+            metrics.ttft_avg_ms = server_ttft_ms
+            metrics.ttft_p99_ms = server_ttft_ms
+
         return metrics, tr
 
     def _build_no_tools_results(
