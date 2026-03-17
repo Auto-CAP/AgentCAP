@@ -115,21 +115,54 @@ class ModalWorkspace:
         )
         self._exec(
             f"(curl -sL '{base_url}/run_script.sh' || wget -qO- '{base_url}/run_script.sh') > /run_script.sh 2>/dev/null; "
+            f"(curl -sL '{base_url}/parser.py' || wget -qO- '{base_url}/parser.py') > /parser.py 2>/dev/null; "
             "chmod +x /run_script.sh"
         )
 
         try:
             process = self._sandbox.exec(
                 "bash",
-                "/run_script.sh",
-                *test_files,
-                workdir=self.workdir,
+                "-c",
+                f"cd {self.workdir} && bash /run_script.sh {','.join(test_files)} "
+                "> /test_stdout.txt 2> /test_stderr.txt; echo $?",
             )
             process.wait()
-            stdout = process.stdout.read()
-            stderr = process.stderr.read()
-            output = (stdout + stderr)[-2000:]
-            ok = process.returncode == 0
+
+            parse_process = self._sandbox.exec(
+                "python3",
+                "/parser.py",
+                "/test_stdout.txt",
+                "/test_stderr.txt",
+                "/test_results.json",
+            )
+            parse_process.wait()
+
+            cat_process = self._sandbox.exec("cat", "/test_results.json")
+            cat_process.wait()
+            results_json = cat_process.stdout.read()
+
+            tail_process = self._sandbox.exec("tail", "-30", "/test_stdout.txt")
+            tail_process.wait()
+            output = tail_process.stdout.read()[-500:]
+
+            ok = False
+            try:
+                parsed = json.loads(results_json)
+                test_results = parsed.get("tests", [])
+                fail_to_pass_names = set()
+                for t in tests:
+                    fail_to_pass_names.add(t.strip())
+                    fail_to_pass_names.add(t.split(" | ")[0].strip())
+
+                for tr in test_results:
+                    if tr["status"] == "PASSED":
+                        for ftp in fail_to_pass_names:
+                            if ftp in tr["name"]:
+                                ok = True
+                                break
+            except (json.JSONDecodeError, KeyError):
+                pass
+
         except Exception as exc:
             output = str(exc)
             ok = False
