@@ -74,6 +74,12 @@ class ModalWorkspace:
                     "&& git apply /tmp/test.patch"
                 )
 
+            self._exec(
+                "git init 2>/dev/null; "
+                "git add -A 2>/dev/null; "
+                "git -c user.email=bench@test -c user.name=bench commit -m baseline --allow-empty 2>/dev/null"
+            )
+
             self.ready = True
             return True
 
@@ -82,8 +88,8 @@ class ModalWorkspace:
             return False
 
     def get_git_diff(self) -> str:
-        result = self._exec("git diff")
-        return result if result else ""
+        result = self._exec("git diff HEAD")
+        return result.strip() if result and "fatal" not in result else ""
 
     def run_tests(self, timeout: int = 300) -> Dict[str, Any]:
         if not self.fail_to_pass:

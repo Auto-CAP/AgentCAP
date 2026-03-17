@@ -101,10 +101,20 @@ class DockerWorkspace:
                 timeout=30,
             )
 
+        self._docker_exec(
+            "git init 2>/dev/null; "
+            "git add -A 2>/dev/null; "
+            "git -c user.email=bench@test -c user.name=bench commit -m baseline --allow-empty 2>/dev/null",
+            timeout=30,
+        )
+
         self.ready = True
         return True
 
     def get_git_diff(self) -> str:
+        proc = self._docker_exec("git diff HEAD", timeout=10)
+        if proc and proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
         proc = self._docker_exec("git diff", timeout=10)
         return proc.stdout.strip() if proc and proc.returncode == 0 else ""
 
