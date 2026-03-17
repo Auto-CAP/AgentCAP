@@ -547,8 +547,6 @@ class SingleAgentRunner:
                 break
 
             assistant_msg: Dict[str, Any] = {"role": "assistant"}
-            if resp.content:
-                assistant_msg["content"] = resp.content
             assistant_msg["tool_calls"] = [
                 {
                     "id": tc["id"],
