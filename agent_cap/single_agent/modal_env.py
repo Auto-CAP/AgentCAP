@@ -113,11 +113,11 @@ class ModalWorkspace:
                 process = self._sandbox.exec(
                     "python", "-m", "pytest", test_target, "-x", "--tb=short", "-q"
                 )
+                process.wait()
                 stdout = process.stdout.read()
                 stderr = process.stderr.read()
-                exit_code = process.returncode
                 output = (stdout + stderr)[-500:]
-                ok = exit_code == 0
+                ok = process.returncode == 0
             except Exception as exc:
                 output = str(exc)
                 ok = False
@@ -152,6 +152,7 @@ class ModalWorkspace:
             return None
         try:
             process = self._sandbox.exec("bash", "-c", cmd)
+            process.wait()
             stdout = process.stdout.read()
             stderr = process.stderr.read()
             return stdout + stderr
