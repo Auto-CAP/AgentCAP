@@ -214,16 +214,14 @@ class SingleAgentRunner:
                             + "\n"
                         )
                 logger.info("Wrote %s (%d predictions)", pred_path, len(preds))
-                print(f"\n  predictions.jsonl: {pred_path}")
-                print(
-                    "  Evaluate with:\n"
-                    "    python -m swebench.harness.run_evaluation \\\n"
-                    f"      --predictions_path {pred_path} \\\n"
-                    "      --run_id my_run --max_workers 4"
-                )
 
-            patches_with_content = sum(1 for p in preds if p.get("model_patch"))
-            print(f"  Patches generated: {patches_with_content}/{len(preds)}")
+            resolved = sum(1 for tr in task_results if tr.get("resolved"))
+            total = len(task_results)
+            print(
+                f"\n  Resolved: {resolved}/{total} ({100 * resolved / total:.1f}%)"
+                if total
+                else ""
+            )
 
         return out
 
