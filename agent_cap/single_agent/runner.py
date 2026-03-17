@@ -196,9 +196,17 @@ class SingleAgentRunner:
         self, limit: int = 0
     ) -> Tuple[List[BenchmarkMetrics], List[Dict[str, Any]]]:
         tasks = load_benchmark(self.config.dataset, self.config.dataset_count)
+        if self.config.repo_filter:
+            tasks = [
+                t
+                for t in tasks
+                if self.config.repo_filter in (t.eval_config or {}).get("repo", "")
+            ]
         if limit > 0:
             tasks = tasks[:limit]
-        logger.info("Loaded %d tasks from '%s'", len(tasks), self.config.dataset)
+        logger.info(
+            "Loaded %d tasks (filter=%s)", len(tasks), self.config.repo_filter or "none"
+        )
 
         all_messages = [t.messages for t in tasks]
         eval_configs = [t.eval_config or {} for t in tasks]

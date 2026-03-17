@@ -57,6 +57,7 @@ class SingleAgentBenchConfig:
     stop_token_ids: Optional[List[int]] = None
     docker_hub_user: str = ""
     shell_timeout: int = 30
+    repo_filter: str = ""
 
     # ------------------------------------------------------------------
     # Serialisation helpers
@@ -89,6 +90,7 @@ class SingleAgentBenchConfig:
             shell_timeout=int(data.get("shell_timeout", 30)),
             stop_token_ids=data.get("stop_token_ids"),
             docker_hub_user=str(data.get("docker_hub_user", "")),
+            repo_filter=str(data.get("repo_filter", "")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
