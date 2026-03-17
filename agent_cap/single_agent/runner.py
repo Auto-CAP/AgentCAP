@@ -143,6 +143,22 @@ def _run_tests(
     }
 
 
+def _git_diff(workspace: Path) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "diff"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(workspace),
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
 def _extract_patch_from_text(text: str) -> str:
     m = re.search(r"```diff\s*\n(.*?)```", text, re.DOTALL)
     if m:
@@ -290,16 +306,8 @@ class SingleAgentRunner:
                     "      --run_id my_run --max_workers 4"
                 )
 
-            by_bs: Dict[int, List[Dict[str, Any]]] = {}
-            for tr in task_results:
-                bs = tr.get("batch_size", 0)
-                by_bs.setdefault(bs, []).append(tr)
-
-            print("\n  Resolved per batch_size:")
-            for bs in sorted(by_bs):
-                trs = by_bs[bs]
-                r = sum(1 for t in trs if t.get("resolved"))
-                print(f"    bs={bs}: {r}/{len(trs)}")
+            patches_with_content = sum(1 for p in preds if p.get("model_patch"))
+            print(f"  Patches generated: {patches_with_content}/{len(preds)}")
 
         return out
 
@@ -509,28 +517,21 @@ class SingleAgentRunner:
         )
         resp, tc_lats = self._agentic_loop(agentic_messages, task_workspace)
 
-        # 5. Run fail_to_pass tests
-        logger.info("[%s] Running tests...", instance_id[:30])
-        test_result = _run_tests(fail_to_pass, task_workspace)
-        resolved = test_result.get("passed", False)
-
-        status = "RESOLVED" if resolved else "FAILED"
-        logger.info(
-            "[%s] %s (%d/%d tests passed)",
-            instance_id[:30],
-            status,
-            test_result.get("passed_count", 0),
-            test_result.get("total", 0),
-        )
+        # 5. Extract patch via git diff
+        patch = _git_diff(task_workspace)
+        logger.info("[%s] Extracted patch: %d chars", instance_id[:30], len(patch))
 
         task_result = {
             "instance_id": instance_id,
+            "model_name_or_path": self.config.model_id,
+            "model_patch": patch,
             "repo": repo,
-            "resolved": resolved,
-            "test_result": test_result,
             "tool_calls": resp.tool_call_count,
             "total_tokens": resp.total_tokens,
+            "input_tokens": resp.input_tokens,
+            "output_tokens": resp.output_tokens,
             "latency_ms": resp.latency_ms,
+            "ttft_ms": resp.ttft_ms,
         }
 
         return resp, tc_lats, task_result
