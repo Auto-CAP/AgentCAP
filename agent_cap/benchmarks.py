@@ -299,6 +299,7 @@ def _load_swebench_pro(
                     "test_patch": test_patch,
                     "fail_to_pass": fail_to_pass,
                     "repo_language": repo_language,
+                    "dockerhub_tag": ex.get("dockerhub_tag", ""),
                 },
             )
         )
