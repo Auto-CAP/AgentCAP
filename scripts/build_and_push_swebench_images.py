@@ -40,6 +40,9 @@ def main():
     parser.add_argument("--split", default="test")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--max-workers", type=int, default=4)
+    parser.add_argument(
+        "--repo-filter", default="", help="Only build for repos containing this string"
+    )
     args = parser.parse_args()
 
     client = docker.from_env()
@@ -47,6 +50,8 @@ def main():
     print(f"Loading dataset {args.dataset} split={args.split}...")
     ds = load_dataset(args.dataset, split=args.split)
     instances = list(ds)
+    if args.repo_filter:
+        instances = [i for i in instances if args.repo_filter in i.get("repo", "")]
     if args.limit > 0:
         instances = instances[: args.limit]
     print(f"Building images for {len(instances)} instances")
