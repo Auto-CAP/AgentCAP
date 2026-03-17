@@ -107,44 +107,43 @@ class ModalWorkspace:
         except json.JSONDecodeError:
             tests = [self.fail_to_pass]
 
-        test_files_str = ",".join(t.split(" | ")[0].strip() for t in tests)
+        test_files = [t.split(" | ")[0].strip() for t in tests]
 
-        script_url = (
-            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
-            f"run_scripts/{self.instance_id}/run_script.sh"
+        base_url = (
+            "https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
+            f"run_scripts/{self.instance_id}"
         )
-        parser_url = (
-            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
-            f"run_scripts/{self.instance_id}/parser.py"
-        )
-
         self._exec(
-            f"curl -sL '{script_url}' -o /run_script.sh && chmod +x /run_script.sh"
+            f"(curl -sL '{base_url}/run_script.sh' || wget -qO- '{base_url}/run_script.sh') > /run_script.sh 2>/dev/null; "
+            "chmod +x /run_script.sh"
         )
-        self._exec(f"curl -sL '{parser_url}' -o /parser.py")
 
-        output = (
-            self._exec(
-                f"cd {self.workdir} && bash /run_script.sh {test_files_str} 2>&1"
+        try:
+            process = self._sandbox.exec(
+                "bash",
+                "/run_script.sh",
+                *test_files,
+                workdir=self.workdir,
             )
-            or ""
-        )
-
-        parse_result = self._exec(
-            f"cd {self.workdir} && python3 /parser.py --log '{output[-8000:]}' "
-            f"--expected '{json.dumps(tests)}' 2>/dev/null"
-        )
-
-        ok = False
-        if parse_result and "PASS" in parse_result.upper():
-            ok = True
+            process.wait()
+            stdout = process.stdout.read()
+            stderr = process.stderr.read()
+            output = (stdout + stderr)[-2000:]
+            ok = process.returncode == 0
+        except Exception as exc:
+            output = str(exc)
+            ok = False
 
         return {
             "passed": ok,
             "passed_count": 1 if ok else 0,
             "total": 1,
             "details": [
-                {"test": test_files_str[:100], "passed": ok, "output": output[-500:]}
+                {
+                    "test": ",".join(test_files)[:100],
+                    "passed": ok,
+                    "output": output[-500:],
+                }
             ],
         }
 
