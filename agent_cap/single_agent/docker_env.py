@@ -131,52 +131,41 @@ class DockerWorkspace:
         except json.JSONDecodeError:
             tests = [self.fail_to_pass]
 
-        passed_count = 0
-        details: List[Dict[str, Any]] = []
+        test_files_str = ",".join(t.split(" | ")[0].strip() for t in tests)
 
-        for test_spec in tests:
-            test_target = test_spec.strip()
-            if not self.container_id:
-                details.append(
-                    {
-                        "test": test_target[:100],
-                        "passed": False,
-                        "output": "no container",
-                    }
-                )
-                continue
-            try:
-                proc = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "-w",
-                        self.workdir,
-                        self.container_id,
-                        "python",
-                        "-m",
-                        "pytest",
-                        test_target,
-                        "-x",
-                        "--tb=short",
-                        "-q",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                )
-                ok = proc.returncode == 0
-                if ok:
-                    passed_count += 1
-                output = (proc.stdout + proc.stderr)[-500:]
-            except subprocess.TimeoutExpired:
-                ok = False
-                output = "timeout"
-            details.append({"test": test_target[:100], "passed": ok, "output": output})
+        script_url = (
+            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
+            f"run_scripts/{self.instance_id}/run_script.sh"
+        )
+        parser_url = (
+            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
+            f"run_scripts/{self.instance_id}/parser.py"
+        )
+
+        self._docker_exec(
+            f"curl -sL '{script_url}' -o /run_script.sh && chmod +x /run_script.sh",
+            timeout=30,
+        )
+        self._docker_exec(f"curl -sL '{parser_url}' -o /parser.py", timeout=30)
+
+        proc = self._docker_exec(
+            f"cd {self.workdir} && bash /run_script.sh {test_files_str} 2>&1",
+            timeout=timeout,
+        )
+        output = (proc.stdout + proc.stderr)[-2000:] if proc else ""
+
+        parse_proc = self._docker_exec(
+            f"cd {self.workdir} && python3 /parser.py --log '{output[-8000:]}' "
+            f"--expected '{json.dumps(tests)}' 2>/dev/null",
+            timeout=30,
+        )
+        parse_output = parse_proc.stdout if parse_proc else ""
+
+        ok = "PASS" in parse_output.upper() if parse_output else False
 
         return {
-            "passed": passed_count == len(tests),
-            "passed_count": passed_count,
+            "passed": ok,
+            "passed_count": 1 if ok else 0,
             "total": len(tests),
             "details": details,
         }
