@@ -65,6 +65,8 @@ def main():
         client,
         instances,
         max_workers=args.max_workers,
+        instance_image_tag="latest",
+        env_image_tag="latest",
     )
 
     print("\n=== Tagging and pushing to Docker Hub ===")
