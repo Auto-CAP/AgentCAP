@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("agent_cap.single_agent.modal_env")
@@ -57,14 +58,16 @@ class ModalWorkspace:
         )
 
         try:
-            image = modal.Image.from_registry(image_ref)
-            self._app = modal.App.lookup("agentcap-swebench", create_if_missing=True)
-            self._sandbox = modal.Sandbox.create(
-                image=image,
-                app=self._app,
-                workdir=self.workdir,
-                timeout=600,
-            )
+
+            def _create_sandbox():
+                img = modal.Image.from_registry(image_ref)
+                app = modal.App.lookup("agentcap-swebench", create_if_missing=True)
+                return modal.Sandbox.create(
+                    image=img, app=app, workdir=self.workdir, timeout=600
+                )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                self._sandbox = pool.submit(_create_sandbox).result(timeout=120)
 
             if self.test_patch:
                 self._exec(
