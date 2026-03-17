@@ -242,10 +242,15 @@ class StreamingChatClient:
                                 continue
 
                             delta = choices[0].get("delta", {})
+                            has_output = False
 
                             content_piece = delta.get("content")
                             if content_piece:
                                 content_parts.append(content_piece)
+                                has_output = True
+
+                            if delta.get("reasoning_content") or delta.get("reasoning"):
+                                has_output = True
 
                             tc_deltas = delta.get("tool_calls")
                             if tc_deltas:
@@ -259,13 +264,16 @@ class StreamingChatClient:
                                     fn = tc.get("function", {})
                                     if fn.get("name"):
                                         tool_call_fragments[idx]["name"] = fn["name"]
+                                        has_output = True
                                     if fn.get("arguments"):
                                         tool_call_fragments[idx]["arguments"] += fn[
                                             "arguments"
                                         ]
+                                        has_output = True
 
                             if ttft == 0.0:
-                                ttft = timestamp - st
+                                if has_output:
+                                    ttft = timestamp - st
                             else:
                                 itl.append(timestamp - most_recent_timestamp)
 
