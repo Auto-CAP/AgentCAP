@@ -434,8 +434,12 @@ class SingleAgentRunner:
                 instance_id[:30],
                 self.config.max_turns,
             )
+            modal_sb = getattr(ws, "_sandbox", None)
             resp, tc_lats = self._agentic_loop(
-                agentic_messages, str(ws.workspace), ws.container_id
+                agentic_messages,
+                str(ws.workspace),
+                ws.container_id,
+                modal_sandbox=modal_sb,
             )
 
             patch = ws.get_git_diff()
@@ -492,12 +496,14 @@ class SingleAgentRunner:
         messages: List[Dict[str, Any]],
         workspace_dir: str,
         container_id: Optional[str] = None,
+        modal_sandbox: Optional[Any] = None,
     ) -> Tuple[StreamingChatResponse, List[float]]:
         tools = self.config.tool_definitions or TOOL_DEFINITIONS
         executor = ToolExecutor(
             workspace_dir=workspace_dir,
             shell_timeout=self.config.shell_timeout,
             container_id=container_id,
+            modal_sandbox=modal_sandbox,
         )
 
         all_tc_latencies: List[float] = []
