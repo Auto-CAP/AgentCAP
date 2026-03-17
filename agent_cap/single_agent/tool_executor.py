@@ -104,13 +104,15 @@ class ToolCallResult:
 class ToolExecutor:
     def __init__(
         self,
-        workspace_dir: str | Path,
+        workspace_dir: str | Path = "/testbed",
         shell_timeout: int = 30,
         max_output_chars: int = 16_000,
+        container_id: Optional[str] = None,
     ) -> None:
         self.workspace = Path(workspace_dir).resolve()
         self.shell_timeout = shell_timeout
         self.max_output_chars = max_output_chars
+        self.container_id = container_id
 
     def execute(
         self,
@@ -150,35 +152,54 @@ class ToolExecutor:
             return self._search_code(args)
         raise ValueError(f"Unknown tool: {name}")
 
-    def _resolve(self, rel_path: str) -> Path:
-        target = (self.workspace / rel_path).resolve()
-        if not str(target).startswith(str(self.workspace)):
-            raise PermissionError(f"Path escapes workspace: {rel_path}")
-        return target
+    def _exec(self, cmd: str) -> subprocess.CompletedProcess:
+        if self.container_id:
+            return subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    "-w",
+                    str(self.workspace),
+                    self.container_id,
+                    "bash",
+                    "-c",
+                    cmd,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self.shell_timeout,
+            )
+        return subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=self.shell_timeout,
+            cwd=str(self.workspace),
+        )
 
     def _read_file(self, args: Dict[str, Any]) -> str:
-        path = self._resolve(args["path"])
-        if not path.is_file():
-            return f"File not found: {args['path']}"
-        return path.read_text(encoding="utf-8", errors="replace")
+        path = args["path"]
+        proc = self._exec(f"cat {path!r}")
+        if proc.returncode != 0:
+            return f"File not found: {path}\n{proc.stderr}"
+        return proc.stdout
 
     def _write_file(self, args: Dict[str, Any]) -> str:
-        path = self._resolve(args["path"])
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(args["content"], encoding="utf-8")
-        return f"Wrote {len(args['content'])} chars to {args['path']}"
+        path = args["path"]
+        content = args["content"]
+        escaped = content.replace("\\", "\\\\").replace("'", "'\\''")
+        proc = self._exec(
+            f"mkdir -p $(dirname {path!r}) && printf '%s' '{escaped}' > {path!r}"
+        )
+        if proc.returncode != 0:
+            return f"Write failed: {proc.stderr}"
+        return f"Wrote {len(content)} chars to {path}"
 
     def _run_shell(self, args: Dict[str, Any]) -> str:
         cmd = args["command"]
         try:
-            proc = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=self.shell_timeout,
-                cwd=str(self.workspace),
-            )
+            proc = self._exec(cmd)
         except subprocess.TimeoutExpired:
             return f"Command timed out after {self.shell_timeout}s: {cmd}"
         parts = []
@@ -192,21 +213,10 @@ class ToolExecutor:
     def _search_code(self, args: Dict[str, Any]) -> str:
         pattern = args["pattern"]
         sub_path = args.get("path", ".")
-        search_dir = self._resolve(sub_path)
-        if not search_dir.is_dir():
-            return f"Directory not found: {sub_path}"
-        try:
-            proc = subprocess.run(
-                ["grep", "-rn", "-E", pattern, str(search_dir)],
-                capture_output=True,
-                text=True,
-                timeout=self.shell_timeout,
-                cwd=str(self.workspace),
-            )
-        except subprocess.TimeoutExpired:
-            return f"Search timed out after {self.shell_timeout}s"
-        if proc.returncode == 1:
-            return f"No matches found for: {pattern}"
+        proc = self._exec(f"grep -rn -E {pattern!r} {sub_path!r} || true")
+        if proc.stdout:
+            return proc.stdout
+        return f"No matches found for: {pattern}"
         if proc.stdout:
             return proc.stdout
         return f"No matches found for: {pattern}"

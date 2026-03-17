@@ -33,7 +33,7 @@ from agent_cap.single_agent.tool_executor import (
     ToolCallResult,
     ToolExecutor,
 )
-from agent_cap.single_agent.local_env import LocalWorkspace
+from agent_cap.single_agent.docker_env import DockerWorkspace
 
 logger = logging.getLogger("agent_cap.single_agent")
 
@@ -212,10 +212,10 @@ class SingleAgentRunner:
         num_tasks = len(tasks)
 
         # Pre-build environments once for agentic mode
-        workspaces: List[Optional[LocalWorkspace]] = [None] * num_tasks
+        workspaces: List[Optional[DockerWorkspace]] = [None] * num_tasks
         if tool_mode == "with_tools":
             for i, ec in enumerate(eval_configs):
-                ws = LocalWorkspace(ec, base_dir=self.config.workspace_dir)
+                ws = DockerWorkspace(ec, base_dir=self.config.workspace_dir)
                 logger.info(
                     "Setting up environment for task %d/%d...", i + 1, num_tasks
                 )
@@ -350,7 +350,7 @@ class SingleAgentRunner:
         eval_configs: List[Dict[str, Any]],
         batch_size: int,
         tool_mode: str,
-        workspaces: Optional[List[Optional["LocalWorkspace"]]] = None,
+        workspaces: Optional[List[Optional["DockerWorkspace"]]] = None,
     ) -> Tuple[BenchmarkMetrics, List[Dict[str, Any]]]:
         gpu_mon = GPUMonitor(interval=self.config.gpu_monitor_interval)
         cpu_mon = CPUMonitor(interval=self.config.cpu_monitor_interval)
@@ -433,7 +433,7 @@ class SingleAgentRunner:
         all_messages: List[List[Dict[str, Any]]],
         eval_configs: List[Dict[str, Any]],
         concurrency: int,
-        workspaces: List[Optional["LocalWorkspace"]],
+        workspaces: List[Optional["DockerWorkspace"]],
     ) -> Tuple[List[StreamingChatResponse], List[float], List[Dict[str, Any]]]:
         n = len(all_messages)
         all_responses: List[Optional[StreamingChatResponse]] = [None] * n
@@ -444,7 +444,7 @@ class SingleAgentRunner:
             idx: int,
             msgs: List[Dict[str, Any]],
             ec: Dict[str, Any],
-            ws: Optional["LocalWorkspace"],
+            ws: Optional["DockerWorkspace"],
         ) -> None:
             resp, lats, task_result = self._run_single_task(list(msgs), ec, ws)
             all_responses[idx] = resp
@@ -497,7 +497,7 @@ class SingleAgentRunner:
         self,
         messages: List[Dict[str, Any]],
         eval_config: Dict[str, Any],
-        ws: Optional["LocalWorkspace"] = None,
+        ws: Optional["DockerWorkspace"] = None,
     ) -> Tuple[StreamingChatResponse, List[float], Dict[str, Any]]:
         instance_id = eval_config.get("instance_id", "unknown")
         repo = eval_config.get("repo", "")
@@ -548,7 +548,9 @@ class SingleAgentRunner:
                 instance_id[:30],
                 self.config.max_turns,
             )
-            resp, tc_lats = self._agentic_loop(agentic_messages, str(ws.workspace))
+            resp, tc_lats = self._agentic_loop(
+                agentic_messages, str(ws.workspace), ws.container_id
+            )
 
             patch = ws.get_git_diff()
             logger.info("[%s] Patch: %d chars", instance_id[:30], len(patch))
@@ -564,12 +566,21 @@ class SingleAgentRunner:
             )
 
         finally:
-            subprocess.run(
-                ["git", "checkout", "."],
-                capture_output=True,
-                cwd=str(ws.workspace),
-                timeout=10,
-            )
+            if ws.container_id:
+                subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        "-w",
+                        ws.workdir,
+                        ws.container_id,
+                        "git",
+                        "checkout",
+                        ".",
+                    ],
+                    capture_output=True,
+                    timeout=10,
+                )
 
         return (
             resp,
@@ -594,11 +605,13 @@ class SingleAgentRunner:
         self,
         messages: List[Dict[str, Any]],
         workspace_dir: str,
+        container_id: Optional[str] = None,
     ) -> Tuple[StreamingChatResponse, List[float]]:
         tools = self.config.tool_definitions or TOOL_DEFINITIONS
         executor = ToolExecutor(
             workspace_dir=workspace_dir,
             shell_timeout=self.config.shell_timeout,
+            container_id=container_id,
         )
 
         all_tc_latencies: List[float] = []
