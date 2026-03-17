@@ -211,8 +211,31 @@ class SingleAgentRunner:
 
         num_tasks = len(tasks)
 
-        for batch_size in self.config.batch_sizes:
-            effective_bs = min(batch_size, num_tasks)
+        # Pre-build environments once for agentic mode
+        workspaces: List[Optional[LocalWorkspace]] = [None] * num_tasks
+        if tool_mode == "with_tools":
+            for i, ec in enumerate(eval_configs):
+                ws = LocalWorkspace(ec, base_dir=self.config.workspace_dir)
+                logger.info(
+                    "Setting up environment for task %d/%d...", i + 1, num_tasks
+                )
+                if ws.setup():
+                    workspaces[i] = ws
+                else:
+                    logger.error(
+                        "Environment setup failed for %s", ec.get("instance_id")
+                    )
+
+        # Deduplicate batch sizes (bs > num_tasks is same as num_tasks)
+        seen_effective: set = set()
+        batch_sizes_to_run: List[tuple] = []
+        for bs in self.config.batch_sizes:
+            effective = min(bs, num_tasks)
+            if effective not in seen_effective:
+                seen_effective.add(effective)
+                batch_sizes_to_run.append((bs, effective))
+
+        for batch_size, effective_bs in batch_sizes_to_run:
             for rep in range(self.config.repetitions):
                 logger.info(
                     "batch_size=%d (effective=%d, tasks=%d)  tool_mode=%s  rep=%d/%d",
@@ -228,6 +251,7 @@ class SingleAgentRunner:
                     eval_configs,
                     effective_bs,
                     tool_mode,
+                    workspaces,
                 )
                 metrics.batch_size = batch_size
                 for t in tr:
@@ -235,6 +259,10 @@ class SingleAgentRunner:
                 results.append(metrics)
                 task_results.extend(tr)
                 self._print_summary(metrics)
+
+        for ws in workspaces:
+            if ws is not None:
+                ws.cleanup()
 
         return results, task_results
 
@@ -322,6 +350,7 @@ class SingleAgentRunner:
         eval_configs: List[Dict[str, Any]],
         batch_size: int,
         tool_mode: str,
+        workspaces: Optional[List[Optional["LocalWorkspace"]]] = None,
     ) -> Tuple[BenchmarkMetrics, List[Dict[str, Any]]]:
         gpu_mon = GPUMonitor(interval=self.config.gpu_monitor_interval)
         cpu_mon = CPUMonitor(interval=self.config.cpu_monitor_interval)
@@ -336,6 +365,7 @@ class SingleAgentRunner:
                 all_messages,
                 eval_configs,
                 batch_size,
+                workspaces or [None] * len(all_messages),
             )
         else:
             responses = self.client.chat_batch(
@@ -403,21 +433,27 @@ class SingleAgentRunner:
         all_messages: List[List[Dict[str, Any]]],
         eval_configs: List[Dict[str, Any]],
         concurrency: int,
+        workspaces: List[Optional["LocalWorkspace"]],
     ) -> Tuple[List[StreamingChatResponse], List[float], List[Dict[str, Any]]]:
         n = len(all_messages)
         all_responses: List[Optional[StreamingChatResponse]] = [None] * n
         all_tc_lats: List[List[float]] = [[] for _ in range(n)]
         all_task_results: List[Dict[str, Any]] = [{}] * n
 
-        def _run_one(idx: int, msgs: List[Dict[str, Any]], ec: Dict[str, Any]) -> None:
-            resp, lats, task_result = self._run_single_task(list(msgs), ec)
+        def _run_one(
+            idx: int,
+            msgs: List[Dict[str, Any]],
+            ec: Dict[str, Any],
+            ws: Optional["LocalWorkspace"],
+        ) -> None:
+            resp, lats, task_result = self._run_single_task(list(msgs), ec, ws)
             all_responses[idx] = resp
             all_tc_lats[idx] = lats
             all_task_results[idx] = task_result
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {
-                pool.submit(_run_one, i, msgs, ec): i
+                pool.submit(_run_one, i, msgs, ec, workspaces[i]): i
                 for i, (msgs, ec) in enumerate(zip(all_messages, eval_configs))
             }
             for fut in as_completed(futures):
@@ -461,14 +497,10 @@ class SingleAgentRunner:
         self,
         messages: List[Dict[str, Any]],
         eval_config: Dict[str, Any],
+        ws: Optional["LocalWorkspace"] = None,
     ) -> Tuple[StreamingChatResponse, List[float], Dict[str, Any]]:
         instance_id = eval_config.get("instance_id", "unknown")
         repo = eval_config.get("repo", "")
-        base_commit = eval_config.get("base_commit", "")
-        test_patch = eval_config.get("test_patch", "")
-        fail_to_pass = eval_config.get(
-            "FAIL_TO_PASS", eval_config.get("fail_to_pass", "")
-        )
 
         error_result = lambda err: (
             StreamingChatResponse(
@@ -492,19 +524,20 @@ class SingleAgentRunner:
             },
         )
 
-        ws = LocalWorkspace(eval_config, base_dir=self.config.workspace_dir)
-
-        logger.info("[%s] Setting up local environment...", instance_id[:30])
-        if not ws.setup():
-            return error_result("environment setup failed")
+        if ws is None or not ws.ready:
+            return error_result("workspace not ready")
 
         try:
             agentic_prompt = (
-                f"You are a software engineer. Fix the following issue in the repo "
-                f"at {ws.workspace}.\n\n"
-                f"{messages[0]['content']}\n\n"
-                "Use the available tools (read_file, write_file, run_shell, "
-                "search_code) to explore the codebase and make the fix."
+                "You are an expert software engineer. Your task is to FIX the "
+                "issue described below by modifying the source code.\n\n"
+                "IMPORTANT INSTRUCTIONS:\n"
+                "1. First use search_code and read_file to understand the codebase\n"
+                "2. Then use write_file to make the necessary code changes\n"
+                "3. Finally use run_shell to verify your fix works\n"
+                "4. You MUST use write_file to modify at least one file\n\n"
+                f"The repo is at: {ws.workspace}\n\n"
+                f"{messages[0]['content']}"
             )
             agentic_messages: List[Dict[str, Any]] = [
                 {"role": "user", "content": agentic_prompt}
@@ -531,7 +564,12 @@ class SingleAgentRunner:
             )
 
         finally:
-            ws.cleanup()
+            subprocess.run(
+                ["git", "checkout", "."],
+                capture_output=True,
+                cwd=str(ws.workspace),
+                timeout=10,
+            )
 
         return (
             resp,
