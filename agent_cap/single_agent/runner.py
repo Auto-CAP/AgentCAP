@@ -32,6 +32,10 @@ from agent_cap.single_agent.tool_executor import (
     TOOL_DEFINITIONS,
     ToolCallResult,
     ToolExecutor,
+    build_swebench_container,
+    stop_container,
+    get_git_diff,
+    run_tests_in_container,
 )
 
 logger = logging.getLogger("agent_cap.single_agent")
@@ -465,85 +469,105 @@ class SingleAgentRunner:
         repo = eval_config.get("repo", "")
         base_commit = eval_config.get("base_commit", "")
         test_patch = eval_config.get("test_patch", "")
-        fail_to_pass = eval_config.get("fail_to_pass", "")
+        fail_to_pass = eval_config.get(
+            "FAIL_TO_PASS", eval_config.get("fail_to_pass", "")
+        )
 
-        # Each task gets its own workspace
-        task_workspace = Path(self.config.workspace_dir) / instance_id.replace("/", "_")
+        error_result = lambda err: (
+            StreamingChatResponse(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                latency_ms=0,
+                ttft_ms=0,
+                tpot_ms_avg=0,
+                tpot_ms_p99=0,
+                model=self.config.model_id,
+                error=err,
+            ),
+            [],
+            {
+                "instance_id": instance_id,
+                "model_name_or_path": self.config.model_id,
+                "model_patch": "",
+                "error": err,
+            },
+        )
 
-        # 1. Clone repo at base_commit
-        logger.info("[%s] Cloning %s@%s", instance_id[:30], repo, base_commit[:12])
-        if not _clone_repo(repo, base_commit, task_workspace):
-            return (
-                StreamingChatResponse(
-                    content="",
-                    input_tokens=0,
-                    output_tokens=0,
-                    total_tokens=0,
-                    latency_ms=0,
-                    ttft_ms=0,
-                    tpot_ms_avg=0,
-                    tpot_ms_p99=0,
-                    model=self.config.model_id,
-                    error="clone failed",
-                ),
-                [],
-                {
-                    "instance_id": instance_id,
-                    "resolved": False,
-                    "error": "clone failed",
-                },
+        logger.info("[%s] Starting Docker container...", instance_id[:30])
+        container_id = build_swebench_container(
+            instance_id,
+            repo,
+            base_commit,
+            test_patch,
+        )
+        if not container_id:
+            logger.error("[%s] Docker container failed to start", instance_id[:30])
+            return error_result("container build failed")
+
+        try:
+            agentic_prompt = (
+                f"You are a software engineer. Fix the following issue in the repo.\n\n"
+                f"{messages[0]['content']}\n\n"
+                "Use the available tools (read_file, write_file, run_shell, "
+                "search_code) to explore the codebase and make the fix. "
+                "All tools execute inside the repo directory."
+            )
+            agentic_messages: List[Dict[str, Any]] = [
+                {"role": "user", "content": agentic_prompt}
+            ]
+
+            logger.info(
+                "[%s] Agentic loop (max_turns=%d)",
+                instance_id[:30],
+                self.config.max_turns,
+            )
+            resp, tc_lats = self._agentic_loop(agentic_messages, container_id)
+
+            patch = get_git_diff(container_id)
+            logger.info("[%s] Patch: %d chars", instance_id[:30], len(patch))
+
+            test_result = run_tests_in_container(container_id, fail_to_pass)
+            resolved = test_result.get("passed", False)
+            logger.info(
+                "[%s] %s (%d/%d tests)",
+                instance_id[:30],
+                "RESOLVED" if resolved else "FAILED",
+                test_result.get("passed_count", 0),
+                test_result.get("total", 0),
             )
 
-        # 2. Apply test patch (adds the test cases)
-        if test_patch:
-            _apply_test_patch(test_patch, task_workspace)
+        finally:
+            stop_container(container_id)
 
-        # 3. Rewrite prompt for agentic mode
-        agentic_prompt = (
-            f"You are a software engineer. Fix the issue in the repo at "
-            f"{task_workspace}.\n\n"
-            f"{messages[0]['content']}\n\n"
-            "Use the available tools (read_file, write_file, run_shell, "
-            "search_code) to explore the codebase and make the fix. "
-            "The workspace is already set up at the correct commit."
+        return (
+            resp,
+            tc_lats,
+            {
+                "instance_id": instance_id,
+                "model_name_or_path": self.config.model_id,
+                "model_patch": patch,
+                "repo": repo,
+                "resolved": resolved,
+                "test_result": test_result,
+                "tool_calls": resp.tool_call_count,
+                "total_tokens": resp.total_tokens,
+                "input_tokens": resp.input_tokens,
+                "output_tokens": resp.output_tokens,
+                "latency_ms": resp.latency_ms,
+                "ttft_ms": resp.ttft_ms,
+            },
         )
-        agentic_messages = [{"role": "user", "content": agentic_prompt}]
-
-        # 4. Agentic loop
-        logger.info(
-            "[%s] Starting agentic loop (max_turns=%d)",
-            instance_id[:30],
-            self.config.max_turns,
-        )
-        resp, tc_lats = self._agentic_loop(agentic_messages, task_workspace)
-
-        # 5. Extract patch via git diff
-        patch = _git_diff(task_workspace)
-        logger.info("[%s] Extracted patch: %d chars", instance_id[:30], len(patch))
-
-        task_result = {
-            "instance_id": instance_id,
-            "model_name_or_path": self.config.model_id,
-            "model_patch": patch,
-            "repo": repo,
-            "tool_calls": resp.tool_call_count,
-            "total_tokens": resp.total_tokens,
-            "input_tokens": resp.input_tokens,
-            "output_tokens": resp.output_tokens,
-            "latency_ms": resp.latency_ms,
-            "ttft_ms": resp.ttft_ms,
-        }
-
-        return resp, tc_lats, task_result
 
     def _agentic_loop(
         self,
         messages: List[Dict[str, Any]],
-        workspace: Path,
+        container_id: str,
     ) -> Tuple[StreamingChatResponse, List[float]]:
         tools = self.config.tool_definitions or TOOL_DEFINITIONS
         executor = ToolExecutor(
-            workspace_dir=str(workspace),
+            container_id=container_id,
             shell_timeout=self.config.shell_timeout,
         )
 
