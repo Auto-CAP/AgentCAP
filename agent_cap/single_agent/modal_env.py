@@ -108,16 +108,26 @@ class ModalWorkspace:
         details: List[Dict[str, Any]] = []
 
         for test_spec in tests:
-            test_target = test_spec.split("::")[0].split(" | ")[0].strip()
-            output = self._exec(f"python -m pytest {test_target} -x --tb=short -q")
-            ok = output is not None and "passed" in output.lower()
+            test_target = test_spec.strip()
+            try:
+                process = self._sandbox.exec(
+                    "python", "-m", "pytest", test_target, "-x", "--tb=short", "-q"
+                )
+                stdout = process.stdout.read()
+                stderr = process.stderr.read()
+                exit_code = process.returncode
+                output = (stdout + stderr)[-500:]
+                ok = exit_code == 0
+            except Exception as exc:
+                output = str(exc)
+                ok = False
             if ok:
                 passed_count += 1
             details.append(
                 {
                     "test": test_spec[:100],
                     "passed": ok,
-                    "output": (output or "")[-500:],
+                    "output": output,
                 }
             )
 
