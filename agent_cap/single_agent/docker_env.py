@@ -33,6 +33,7 @@ class DockerWorkspace:
         self.fail_to_pass = eval_config.get(
             "FAIL_TO_PASS", eval_config.get("fail_to_pass", "")
         )
+        self.dockerhub_tag = eval_config.get("dockerhub_tag", "")
         self.docker_hub_user = docker_hub_user
         self.container_id: Optional[str] = None
         self.container_name = f"agentcap-{self.instance_id[:50]}"
@@ -46,22 +47,22 @@ class DockerWorkspace:
     def setup(self) -> bool:
         self._remove_existing()
 
-        local_image = f"sweb.eval.x86_64.{self.instance_id}:latest"
-        if self.docker_hub_user:
-            image = f"{self.docker_hub_user}/{local_image}"
-            logger.info("[%s] Pulling %s", self.instance_id[:30], image)
-            pull_proc = subprocess.run(
-                ["docker", "pull", image], capture_output=True, text=True, timeout=300
-            )
-            if pull_proc.returncode != 0:
-                logger.warning(
-                    "[%s] Pull failed, skipping: %s",
-                    self.instance_id[:30],
-                    pull_proc.stderr[:200],
-                )
-                return False
+        if self.dockerhub_tag:
+            image = f"jefzda/sweap-images:{self.dockerhub_tag}"
+        elif self.docker_hub_user:
+            image = f"{self.docker_hub_user}/sweb.eval.x86_64.{self.instance_id}:latest"
         else:
-            image = local_image
+            image = f"sweb.eval.x86_64.{self.instance_id}:latest"
+
+        logger.info("[%s] Pulling %s", self.instance_id[:30], image)
+        pull_proc = subprocess.run(
+            ["docker", "pull", image], capture_output=True, text=True, timeout=600
+        )
+        if pull_proc.returncode != 0:
+            logger.warning(
+                "[%s] Pull failed: %s", self.instance_id[:30], pull_proc.stderr[:200]
+            )
+            return False
         logger.info("[%s] Starting container from %s", self.instance_id[:30], image)
 
         try:
