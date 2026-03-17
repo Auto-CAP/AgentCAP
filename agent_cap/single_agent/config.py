@@ -58,6 +58,7 @@ class SingleAgentBenchConfig:
     docker_hub_user: str = ""
     shell_timeout: int = 30
     repo_filter: str = ""
+    runtime: str = "docker"  # "docker" or "modal"
 
     # ------------------------------------------------------------------
     # Serialisation helpers
@@ -91,6 +92,7 @@ class SingleAgentBenchConfig:
             stop_token_ids=data.get("stop_token_ids"),
             docker_hub_user=str(data.get("docker_hub_user", "")),
             repo_filter=str(data.get("repo_filter", "")),
+            runtime=str(data.get("runtime", "docker")),
         )
 
     def to_dict(self) -> Dict[str, Any]:

@@ -32,6 +32,7 @@ from agent_cap.single_agent.tool_executor import (
     ToolExecutor,
 )
 from agent_cap.single_agent.docker_env import DockerWorkspace
+from agent_cap.single_agent.modal_env import ModalWorkspace
 
 logger = logging.getLogger("agent_cap.single_agent")
 
@@ -85,11 +86,15 @@ class SingleAgentRunner:
 
         num_tasks = len(tasks)
 
-        # Pre-build environments once for agentic mode
-        workspaces: List[Optional[DockerWorkspace]] = [None] * num_tasks
+        workspaces: List[Optional[Any]] = [None] * num_tasks
         if tool_mode == "with_tools":
             for i, ec in enumerate(eval_configs):
-                ws = DockerWorkspace(ec, docker_hub_user=self.config.docker_hub_user)
+                if self.config.runtime == "modal":
+                    ws = ModalWorkspace(ec)
+                else:
+                    ws = DockerWorkspace(
+                        ec, docker_hub_user=self.config.docker_hub_user
+                    )
                 logger.info(
                     "Setting up environment for task %d/%d...", i + 1, num_tasks
                 )
