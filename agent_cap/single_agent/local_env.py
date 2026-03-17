@@ -137,17 +137,13 @@ class LocalWorkspace:
     def apply_test_patch(self) -> bool:
         if not self.test_patch:
             return True
-        proc = _run(
-            f"git apply -v -",
-            cwd=str(self.workspace),
-            timeout=30,
-        )
-        escaped = self.test_patch.replace("'", "'\\''")
         proc = subprocess.run(
-            ["bash", "-c", f"cd {self.workspace} && echo '{escaped}' | git apply -v -"],
+            ["git", "apply", "-v"],
+            input=self.test_patch,
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self.workspace),
         )
         return proc.returncode == 0
 
