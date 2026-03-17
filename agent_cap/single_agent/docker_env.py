@@ -50,7 +50,16 @@ class DockerWorkspace:
         if self.docker_hub_user:
             image = f"{self.docker_hub_user}/{local_image}"
             logger.info("[%s] Pulling %s", self.instance_id[:30], image)
-            subprocess.run(["docker", "pull", image], capture_output=True, timeout=300)
+            pull_proc = subprocess.run(
+                ["docker", "pull", image], capture_output=True, text=True, timeout=300
+            )
+            if pull_proc.returncode != 0:
+                logger.warning(
+                    "[%s] Pull failed, skipping: %s",
+                    self.instance_id[:30],
+                    pull_proc.stderr[:200],
+                )
+                return False
         else:
             image = local_image
         logger.info("[%s] Starting container from %s", self.instance_id[:30], image)
