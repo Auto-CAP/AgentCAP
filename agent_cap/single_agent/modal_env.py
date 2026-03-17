@@ -27,7 +27,7 @@ class ModalWorkspace:
             "FAIL_TO_PASS", eval_config.get("fail_to_pass", "")
         )
         self.dockerhub_tag = eval_config.get("dockerhub_tag", "")
-        self.workdir = "/testbed"
+        self.workdir = "/app"
         self.ready = False
         self._sandbox = None
         self._app = None

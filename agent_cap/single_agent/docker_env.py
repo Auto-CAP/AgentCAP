@@ -37,7 +37,7 @@ class DockerWorkspace:
         self.docker_hub_user = docker_hub_user
         self.container_id: Optional[str] = None
         self.container_name = f"agentcap-{self.instance_id[:50]}"
-        self.workdir = "/testbed"
+        self.workdir = "/app"
         self.ready = False
 
     @property
