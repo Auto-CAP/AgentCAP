@@ -838,6 +838,23 @@ def cmd_single_agent(args):
 
     config = SingleAgentBenchConfig.from_yaml(args.config)
 
+    if args.max_turns is not None:
+        config.max_turns = args.max_turns
+    if args.max_tokens is not None:
+        config.max_tokens = args.max_tokens
+    if args.batch_sizes is not None:
+        config.batch_sizes = [int(x) for x in args.batch_sizes.split(",")]
+    if args.runtime is not None:
+        config.runtime = args.runtime
+    if args.dataset is not None:
+        config.dataset = args.dataset
+    if args.repo_filter is not None:
+        config.repo_filter = args.repo_filter
+    if args.base_url is not None:
+        config.base_url = args.base_url
+    if args.temperature is not None:
+        config.temperature = args.temperature
+
     print("=" * 70)
     print("Single-Agent Benchmark")
     print("=" * 70)
@@ -949,8 +966,18 @@ def main():
         "--limit",
         type=int,
         default=0,
-        help="Only run first N tasks (0 = all, useful for quick testing)",
+        help="Only run first N tasks (0 = all)",
     )
+    p_single.add_argument("--max-turns", type=int, default=None)
+    p_single.add_argument("--max-tokens", type=int, default=None)
+    p_single.add_argument("--batch-sizes", type=str, default=None, help="e.g. '1,2,4'")
+    p_single.add_argument(
+        "--runtime", type=str, default=None, choices=["docker", "modal"]
+    )
+    p_single.add_argument("--dataset", type=str, default=None)
+    p_single.add_argument("--repo-filter", type=str, default=None)
+    p_single.add_argument("--base-url", type=str, default=None)
+    p_single.add_argument("--temperature", type=float, default=None)
 
     args = parser.parse_args()
 
