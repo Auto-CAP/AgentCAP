@@ -1,10 +1,9 @@
-"""Tool execution inside Docker containers for agentic SWE-bench.
+"""Tool execution against a local workspace directory.
 
-All tool calls run via ``docker exec`` inside a pre-built SWE-bench
-container that has the repo checked out and dependencies installed.
+All tool calls run as local subprocesses in the workspace directory
+which has been set up by LocalWorkspace (git clone + conda env + deps).
 """
 
-import json
 import subprocess
 import time
 from dataclasses import dataclass
@@ -103,41 +102,15 @@ class ToolCallResult:
 
 
 class ToolExecutor:
-    """Execute tool calls inside a Docker container via ``docker exec``.
-
-    The container must already be running with the repo mounted/cloned.
-    """
-
     def __init__(
         self,
-        container_id: str,
-        workdir: str = "/testbed",
+        workspace_dir: str | Path,
         shell_timeout: int = 30,
         max_output_chars: int = 16_000,
     ) -> None:
-        self.container_id = container_id
-        self.workdir = workdir
+        self.workspace = Path(workspace_dir).resolve()
         self.shell_timeout = shell_timeout
         self.max_output_chars = max_output_chars
-
-    def _docker_exec(
-        self, cmd: str, timeout: Optional[int] = None
-    ) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [
-                "docker",
-                "exec",
-                "-w",
-                self.workdir,
-                self.container_id,
-                "bash",
-                "-c",
-                cmd,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout or self.shell_timeout,
-        )
 
     def execute(
         self,
@@ -177,31 +150,37 @@ class ToolExecutor:
             return self._search_code(args)
         raise ValueError(f"Unknown tool: {name}")
 
+    def _resolve(self, rel_path: str) -> Path:
+        target = (self.workspace / rel_path).resolve()
+        if not str(target).startswith(str(self.workspace)):
+            raise PermissionError(f"Path escapes workspace: {rel_path}")
+        return target
+
     def _read_file(self, args: Dict[str, Any]) -> str:
-        path = args["path"]
-        proc = self._docker_exec(f"cat {path!r}")
-        if proc.returncode != 0:
-            return f"File not found: {path}\n{proc.stderr}"
-        return proc.stdout
+        path = self._resolve(args["path"])
+        if not path.is_file():
+            return f"File not found: {args['path']}"
+        return path.read_text(encoding="utf-8", errors="replace")
 
     def _write_file(self, args: Dict[str, Any]) -> str:
-        path = args["path"]
-        content = args["content"]
-        escaped = content.replace("\\", "\\\\").replace("'", "'\\''")
-        proc = self._docker_exec(
-            f"mkdir -p $(dirname {path!r}) && printf '%s' '{escaped}' > {path!r}"
-        )
-        if proc.returncode != 0:
-            return f"Write failed: {proc.stderr}"
-        return f"Wrote {len(content)} chars to {path}"
+        path = self._resolve(args["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(args["content"], encoding="utf-8")
+        return f"Wrote {len(args['content'])} chars to {args['path']}"
 
     def _run_shell(self, args: Dict[str, Any]) -> str:
         cmd = args["command"]
         try:
-            proc = self._docker_exec(cmd)
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=self.shell_timeout,
+                cwd=str(self.workspace),
+            )
         except subprocess.TimeoutExpired:
             return f"Command timed out after {self.shell_timeout}s: {cmd}"
-
         parts = []
         if proc.stdout:
             parts.append(proc.stdout)
@@ -213,152 +192,21 @@ class ToolExecutor:
     def _search_code(self, args: Dict[str, Any]) -> str:
         pattern = args["pattern"]
         sub_path = args.get("path", ".")
-        proc = self._docker_exec(f"grep -rn -E {pattern!r} {sub_path!r} || true")
+        search_dir = self._resolve(sub_path)
+        if not search_dir.is_dir():
+            return f"Directory not found: {sub_path}"
+        try:
+            proc = subprocess.run(
+                ["grep", "-rn", "-E", pattern, str(search_dir)],
+                capture_output=True,
+                text=True,
+                timeout=self.shell_timeout,
+                cwd=str(self.workspace),
+            )
+        except subprocess.TimeoutExpired:
+            return f"Search timed out after {self.shell_timeout}s"
+        if proc.returncode == 1:
+            return f"No matches found for: {pattern}"
         if proc.stdout:
             return proc.stdout
         return f"No matches found for: {pattern}"
-
-
-def build_swebench_container(
-    instance_id: str,
-    repo: str,
-    base_commit: str,
-    test_patch: str = "",
-) -> Optional[str]:
-    """Build and start a SWE-bench Docker container for a task.
-
-    Uses swebench.harness utilities to build the environment image,
-    then starts a container with the repo at base_commit.
-
-    Returns container_id or None on failure.
-    """
-    try:
-        proc = subprocess.run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                f"agentcap-{instance_id[:40]}",
-                "-w",
-                "/testbed",
-                f"sweb.eval.x86_64.{instance_id}:latest",
-                "sleep",
-                "infinity",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode == 0:
-            container_id = proc.stdout.strip()
-            if test_patch:
-                subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        container_id,
-                        "bash",
-                        "-c",
-                        f"cd /testbed && echo {json.dumps(test_patch)} | python3 -c \"import sys,json; open('/tmp/test.patch','w').write(json.loads(sys.stdin.read()))\" && git apply /tmp/test.patch",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-            return container_id
-    except Exception:
-        pass
-    return None
-
-
-def stop_container(container_id: str) -> None:
-    subprocess.run(
-        ["docker", "rm", "-f", container_id],
-        capture_output=True,
-        timeout=15,
-    )
-
-
-def get_git_diff(container_id: str, workdir: str = "/testbed") -> str:
-    try:
-        proc = subprocess.run(
-            ["docker", "exec", "-w", workdir, container_id, "git", "diff"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if proc.returncode == 0:
-            return proc.stdout.strip()
-    except Exception:
-        pass
-    return ""
-
-
-def run_tests_in_container(
-    container_id: str,
-    fail_to_pass: str,
-    workdir: str = "/testbed",
-    timeout: int = 300,
-) -> Dict[str, Any]:
-    if not fail_to_pass:
-        return {"passed": False, "reason": "no tests defined"}
-
-    try:
-        tests = (
-            json.loads(fail_to_pass) if isinstance(fail_to_pass, str) else fail_to_pass
-        )
-    except json.JSONDecodeError:
-        tests = [fail_to_pass]
-
-    passed_count = 0
-    total = len(tests)
-    details = []
-
-    for test_spec in tests:
-        test_file = test_spec.split("::")[0].split(" | ")[0].strip()
-        try:
-            proc = subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "-w",
-                    workdir,
-                    container_id,
-                    "python",
-                    "-m",
-                    "pytest",
-                    test_file,
-                    "-x",
-                    "--tb=short",
-                    "-q",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            ok = proc.returncode == 0
-            if ok:
-                passed_count += 1
-            details.append(
-                {
-                    "test": test_spec[:100],
-                    "passed": ok,
-                    "output": (proc.stdout + proc.stderr)[-500:],
-                }
-            )
-        except subprocess.TimeoutExpired:
-            details.append(
-                {"test": test_spec[:100], "passed": False, "output": "timeout"}
-            )
-        except Exception as exc:
-            details.append(
-                {"test": test_spec[:100], "passed": False, "output": str(exc)}
-            )
-
-    return {
-        "passed": passed_count == total,
-        "passed_count": passed_count,
-        "total": total,
-        "details": details,
-    }

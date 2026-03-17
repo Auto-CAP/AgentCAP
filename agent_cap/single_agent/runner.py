@@ -32,11 +32,8 @@ from agent_cap.single_agent.tool_executor import (
     TOOL_DEFINITIONS,
     ToolCallResult,
     ToolExecutor,
-    build_swebench_container,
-    stop_container,
-    get_git_diff,
-    run_tests_in_container,
 )
+from agent_cap.single_agent.local_env import LocalWorkspace
 
 logger = logging.getLogger("agent_cap.single_agent")
 
@@ -495,24 +492,19 @@ class SingleAgentRunner:
             },
         )
 
-        logger.info("[%s] Starting Docker container...", instance_id[:30])
-        container_id = build_swebench_container(
-            instance_id,
-            repo,
-            base_commit,
-            test_patch,
-        )
-        if not container_id:
-            logger.error("[%s] Docker container failed to start", instance_id[:30])
-            return error_result("container build failed")
+        ws = LocalWorkspace(eval_config, base_dir=self.config.workspace_dir)
+
+        logger.info("[%s] Setting up local environment...", instance_id[:30])
+        if not ws.setup():
+            return error_result("environment setup failed")
 
         try:
             agentic_prompt = (
-                f"You are a software engineer. Fix the following issue in the repo.\n\n"
+                f"You are a software engineer. Fix the following issue in the repo "
+                f"at {ws.workspace}.\n\n"
                 f"{messages[0]['content']}\n\n"
                 "Use the available tools (read_file, write_file, run_shell, "
-                "search_code) to explore the codebase and make the fix. "
-                "All tools execute inside the repo directory."
+                "search_code) to explore the codebase and make the fix."
             )
             agentic_messages: List[Dict[str, Any]] = [
                 {"role": "user", "content": agentic_prompt}
@@ -523,12 +515,12 @@ class SingleAgentRunner:
                 instance_id[:30],
                 self.config.max_turns,
             )
-            resp, tc_lats = self._agentic_loop(agentic_messages, container_id)
+            resp, tc_lats = self._agentic_loop(agentic_messages, str(ws.workspace))
 
-            patch = get_git_diff(container_id)
+            patch = ws.get_git_diff()
             logger.info("[%s] Patch: %d chars", instance_id[:30], len(patch))
 
-            test_result = run_tests_in_container(container_id, fail_to_pass)
+            test_result = ws.run_tests()
             resolved = test_result.get("passed", False)
             logger.info(
                 "[%s] %s (%d/%d tests)",
@@ -539,7 +531,7 @@ class SingleAgentRunner:
             )
 
         finally:
-            stop_container(container_id)
+            ws.cleanup()
 
         return (
             resp,
@@ -563,11 +555,11 @@ class SingleAgentRunner:
     def _agentic_loop(
         self,
         messages: List[Dict[str, Any]],
-        container_id: str,
+        workspace_dir: str,
     ) -> Tuple[StreamingChatResponse, List[float]]:
         tools = self.config.tool_definitions or TOOL_DEFINITIONS
         executor = ToolExecutor(
-            container_id=container_id,
+            workspace_dir=workspace_dir,
             shell_timeout=self.config.shell_timeout,
         )
 
