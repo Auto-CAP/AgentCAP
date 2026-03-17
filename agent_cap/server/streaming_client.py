@@ -125,21 +125,29 @@ class StreamingChatClient:
         timeout: int = 600,
         stop_token_ids: Optional[List[int]] = None,
     ) -> StreamingChatResponse:
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(
-                self._async_chat(
-                    messages,
-                    model,
-                    temperature,
-                    max_tokens,
-                    tools,
-                    timeout,
-                    stop_token_ids,
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(
+                    self._async_chat(
+                        messages,
+                        model,
+                        temperature,
+                        max_tokens,
+                        tools,
+                        timeout,
+                        stop_token_ids,
+                    )
                 )
-            )
-        finally:
-            loop.close()
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_run).result(timeout=timeout + 30)
 
     async def _async_chat(
         self,
