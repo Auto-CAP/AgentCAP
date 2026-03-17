@@ -215,7 +215,7 @@ class SingleAgentRunner:
         workspaces: List[Optional[DockerWorkspace]] = [None] * num_tasks
         if tool_mode == "with_tools":
             for i, ec in enumerate(eval_configs):
-                ws = DockerWorkspace(ec, base_dir=self.config.workspace_dir)
+                ws = DockerWorkspace(ec, docker_hub_user=self.config.docker_hub_user)
                 logger.info(
                     "Setting up environment for task %d/%d...", i + 1, num_tasks
                 )

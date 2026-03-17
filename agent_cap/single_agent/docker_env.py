@@ -23,7 +23,9 @@ logger = logging.getLogger("agent_cap.single_agent.docker_env")
 
 
 class DockerWorkspace:
-    def __init__(self, eval_config: Dict[str, Any], **kwargs):
+    def __init__(
+        self, eval_config: Dict[str, Any], docker_hub_user: str = "", **kwargs
+    ):
         self.instance_id = eval_config.get("instance_id", "unknown")
         self.repo = eval_config.get("repo", "")
         self.base_commit = eval_config.get("base_commit", "")
@@ -31,6 +33,7 @@ class DockerWorkspace:
         self.fail_to_pass = eval_config.get(
             "FAIL_TO_PASS", eval_config.get("fail_to_pass", "")
         )
+        self.docker_hub_user = docker_hub_user
         self.container_id: Optional[str] = None
         self.container_name = f"agentcap-{self.instance_id[:50]}"
         self.workdir = "/testbed"
@@ -43,7 +46,13 @@ class DockerWorkspace:
     def setup(self) -> bool:
         self._remove_existing()
 
-        image = f"sweb.eval.x86_64.{self.instance_id}:latest"
+        local_image = f"sweb.eval.x86_64.{self.instance_id}:latest"
+        if self.docker_hub_user:
+            image = f"{self.docker_hub_user}/{local_image}"
+            logger.info("[%s] Pulling %s", self.instance_id[:30], image)
+            subprocess.run(["docker", "pull", image], capture_output=True, timeout=300)
+        else:
+            image = local_image
         logger.info("[%s] Starting container from %s", self.instance_id[:30], image)
 
         try:

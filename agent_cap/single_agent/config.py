@@ -55,6 +55,7 @@ class SingleAgentBenchConfig:
     max_turns: int = 5
     workspace_dir: str = "/tmp/agent_cap_workspace"
     stop_token_ids: Optional[List[int]] = None
+    docker_hub_user: str = ""
     shell_timeout: int = 30
 
     # ------------------------------------------------------------------
@@ -87,6 +88,7 @@ class SingleAgentBenchConfig:
             workspace_dir=str(data.get("workspace_dir", "/tmp/agent_cap_workspace")),
             shell_timeout=int(data.get("shell_timeout", 30)),
             stop_token_ids=data.get("stop_token_ids"),
+            docker_hub_user=str(data.get("docker_hub_user", "")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
