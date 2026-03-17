@@ -83,3 +83,4 @@ tasks/
 
 # Orchestrator state
 .sisyphus/
+logs/
