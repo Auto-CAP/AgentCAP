@@ -107,38 +107,45 @@ class ModalWorkspace:
         except json.JSONDecodeError:
             tests = [self.fail_to_pass]
 
-        passed_count = 0
-        details: List[Dict[str, Any]] = []
+        test_files_str = ",".join(t.split(" | ")[0].strip() for t in tests)
 
-        for test_spec in tests:
-            test_target = test_spec.strip()
-            try:
-                process = self._sandbox.exec(
-                    "python", "-m", "pytest", test_target, "-x", "--tb=short", "-q"
-                )
-                process.wait()
-                stdout = process.stdout.read()
-                stderr = process.stderr.read()
-                output = (stdout + stderr)[-500:]
-                ok = process.returncode == 0
-            except Exception as exc:
-                output = str(exc)
-                ok = False
-            if ok:
-                passed_count += 1
-            details.append(
-                {
-                    "test": test_spec[:100],
-                    "passed": ok,
-                    "output": output,
-                }
+        script_url = (
+            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
+            f"run_scripts/{self.instance_id}/run_script.sh"
+        )
+        parser_url = (
+            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
+            f"run_scripts/{self.instance_id}/parser.py"
+        )
+
+        self._exec(
+            f"curl -sL '{script_url}' -o /run_script.sh && chmod +x /run_script.sh"
+        )
+        self._exec(f"curl -sL '{parser_url}' -o /parser.py")
+
+        output = (
+            self._exec(
+                f"cd {self.workdir} && bash /run_script.sh {test_files_str} 2>&1"
             )
+            or ""
+        )
+
+        parse_result = self._exec(
+            f"cd {self.workdir} && python3 /parser.py --log '{output[-8000:]}' "
+            f"--expected '{json.dumps(tests)}' 2>/dev/null"
+        )
+
+        ok = False
+        if parse_result and "PASS" in parse_result.upper():
+            ok = True
 
         return {
-            "passed": passed_count == len(tests),
-            "passed_count": passed_count,
-            "total": len(tests),
-            "details": details,
+            "passed": ok,
+            "passed_count": 1 if ok else 0,
+            "total": 1,
+            "details": [
+                {"test": test_files_str[:100], "passed": ok, "output": output[-500:]}
+            ],
         }
 
     def cleanup(self):
