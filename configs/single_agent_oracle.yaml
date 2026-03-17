@@ -1,0 +1,26 @@
+# SWE-bench Oracle mode — no tool calls, pure text generation
+# Model gets full prompt (issue + oracle file context), outputs a patch
+# Evaluation via Docker: swebench.harness.run_evaluation
+
+name: single-agent-oracle
+model_id: unsloth/GPT-OSS-120b
+serving_engine: vllm
+base_url: http://localhost:8000
+
+dataset: swebench_oracle
+dataset_count: 50
+batch_sizes: [1, 2, 4, 8, 16, 32]
+
+enable_tool_calls: false
+stop_token_ids: [200012, 200002]
+
+max_tokens: 16384
+temperature: 0.0
+repetitions: 1
+
+gpu_monitor_interval: 0.5
+cpu_monitor_interval: 0.5
+tp: 8
+gpu_type: H100-80G
+
+output_dir: results/single_agent_oracle

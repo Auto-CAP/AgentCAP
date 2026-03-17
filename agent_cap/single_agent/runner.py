@@ -259,6 +259,37 @@ class SingleAgentRunner:
                     f.write(json.dumps(tr, ensure_ascii=False, default=str) + "\n")
             logger.info("Wrote %s (%d entries)", tr_path, len(task_results))
 
+            preds = [
+                tr
+                for tr in task_results
+                if "model_patch" in tr and tr.get("instance_id")
+            ]
+            if preds:
+                pred_path = out / "predictions.jsonl"
+                with open(pred_path, "w", encoding="utf-8") as f:
+                    for p in preds:
+                        f.write(
+                            json.dumps(
+                                {
+                                    "instance_id": p["instance_id"],
+                                    "model_name_or_path": p.get(
+                                        "model_name_or_path", ""
+                                    ),
+                                    "model_patch": p["model_patch"],
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                logger.info("Wrote %s (%d predictions)", pred_path, len(preds))
+                print(f"\n  predictions.jsonl: {pred_path}")
+                print(
+                    "  Evaluate with:\n"
+                    "    python -m swebench.harness.run_evaluation \\\n"
+                    f"      --predictions_path {pred_path} \\\n"
+                    "      --run_id my_run --max_workers 4"
+                )
+
             by_bs: Dict[int, List[Dict[str, Any]]] = {}
             for tr in task_results:
                 bs = tr.get("batch_size", 0)
