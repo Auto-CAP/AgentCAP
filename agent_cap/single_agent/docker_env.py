@@ -135,18 +135,44 @@ class DockerWorkspace:
         details: List[Dict[str, Any]] = []
 
         for test_spec in tests:
-            test_target = test_spec.split("::")[0].split(" | ")[0].strip()
-            proc = self._docker_exec(
-                f"python -m pytest {test_target} -x --tb=short -q",
-                timeout=timeout,
-            )
-            ok = proc is not None and proc.returncode == 0
-            if ok:
-                passed_count += 1
-            output = ""
-            if proc:
+            test_target = test_spec.strip()
+            if not self.container_id:
+                details.append(
+                    {
+                        "test": test_target[:100],
+                        "passed": False,
+                        "output": "no container",
+                    }
+                )
+                continue
+            try:
+                proc = subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        "-w",
+                        self.workdir,
+                        self.container_id,
+                        "python",
+                        "-m",
+                        "pytest",
+                        test_target,
+                        "-x",
+                        "--tb=short",
+                        "-q",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                ok = proc.returncode == 0
+                if ok:
+                    passed_count += 1
                 output = (proc.stdout + proc.stderr)[-500:]
-            details.append({"test": test_spec[:100], "passed": ok, "output": output})
+            except subprocess.TimeoutExpired:
+                ok = False
+                output = "timeout"
+            details.append({"test": test_target[:100], "passed": ok, "output": output})
 
         return {
             "passed": passed_count == len(tests),
