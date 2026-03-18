@@ -483,6 +483,45 @@ async def run_exec_phase(
                 }
             )
 
+    needs_finalization = False
+    if messages:
+        last = messages[-1]
+        if last.get("role") == "tool":
+            needs_finalization = True
+        elif last.get("role") == "assistant" and last.get("tool_calls"):
+            needs_finalization = True
+
+    if needs_finalization:
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Now provide the final answer to the original task using the "
+                    "tool results above. Do not call additional tools."
+                ),
+            }
+        )
+        try:
+            final_result = await chat_completion(
+                session,
+                executor.base_url,
+                executor.api_key,
+                executor.id,
+                messages,
+                None,
+                max_tokens,
+                temperature=0.0,
+            )
+            usage = final_result.get("usage") or {}
+            input_tokens += int(usage.get("prompt_tokens", 0))
+            output_tokens += int(usage.get("completion_tokens", 0))
+            choices = final_result.get("choices") or []
+            if choices:
+                assistant = choices[0].get("message") or {}
+                messages.append(assistant)
+        except Exception as exc:
+            errors.append(f"finalize: {exc}")
+
     elapsed = time.perf_counter() - start
     final_response = strip_think_tags(extract_final_assistant_text(messages))
 

@@ -1,0 +1,24 @@
+name: minimax-self-fix-smoke
+description: "MiniMax M2.5 plans and executes"
+experiment_type: plan-execute
+
+planner:
+  id: MiniMax-M2.5
+  base_url: https://api.minimaxi.com
+  api_key: ${ANTHROPIC_API_KEY}
+  is_local: false
+  input_price_per_1m: 0.30
+  output_price_per_1m: 1.20
+
+executor:
+  id: MiniMax-M2.5
+  base_url: https://api.minimaxi.com
+  is_local: false
+  api_key: ${ANTHROPIC_API_KEY}
+  input_price_per_1m: 0.30
+  output_price_per_1m: 1.20
+
+mcp_server_url: http://localhost:1984
+max_turns: 20
+max_tokens: 8192
+plan_max_tokens: 4096
