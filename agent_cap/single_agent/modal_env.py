@@ -63,7 +63,7 @@ class ModalWorkspace:
                 img = modal.Image.from_registry(image_ref)
                 app = modal.App.lookup("agentcap-swebench", create_if_missing=True)
                 return modal.Sandbox.create(
-                    image=img, app=app, workdir=self.workdir, timeout=600
+                    image=img, app=app, workdir=self.workdir, timeout=3600
                 )
 
             with ThreadPoolExecutor(max_workers=1) as pool:
