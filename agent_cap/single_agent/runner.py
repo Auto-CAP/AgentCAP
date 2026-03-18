@@ -414,19 +414,25 @@ class SingleAgentRunner:
             return error_result("workspace not ready")
 
         try:
-            agentic_prompt = (
-                "You are an expert software engineer. Your task is to FIX the "
-                "issue described below by modifying the source code.\n\n"
-                "IMPORTANT INSTRUCTIONS:\n"
-                "1. First use search_code and read_file to understand the codebase\n"
-                "2. Then use write_file to make the necessary code changes\n"
-                "3. Finally use run_shell to verify your fix works\n"
-                "4. You MUST use write_file to modify at least one file\n\n"
-                f"The repo is at: {ws.workspace}\n\n"
+            system_prompt = (
+                "You are an expert software engineer tasked with fixing bugs in code repositories. "
+                "You have access to tools: read_file, write_file, run_shell, search_code.\n\n"
+                "YOUR WORKFLOW:\n"
+                "1. READ: Use search_code and read_file to find the relevant code (1-3 calls max)\n"
+                "2. FIX: Use write_file to modify the source files that need changing\n"
+                "3. VERIFY: Use run_shell to run tests and confirm your fix\n\n"
+                "CRITICAL RULES:\n"
+                "- You MUST call write_file to fix the code. Reading alone is NOT enough.\n"
+                "- Do NOT spend more than 3 turns just reading. Start writing fixes.\n"
+                "- When you use write_file, write the COMPLETE file content, not just the changed lines.\n"
+            )
+            user_prompt = (
+                f"Fix the following issue in the repository at {ws.workspace}.\n\n"
                 f"{messages[0]['content']}"
             )
             agentic_messages: List[Dict[str, Any]] = [
-                {"role": "user", "content": agentic_prompt}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
             ]
 
             logger.info(
