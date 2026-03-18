@@ -583,6 +583,17 @@ class SingleAgentRunner:
                     }
                 )
 
+                out_preview = (
+                    result.output[:150].replace("\n", "\\n")
+                    if result.output
+                    else "(empty)"
+                )
+                print(
+                    f"      → {tc['name']}({json.dumps(args)[:80]})  "
+                    f"ok={result.success}  {result.latency_ms:.0f}ms  "
+                    f"out={out_preview}"
+                )
+
                 logger.debug(
                     "  turn=%d  tool=%s  ok=%s  %.1fms",
                     turn,
