@@ -1,0 +1,13 @@
+name: local-qwen35moe
+description: "Baseline: Qwen3.5-35B-A3B MoE alone (no planner)"
+experiment_type: local-only
+
+executor:
+  id: Qwen/Qwen3.5-35B-A3B
+  base_url: http://localhost:30000
+  is_local: true
+  throughput_tok_per_sec: 0
+
+mcp_server_url: http://localhost:1984
+max_turns: 20
+max_tokens: 8192

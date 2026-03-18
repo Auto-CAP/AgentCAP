@@ -1,0 +1,51 @@
+name: model-size-frontier
+description: "For each task type, what is the smallest model that achieves acceptable quality?"
+
+models:
+  - id: "deepseek-ai/DeepSeek-V3.2"
+    arch: MoE
+    active_b: 37
+    params_b: 685
+    tp: 8
+    tier: XL
+  - id: "Qwen/Qwen3-235B-A22B"
+    arch: MoE
+    active_b: 22
+    params_b: 235
+    tp: 4
+    tier: L
+  - id: "openai/gpt-oss-120b"
+    arch: dense
+    params_b: 120
+    tp: 4
+    tier: M
+  - id: "Qwen/Qwen3-32B"
+    arch: dense
+    params_b: 32
+    tp: 2
+    tier: M
+  - id: "openai/gpt-oss-20b"
+    arch: dense
+    params_b: 22
+    tp: 1
+    tier: S
+  - id: "Qwen/Qwen3-8B"
+    arch: dense
+    params_b: 8
+    tp: 1
+    tier: S
+  - id: "Qwen/Qwen3-4B"
+    arch: dense
+    params_b: 4
+    tp: 1
+    tier: T
+
+quantizations: ["fp16"]
+skill_subsets: ["all", "none"]
+num_retries: [0]
+temperatures: [0.0]
+
+serving_engine: sglang
+repetitions: 5
+gpu_type: H100-80G
+num_gpus: 8

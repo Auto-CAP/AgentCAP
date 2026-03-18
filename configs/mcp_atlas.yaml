@@ -1,0 +1,9 @@
+name: mcp-atlas-single-agent
+model_id: gpt-oss
+base_url: http://localhost:8000
+mcp_server_url: http://localhost:1984
+max_turns: 20
+max_tokens: 16384
+temperature: 0.0
+dataset_count: 50
+output_dir: results/mcp_atlas

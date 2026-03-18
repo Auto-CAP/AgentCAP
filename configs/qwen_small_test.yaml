@@ -1,0 +1,30 @@
+name: qwen-small-test
+description: "Quick test: small Qwen dense (4B) vs MoE (30B-A3B) on GPU 0,1 with TP=2"
+
+models:
+  - id: "Qwen/Qwen3-4B"
+    arch: dense
+    params_b: 4
+    active_b: 4
+    tp: 2
+    tier: T
+  - id: "Qwen/Qwen3-30B-A3B"
+    arch: MoE
+    params_b: 30
+    active_b: 3
+    tp: 2
+    tier: S
+
+quantizations: ["fp16"]
+skill_subsets: ["all"]
+num_retries: [0]
+temperatures: [0.0]
+agent_modes: ["single-pass"]
+
+serving_engine: sglang
+repetitions: 1
+max_tokens: 8192
+gpu_type: RTX-PRO-6000-98G
+num_gpus: 2
+python_path: "/mnt/raid0nvme0/sicheng/miniconda3/envs/sglang/bin/python"
+cuda_visible_devices: "0,1"

@@ -1,0 +1,33 @@
+name: qwen-combo-bigcodebench-pairB
+description: "Multi-agent combination strategies on BigCodeBench: Qwen3-30B-A3B (small/MoE) vs Qwen3-32B (large/dense)"
+
+small_model:
+  id: "Qwen/Qwen3-30B-A3B"
+  arch: MoE
+  params_b: 30
+  active_b: 3
+  tp: 1
+  port: 30000
+  cuda_visible_devices: "0"
+
+large_model:
+  id: "Qwen/Qwen3-32B"
+  arch: dense
+  params_b: 32
+  active_b: 32
+  tp: 1
+  port: 30001
+  cuda_visible_devices: "1"
+
+strategies:
+  - cascade
+  - adaptive-cascade
+  - vote
+  - generate-verify
+  - best-of-n-small
+  - best-of-n-large
+
+serving_engine: sglang
+max_tokens: 8192
+gpu_type: RTX-PRO-6000-98G
+python_path: "/mnt/raid0nvme0/sicheng/miniconda3/envs/sglang/bin/python"

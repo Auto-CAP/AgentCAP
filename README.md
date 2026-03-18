@@ -1,157 +1,82 @@
-# Agent-CAP
+# AgentCAP
 
-**Benchmarking of Cost, Accuracy, and Performance for Agentic AI Systems**
-
-Agent-CAP is a step-level benchmarking framework that decomposes agentic workloads into atomic operations and measures each step's latency. It provides Nsight Systems-like timeline visualization for analyzing agent performance.
-
-## Features
-
-- **Step-level Profiling**: Trace individual operations in agentic workflows
-- **Multiple Timer Backends**: Support for `time.perf_counter()` and CUDA events
-- **Timeline Visualization**: Interactive HTML timelines similar to Nsight Systems
-- **Zero Dependencies**: Core functionality works without any external packages
-- **Easy Integration**: Simple decorators and context managers for instrumentation
+Multi-agent combination cost-accuracy-performance analysis for local GPU clusters. Evaluates cascade, vote, best-of-n, adaptive-cascade, generate-verify, self-critique strategies across model pairs using BigCodeBench and MCP-Atlas.
 
 ## Installation
 
 ```bash
-# Basic installation
-pip install -e .
-
-# With visualization support
-pip install -e ".[viz]"
-
-# With CUDA timing support
-pip install -e ".[cuda]"
-
-# Full installation
 pip install -e ".[all]"
 ```
+Note: Requires SGLang in a conda env. Models served locally, no API keys needed for inference. Python path for SGLang env: `/mnt/raid0nvme0/sicheng/miniconda3/envs/sglang/bin/python`.
 
-## Quick Start
+## Quick Start: Run a BigCodeBench Combo Experiment
 
-```python
-from agent_cap import Tracer, StepType, TimelineVisualizer
-
-# Create a tracer
-tracer = Tracer("my-agent-workflow")
-
-# Use context managers to trace steps
-with tracer:
-    with tracer.step("planning", StepType.PLANNING):
-        # Your planning code here
-        plan = agent.plan(task)
-
-    with tracer.step("retrieval", StepType.RETRIEVAL):
-        # Your retrieval code here
-        docs = retriever.search(query)
-
-    with tracer.step("reasoning", StepType.REASONING):
-        # Your LLM inference code here
-        response = llm.generate(prompt)
-
-# Get the trace and visualize
-trace = tracer.get_trace()
-
-# Save to JSON
-trace.save("trace.json")
-
-# Create visualization
-viz = TimelineVisualizer(trace)
-viz.save_html("timeline.html")  # Interactive HTML
-print(viz.to_ascii())           # Terminal output
-```
-
-## Step Types
-
-Agent-CAP categorizes workflow steps based on their computational characteristics:
-
-| Step Type | Description | Bottleneck |
-|-----------|-------------|------------|
-| `PLANNING` | Task decomposition, high-level decisions | Compute-bound |
-| `REASONING` | Chain-of-thought, inference | Memory-bandwidth bound |
-| `RETRIEVAL` | Document fetch, RAG | I/O bound |
-| `TOOL_CALLING` | External API calls | Network/CPU bound |
-| `CODE_EXECUTION` | Running generated code | CPU/sandbox bound |
-| `PREFILL` | LLM prefill phase | Compute-bound |
-| `DECODE` | LLM decode phase | Memory-bandwidth bound |
-| `EMBEDDING` | Embedding computation | Compute-bound |
-
-## Decorator API
-
-```python
-from agent_cap import tracer, StepType
-
-@tracer("fetch_data", StepType.RETRIEVAL)
-def fetch_data(query):
-    return db.query(query)
-
-@tracer("generate", StepType.DECODE)
-def generate(prompt):
-    return llm(prompt)
-```
-
-## Visualization
-
-### Interactive HTML Timeline
-
-```python
-from agent_cap import TimelineVisualizer
-
-viz = TimelineVisualizer(trace)
-viz.save_html("timeline.html")
-viz.show()  # Opens in browser
-```
-
-### ASCII Timeline (Terminal)
-
-```python
-print(viz.to_ascii())
-```
-
-Output:
-```
-Timeline: my-agent-workflow
-Total Duration: 1234.56 ms
-============================================================
-                        |    0  250  500  750 1000
-                        +--------------------------------
-planning               |████                    (150.2ms)
-retrieval              |    ██████              (280.5ms)
-reasoning              |          ████████████  (450.3ms)
-============================================================
-```
-
-### Summary Table
-
-```python
-print(viz.summary_table())
-```
-
-## Examples
-
-Run the example scripts:
-
+### Step 1: Start SGLang servers
+Launch from `/tmp` to avoid import conflicts.
 ```bash
-# Simple agent workflow
-python examples/simple_agent.py
+# GPU 0: Small Model (Qwen3-30B-A3B)
+python -m sglang.launch_server --model-path Qwen/Qwen3-30B-A3B --port 30000 --cuda-visible-devices 0
 
-# RAG agent benchmark
-python examples/rag_agent.py
+# GPU 1: Large Model (Qwen3-32B)
+python -m sglang.launch_server --model-path Qwen/Qwen3-32B --port 30001 --cuda-visible-devices 1
 ```
 
-## CUDA Timing
-
-For precise GPU timing, use CUDA events:
-
-```python
-tracer = Tracer("gpu-workflow", use_cuda=True)
-
-with tracer.step("gpu_compute", StepType.PREFILL):
-    # GPU operations are timed with CUDA events
-    model(input_tensor)
+### Step 2: Run combo experiment
+```bash
+python -m agent_cap combo configs/qwen_combo_pairB.yaml --benchmark bigcodebench:50 --db results/combo.db
 ```
+
+### Step 3: Analyze results
+```bash
+python analyze_results.py --db results/combo.db --output-dir results/analysis/ --pair-label pairB
+```
+
+## Run MCP-Atlas (Agentic) Experiments
+
+### Step 1: Start SGLang with tool calling
+Qwen3 requires `--tool-call-parser qwen25`. Max tokens must be >= 8192 for thinking tags.
+```bash
+python -m sglang.launch_server --model-path Qwen/Qwen3-32B --port 30002 --cuda-visible-devices 2 --tool-call-parser qwen25 --context-length 65536
+```
+
+### Step 2: Start Docker MCP-Atlas env
+```bash
+docker run --rm -d --name mcp-atlas-env -p 1984:1984 mcp-atlas-env
+```
+
+### Step 3: Run combo experiment
+```bash
+python scripts/mcpatlas_combo.py --config configs/mcpatlas_pairB_gpu23.yaml --num-tasks 50 --db results/mcpatlas.db
+```
+
+### Step 4: Score with GPT-4o
+```bash
+cd /home/sicheng/mcp-atlas/services/mcp_eval
+EVAL_LLM_API_KEY=$OPENAI_API_KEY uv run python mcp_evals_scores.py --input-file="/home/sicheng/AgentCAP/results/mcpatlas/cascade.csv" --model-label="pairB-cascade" --evaluator-model="gpt-4o"
+```
+
+## Config Format
+Detailed guide in `configs/README.md`. Key fields:
+- `small_model`/`large_model`: model ID, port, and GPU placement
+- `strategies`: List of methods (e.g., `cascade`, `vote`, `best-of-n-small`)
+- `max_tokens`: Generation limit (suggest 8192+)
+
+## Project Structure
+```
+agent_cap/       # Core multi-agent logic and CLI
+configs/         # YAML experiment specifications
+results/         # SQLite databases and analysis outputs
+scripts/         # MCP-Atlas and utility scripts
+analyze_results.py # result visualization and Pareto analysis
+```
+
+## Key Results (Pair A: 4B vs 30B-A3B)
+| Strategy | Pass@1 | GPU-s | $/correct (H100) |
+|---|---|---|---|
+| Best-of-N-Small (4B×3) | 50% | 104.4 | $0.070 |
+| Cascade | 44% | 23.9 | $0.018 |
+| Best-of-N-Large (30B×3) | 44% | 74.7 | $0.057 |
+| Adaptive-Cascade | 42% | 41.6 | $0.033 |
 
 ## Acknowledgement
-This project is supported by the Advanced Research and Invention
-Agency (ARIA)’s grant “Scaling Compute: AI at 1/1000th the cost. Technical Area 4 Benchmarking”.
+This project is supported by the Advanced Research and Invention Agency (ARIA)'s grant "Scaling Compute: AI at 1/1000th the cost. Technical Area 4 Benchmarking".

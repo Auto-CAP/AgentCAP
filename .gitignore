@@ -64,3 +64,23 @@ ENV/
 # Benchmark outputs
 *.html
 *_trace.json
+
+# Runtime outputs
+results/
+server_sglang_*.log
+
+# Experiment temp artifacts
+df_contents.txt
+output.csv
+structured_log.csv
+structured_logs.csv
+test_server.csv
+test_server_structured.csv
+scripts/test_persist.txt
+
+# Task workspace
+tasks/
+
+# Orchestrator state
+.sisyphus/
+logs/

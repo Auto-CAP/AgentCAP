@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-cap"
-version = "0.1.0"
+version = "0.2.0"
 description = "Benchmarking of Cost, Accuracy, and Performance for Agentic AI Systems"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.8"
+dependencies = [
+    "pyyaml>=6.0",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -34,6 +37,9 @@ dev = [
     "mypy>=1.0.0",
 ]
 all = ["plotly>=5.0.0", "torch>=2.0.0"]
+
+[project.scripts]
+agent-cap = "agent_cap.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["agent_cap*"]

@@ -1,0 +1,236 @@
+# AgentCAP Experiment Plan (v3)
+
+**Paper**: "When Two Heads Are Cheaper Than One: Cost-Optimal Multi-Agent Combinations on Local GPU Clusters"
+**Target**: NeurIPS 2026
+**Hardware**: 4× NVIDIA RTX PRO 6000 (98GB VRAM each)
+**Serving**: SGLang, all local inference, cost = GPU-seconds
+
+---
+
+## Core Thesis
+
+On local GPU clusters, multi-agent combination strategies can beat single large models on cost-accuracy Pareto efficiency. The advantage comes from **conditional compute allocation** — routing easy tasks to cheap models, hard tasks to expensive ones — not from models "discussing" with each other. This advantage saturates at ~2 agents; adding a 3rd provides diminishing returns because most tasks are either trivially easy or globally unsolvable, leaving only a narrow "boundary" zone where extra agents help.
+
+---
+
+## Three Research Questions
+
+### RQ1: Which multi-agent combinations sit on the accuracy-cost Pareto frontier?
+
+**What we test**: 6 strategies × 4+ model pairs × 2 benchmarks.
+**Expected finding**: Cascade (small → large with confidence routing) is consistently Pareto-optimal across model families. Budget-matched Best-of-N-Small beats single-large models.
+**Why it matters**: Practitioners deploying local GPU clusters need a simple, universal recommendation. If cascade dominates regardless of model family, that's directly actionable.
+**Key figure**: Pareto frontier overlay across all model pairs.
+
+### RQ2: Does model diversity improve multi-agent outcomes — and where does the value come from?
+
+**What we test**: Compare homogeneous strategies (3× same model) vs heterogeneous strategies (3 different models from different families). Test whether diversity's value is in **answer aggregation** (cross-family vote) or **uncertainty estimation / routing** (diversity-gated cascade).
+**Expected finding**: Diversity helps routing more than aggregation. Two cheap diverse models disagreeing is a stronger escalation signal than single-model confidence.
+**Why it matters**: This is the key novelty — most multi-agent work uses identical agents. We show that heterogeneity's real value is as a cost-free uncertainty detector, not as an ensemble.
+**Key figure**: Homogeneous vs heterogeneous vote/cascade cost-accuracy comparison.
+
+### RQ3: Why do returns saturate after two agents?
+
+**What we test**: 3-tier cascade (small → medium → large) vs 2-tier cascade. Task-level decomposition into easy / boundary / unsolvable categories.
+**Expected finding**: Most tasks fall into "small-model-easy" or "globally-unsolvable". Only ~10-15% of tasks sit in the "boundary" zone where extra compute helps. A 3rd tier adds negligible value because the boundary is too narrow.
+**Why it matters**: Explains *why* the title holds — two heads are enough because the decision boundary is thin. Provides theoretical grounding, not just empirical observation.
+**Key figure**: Task difficulty decomposition (easy/boundary/unsolvable) with strategy accuracy overlay.
+
+---
+
+## Strategies
+
+### 2-Model Strategies (Existing, Implemented)
+
+| Strategy | Type | How it works | Role |
+|---|---|---|---|
+| **Cascade** | Multi-agent | Small tries first; escalate to large if confidence < threshold | Core strategy |
+| **Adaptive-Cascade** | Multi-agent | Like cascade but threshold adapts based on task difficulty signals | Core strategy |
+| **Vote** | Multi-agent | 3× small model, majority vote | Baseline |
+| **Generate-Verify** | Multi-agent | Small generates, large verifies and accepts/rejects | Core strategy |
+| **Best-of-N** | Single-agent | N× same model, pick best by heuristic | Control |
+| **Self-Critique** | Single-agent | Same model critiques and revises its own output | Control (negative) |
+
+### >2 Model Strategies (New — RQ2 & RQ3)
+
+| Strategy | Models | How it works | Tests |
+|---|---|---|---|
+| **Diversity-Gated Cascade** ⭐ | 2 cheap (different families) + 1 large | Two cheap models solve in parallel. If they **agree** → accept. If they **disagree** → escalate to large model. | RQ2: Is cross-family disagreement a better routing signal than single-model confidence? |
+| **Cross-Family Vote** | 3 models (different families) | Three different models vote (e.g., Qwen3-4B + GPT-OSS-20b + Nemotron-3-Nano). Compare vs 3× same model. | RQ2: Does architectural diversity improve vote accuracy at same GPU-second budget? |
+| **3-Tier Cascade** | small + medium + large (same family) | Small → medium → large, with confidence routing at each tier. | RQ3: Does finer-grained conditional compute outperform 2-tier, or do returns plateau? |
+
+**Diversity-Gated Cascade** is the flagship new strategy. The other two are controls.
+
+---
+
+## Available Models
+
+All models fit on 1 GPU (98GB). Cost measured in GPU-seconds of active inference.
+
+| Model | Family | Architecture | Active Params | BF16 Size | Status |
+|---|---|---|---|---|---|
+| Qwen3-4B | Qwen3 | Dense Transformer | 4B | 7.6 GB | ✅ Cached |
+| Qwen3-30B-A3B | Qwen3 | MoE | 3B active | 57 GB | ✅ Cached |
+| Qwen3-32B | Qwen3 | Dense Transformer | 32B | 62 GB | ✅ Cached |
+| Qwen3.5-9B | Qwen3.5 | Dense + DeltaNet | 9B | ~18 GB | To download |
+| GPT-OSS-20b | OpenAI | MoE | 3.6B active | ~42 GB | To download |
+| Nemotron-3-Nano | NVIDIA | MoE + Mamba hybrid | 3B active | ~57 GB | To download |
+
+### Why These Models
+
+- **3 families** (Qwen, OpenAI, NVIDIA): Different training data, tokenizers, architectures
+- **3 architecture types** (Dense, MoE, MoE+Mamba): Tests whether strategy effectiveness is architecture-dependent
+- **All ~3-4B active params** for small models: Fair cost comparison (similar inference cost per token)
+- **Medium models** (9B): Enables 3-tier cascade experiments
+
+---
+
+## Experiment Design
+
+### Benchmarks
+
+| Benchmark | Type | Tasks | Evaluation | Why |
+|---|---|---|---|---|
+| **BigCodeBench** (ICML 2024) | Non-agentic code generation | 50 tasks | Execution-based (unittest) | Single-turn, deterministic eval, widely cited |
+| **MCP-Atlas** (Scale AI, 2025-2026) | Agentic multi-tool orchestration | 50 tasks | Claims-based with GPT-4o judge | Multi-turn tool-use, tests real-world agent capability |
+
+### Metrics (Paper-Level)
+
+| Metric | Definition | Why |
+|---|---|---|
+| **Pass@1** | % tasks solved correctly | Primary accuracy measure |
+| **GPU-s/task** | GPU-seconds per task (inference time × GPU count) | Primary cost measure |
+| **Cost/Correct** | GPU-s per correctly solved task | Pareto efficiency |
+| **tool_call_count** | Number of tool invocations (MCP-Atlas only) | Agentic complexity measure |
+
+### Phase 1: 2-Model Experiments (6 strategies × model pairs)
+
+| Pair | Small | Large | Key Question | Benchmark | Status |
+|---|---|---|---|---|---|
+| **A** | Qwen3-4B | Qwen3-30B-A3B | Baseline: big capability gap, same family | BigCodeBench | ✅ Done |
+| **B** | Qwen3-30B-A3B | Qwen3-32B | Does cascade help when models are close in ability? | Both | 🔄 Running |
+| **C** | GPT-OSS-20b | Qwen3.5-9B | Cross-family: does cascade generalize? | Both | ⏳ Next |
+| **D** | Nemotron-3-Nano | Qwen3.5-9B | Cross-architecture: Mamba+MoE as cheap router | Both | ⏳ Next |
+
+### Phase 2: >2 Model Experiments (3 new strategies)
+
+| Experiment | Models | GPUs | Key Question (RQ) | Benchmark |
+|---|---|---|---|---|
+| **Diversity-Gated Cascade** | Qwen3-4B + GPT-OSS-20b → Qwen3-32B | 3 GPUs | Cross-family disagreement as routing signal (RQ2) | BigCodeBench |
+| **Diversity-Gated Cascade** | Qwen3-4B + Nemotron-3-Nano → Qwen3-32B | 3 GPUs | Same, with Mamba hybrid (RQ2) | BigCodeBench |
+| **Cross-Family Vote** | Qwen3-4B + GPT-OSS-20b + Nemotron-3-Nano | 3 GPUs | Diverse vote vs homogeneous Best-of-N (RQ2) | BigCodeBench |
+| **3-Tier Cascade** | Qwen3-4B → Qwen3.5-9B → Qwen3-32B | 3 GPUs | Does 3rd tier help or saturate? (RQ3) | BigCodeBench |
+| **Diversity-Gated Cascade** | Best config from above | 3 GPUs | Does it hold for agentic tasks? | MCP-Atlas |
+
+**Budget-matching rule**: All comparisons normalized to equal GPU-seconds. For example, cross-family vote (3 cheap models) compared against Best-of-N-Small (3× same cheap model) at same total cost.
+
+---
+
+## Confirmed Results (Pair A)
+
+| Strategy | Accuracy | GPU-s/task | Cost/Correct | Notes |
+|---|---|---|---|---|
+| Best-of-N-Small (4B×3) | 50% | 104.4 | 208.9 | Cheap×3 > Expensive×1 |
+| Cascade | 44% | 23.9 | **54.3** | Pareto-optimal |
+| Best-of-N-Large (30B×3) | 44% | 74.7 | 169.8 | |
+| Adaptive-Cascade | 42% | 41.6 | 99.1 | |
+| Vote | 36% | 25.3 | 70.2 | |
+| Generate-Verify | 30% | 25.1 | 83.5 | |
+| Self-Critique-Small | 24% | 52.4 | 218.3 | Hurts vs 30% base |
+| Self-Critique-Large | 14% | 23.6 | 168.3 | Hurts vs 38% base |
+
+**Oracle ceiling**: 56% (44% of tasks unsolvable by any strategy)
+**Cascade routing**: When small model doesn't escalate → 100% correct. When escalated → only 17.6% correct.
+
+---
+
+## Paper Figures (5 Main + 1 Supplementary)
+
+| # | Figure | RQ | Data | Core Message |
+|---|---|---|---|---|
+| 1 | **Pareto Frontier Overlay** | RQ1 | All pairs × BigCodeBench | Cascade is universally Pareto-optimal across model families |
+| 2 | **Diversity-Gated vs Standard Cascade** | RQ2 | Phase 2 experiments | Cross-family disagreement is a stronger routing signal than self-confidence |
+| 3 | **Homogeneous vs Heterogeneous Vote** | RQ2 | Cross-Family Vote vs Best-of-N | Diversity improves vote quality at same cost (or doesn't — both are publishable) |
+| 4 | **Task Decomposition: Easy / Boundary / Unsolvable** | RQ3 | All pairs | Most tasks are trivially easy or globally unsolvable; narrow boundary explains saturation |
+| 5 | **Strategy Ranking Shift: Agentic vs Non-agentic** | RQ1 | Pairs B,C,D × 2 benchmarks | Agentic tasks change optimal strategy (or don't) |
+| S1 | **3-Tier vs 2-Tier Cascade** (supplementary) | RQ3 | 3-Tier experiment | Diminishing returns from finer-grained routing |
+
+---
+
+## Execution Timeline
+
+```
+[DONE]  Pair A × BigCodeBench (400 runs, 7 figures, analysis complete)
+[DONE]  MCP-Atlas baselines (30B-A3B: 0% pass, 32B: 8% pass)
+[DONE]  MCP-Atlas cascade combo scored (14% pass — 2× baseline)
+[RUN]   Pair B × BigCodeBench (62/300, GPU 0+1)
+[RUN]   Pair B × MCP-Atlas combos (56/250, GPU 2+3)
+         |
+         v  (~12-15h)
+Phase 3: Pair B analysis + all MCP-Atlas GPT-4o scoring
+         |
+         v
+Phase 4: Download new models (Qwen3.5-9B, GPT-OSS-20b, Nemotron-3-Nano)
+         |
+         v
+Phase 5: Pair C + Pair D (parallel, 4 GPUs)
+   GPU 0: GPT-OSS-20b (Pair C small)     GPU 2: Nemotron-3-Nano (Pair D small)
+   GPU 1: Qwen3.5-9B (Pair C large)      GPU 3: Qwen3.5-9B (Pair D large)
+         |
+         v  (~12-16h)
+Phase 6: >2 Model experiments (need 3 GPUs each)
+   6a: Diversity-Gated Cascade (Qwen3-4B + GPT-OSS-20b → Qwen3-32B)
+   6b: Diversity-Gated Cascade (Qwen3-4B + Nemotron-3-Nano → Qwen3-32B)
+   6c: Cross-Family Vote (4B + GPT-OSS-20b + Nemotron-3-Nano)
+   6d: 3-Tier Cascade (4B → Qwen3.5-9B → 32B)
+   6e: Best diversity-gated config × MCP-Atlas
+         |
+         v  (~8-12h)
+Phase 7: Final cross-experiment analysis + all paper figures
+```
+
+**Total estimated GPU time remaining**: ~40-50h
+
+---
+
+## GPU Allocation Plan
+
+| Phase | GPU 0 | GPU 1 | GPU 2 | GPU 3 | Duration |
+|---|---|---|---|---|---|
+| NOW (Phase 2) | 30B-A3B (Pair B BCB) | 32B (Pair B BCB) | 30B-A3B (Pair B MCP) | 32B (Pair B MCP) | ~12h |
+| Phase 5 | GPT-OSS-20b (Pair C) | Qwen3.5-9B (Pair C) | Nemotron-Nano (Pair D) | Qwen3.5-9B (Pair D) | ~12h |
+| Phase 6a-d | Qwen3-4B | GPT-OSS-20b or Nemotron | Qwen3.5-9B (medium) | Qwen3-32B (large) | ~8h |
+| Phase 6e | Qwen3-4B | Best cheap model | — | Qwen3-32B | ~4h |
+
+---
+
+## What Gets Dropped (Appendix or Omit)
+
+| Finding | Disposition | Reason |
+|---|---|---|
+| Self-critique hurts | Appendix (1 paragraph) | Well-known in literature, not our core story |
+| Mamba-specific behavior | Fold into RQ2 diversity analysis | Only relevant if it supports/contradicts diversity thesis |
+| Per-pair leaderboard tables | Supplementary material | Useful but not paper-body worthy |
+| Architecture-specific escalation quirks | Appendix | Interesting but incremental |
+
+---
+
+## Risks and Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| GPT-OSS-20b doesn't support SGLang tool calling | Run BigCodeBench only; use vLLM fallback for MCP-Atlas |
+| >2 model strategies actually outperform 2-model significantly | Adjust title/narrative to "When Three Heads..." — still publishable |
+| Cross-family vote doesn't beat homogeneous Best-of-N | Negative result also supports thesis (diversity helps routing not voting) |
+| Qwen3.5-9B too strong as "medium" (3-tier cascade trivially wins) | Use accuracy decomposition to show gains only on boundary tasks |
+| MCP-Atlas pass rates too low for statistical significance | Use coverage_score as continuous metric instead of binary pass@1 |
+
+---
+
+## Key Implementation Notes
+
+- All budget comparisons normalized to **GPU-seconds** (not wall-clock, not API cost)
+- Diversity-Gated Cascade: new function needed in `combinations.py` — takes `small_cfgs: list[ModelConfig]` + `large_cfg: ModelConfig`
+- Cross-Family Vote: modify existing `vote()` to accept heterogeneous model list
+- 3-Tier Cascade: extend `cascade()` with `medium_cfg` parameter
+- Confidence threshold calibration must use **held-out validation set** (not test set) to avoid reviewer concerns about tuning artifacts
