@@ -299,6 +299,11 @@ def _load_swebench_pro(
                     "fail_to_pass": fail_to_pass,
                     "repo_language": repo_language,
                     "dockerhub_tag": ex.get("dockerhub_tag", ""),
+                    "before_repo_set_cmd": ex.get("before_repo_set_cmd", ""),
+                    "pass_to_pass": ex.get("pass_to_pass", ""),
+                    "selected_test_files_to_run": ex.get(
+                        "selected_test_files_to_run", ""
+                    ),
                 },
             )
         )

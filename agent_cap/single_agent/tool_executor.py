@@ -228,11 +228,9 @@ class ToolExecutor:
 
     def _search_code(self, args: Dict[str, Any]) -> str:
         pattern = args["pattern"]
-        sub_path = args.get("path", ".")
+        sub_path = args.get("path", ".") or "."
         proc = self._exec(f"grep -rn -E {pattern!r} {sub_path!r} || true")
         if proc.stdout:
             return proc.stdout
         return f"No matches found for: {pattern}"
-        if proc.stdout:
-            return proc.stdout
         return f"No matches found for: {pattern}"
