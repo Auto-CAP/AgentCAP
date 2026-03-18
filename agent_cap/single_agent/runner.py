@@ -88,22 +88,28 @@ class SingleAgentRunner:
 
         workspaces: List[Optional[Any]] = [None] * num_tasks
         if tool_mode == "with_tools":
-            for i, ec in enumerate(eval_configs):
+
+            def _setup_one(i, ec):
                 if self.config.runtime == "modal":
                     ws = ModalWorkspace(ec)
                 else:
                     ws = DockerWorkspace(
                         ec, docker_hub_user=self.config.docker_hub_user
                     )
-                logger.info(
-                    "Setting up environment for task %d/%d...", i + 1, num_tasks
-                )
                 if ws.setup():
+                    return i, ws
+                return i, None
+
+            logger.info("Setting up %d environments in parallel...", num_tasks)
+            with ThreadPoolExecutor(max_workers=min(num_tasks, 8)) as pool:
+                futures = [
+                    pool.submit(_setup_one, i, ec) for i, ec in enumerate(eval_configs)
+                ]
+                for fut in as_completed(futures):
+                    i, ws = fut.result()
                     workspaces[i] = ws
-                else:
-                    logger.warning(
-                        "Skipping %s (image not available)", ec.get("instance_id")
-                    )
+                    status = "ready" if ws else "skipped"
+                    logger.info("  task %d/%d: %s", i + 1, num_tasks, status)
 
             ready = sum(1 for w in workspaces if w is not None)
             logger.info(
