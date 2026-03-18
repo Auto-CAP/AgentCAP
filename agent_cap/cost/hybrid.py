@@ -8,28 +8,42 @@ class APICostConfig:
     output_price_per_1m: float
 
 
+@dataclass(frozen=True)
+class GPUSpec:
+    name: str
+    price_usd: float
+    tdp_watts: float
+    vram_gb: int
+
+
+GPU_SPECS = {
+    "H100_SXM": GPUSpec("H100 SXM", price_usd=35000, tdp_watts=700, vram_gb=80),
+}
+
+
 @dataclass
 class LocalCostConfig:
     model_id: str
-    gpu_price_usd: float = 30000.0
+    gpu: str = "H100_SXM"
+    prefill_tok_per_sec: float = 0.0
+    decode_tok_per_sec: float = 0.0
+    gpu_count: int = 1
     gpu_life_years: float = 3.0
-    gpu_tdp_watts: float = 700.0
     gpu_utilization: float = 0.80
-    cpu_power_watts: float = 50.0
     pue: float = 1.3
     electricity_per_kwh: float = 0.1778
-    throughput_tok_per_sec: float = 50.0
-    gpu_count: int = 1
+
+    @property
+    def gpu_spec(self) -> GPUSpec:
+        return GPU_SPECS[self.gpu]
 
     @property
     def capex_per_hour(self) -> float:
-        return self.gpu_price_usd / (self.gpu_life_years * 8760) * self.gpu_count
+        return self.gpu_spec.price_usd / (self.gpu_life_years * 8760) * self.gpu_count
 
     @property
     def opex_per_hour(self) -> float:
-        power_w = (
-            self.gpu_tdp_watts * self.gpu_utilization + self.cpu_power_watts
-        ) * self.pue
+        power_w = self.gpu_spec.tdp_watts * self.gpu_utilization * self.pue
         return (power_w / 1000) * self.electricity_per_kwh * self.gpu_count
 
     @property
@@ -37,10 +51,16 @@ class LocalCostConfig:
         return self.capex_per_hour + self.opex_per_hour
 
     @property
-    def cost_per_token(self) -> float:
-        if self.throughput_tok_per_sec <= 0:
+    def prefill_cost_per_token(self) -> float:
+        if self.prefill_tok_per_sec <= 0:
             return 0.0
-        return self.total_per_hour / (self.throughput_tok_per_sec * 3600)
+        return self.total_per_hour / (self.prefill_tok_per_sec * 3600)
+
+    @property
+    def decode_cost_per_token(self) -> float:
+        if self.decode_tok_per_sec <= 0:
+            return 0.0
+        return self.total_per_hour / (self.decode_tok_per_sec * 3600)
 
 
 @dataclass
@@ -63,8 +83,10 @@ def compute_api_cost(
 def compute_local_cost(
     config: LocalCostConfig, input_tokens: int, output_tokens: int
 ) -> float:
-    total_tokens = input_tokens + output_tokens
-    return total_tokens * config.cost_per_token
+    return (
+        input_tokens * config.prefill_cost_per_token
+        + output_tokens * config.decode_cost_per_token
+    )
 
 
 def compute_hybrid_cost(
@@ -91,12 +113,3 @@ def compute_hybrid_cost(
         plan_model=plan_config.model_id,
         exec_model=exec_config.model_id,
     )
-
-
-CLAUDE_OPUS_46 = APICostConfig(
-    "claude-opus-4-6", input_price_per_1m=5.0, output_price_per_1m=25.0
-)
-GPT_54 = APICostConfig("gpt-5.4", input_price_per_1m=2.5, output_price_per_1m=15.0)
-
-QWEN3_32B = LocalCostConfig("Qwen/Qwen3-32B", throughput_tok_per_sec=22.3)
-QWEN3_4B = LocalCostConfig("Qwen/Qwen3-4B", throughput_tok_per_sec=136.7)
