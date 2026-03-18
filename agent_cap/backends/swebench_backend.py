@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent_cap.core.tool_backend import ToolBackend, ToolResult
-from agent_cap.single_agent.tool_executor import TOOL_DEFINITIONS
+from agent_cap.backends.tool_executor import TOOL_DEFINITIONS
 
 
 class SWEBenchBackend(ToolBackend):
@@ -20,18 +20,18 @@ class SWEBenchBackend(ToolBackend):
 
     def setup(self, task_config: Dict[str, Any]) -> bool:
         if self.runtime == "modal":
-            from agent_cap.single_agent.modal_env import ModalWorkspace
+            from agent_cap.backends.modal_env import ModalWorkspace
 
             self._workspace = ModalWorkspace(task_config)
         else:
-            from agent_cap.single_agent.docker_env import DockerWorkspace
+            from agent_cap.backends.docker_env import DockerWorkspace
 
             self._workspace = DockerWorkspace(task_config)
 
         if not self._workspace.setup():
             return False
 
-        from agent_cap.single_agent.tool_executor import ToolExecutor
+            from agent_cap.backends.tool_executor import ToolExecutor
 
         modal_sb = getattr(self._workspace, "_sandbox", None)
         container_id = getattr(self._workspace, "container_id", None)
