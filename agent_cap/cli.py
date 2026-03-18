@@ -829,6 +829,69 @@ def cmd_reeval(args):
         )
 
 
+def cmd_mcp_atlas(args):
+    import json as _json
+
+    import yaml
+    from agent_cap.mcp_atlas.runner import MCPAtlasRunner, load_mcpatlas_tasks
+
+    raw = yaml.safe_load(open(args.config))
+    if args.base_url:
+        raw["base_url"] = args.base_url
+    if args.mcp_server_url:
+        raw["mcp_server_url"] = args.mcp_server_url
+    if args.max_turns:
+        raw["max_turns"] = args.max_turns
+
+    limit = args.limit or int(raw.get("dataset_count", 50))
+    tasks = load_mcpatlas_tasks(limit=limit)
+
+    print("=" * 70)
+    print("MCP-ATLAS Benchmark")
+    print("=" * 70)
+    print(f"  Model:      {raw.get('model_id', 'default')}")
+    print(f"  MCP Server: {raw.get('mcp_server_url', 'http://localhost:1984')}")
+    print(f"  Tasks:      {len(tasks)}")
+    print(f"  Max turns:  {raw.get('max_turns', 20)}")
+    print("=" * 70)
+
+    runner = MCPAtlasRunner(
+        base_url=raw.get("base_url", "http://localhost:8000"),
+        model_id=raw.get("model_id", "default"),
+        mcp_server_url=raw.get("mcp_server_url", "http://localhost:1984"),
+        max_turns=raw.get("max_turns", 20),
+        max_tokens=raw.get("max_tokens", 16384),
+        temperature=raw.get("temperature", 0.0),
+    )
+    results = runner.run(tasks)
+
+    out_dir = raw.get("output_dir", "results/mcp_atlas")
+    from pathlib import Path
+
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    with open(f"{out_dir}/results.jsonl", "w") as f:
+        for r in results:
+            f.write(
+                _json.dumps(
+                    {
+                        "task_id": r.task_id,
+                        "response": r.response[:500],
+                        "tool_calls": r.tool_calls,
+                        "input_tokens": r.input_tokens,
+                        "output_tokens": r.output_tokens,
+                        "latency_ms": r.latency_ms,
+                        "errors": r.errors,
+                    },
+                    default=str,
+                )
+                + "\n"
+            )
+
+    completed = sum(1 for r in results if not r.errors)
+    print(f"\nCompleted: {completed}/{len(results)}")
+    print(f"Results: {out_dir}/results.jsonl")
+
+
 def cmd_single_agent(args):
     """Run single-agent performance benchmark."""
     import json as _json
@@ -982,6 +1045,16 @@ def main():
     p_single.add_argument("--base-url", type=str, default=None)
     p_single.add_argument("--temperature", type=float, default=None)
 
+    p_atlas = sub.add_parser(
+        "mcp-atlas", help="Run MCP-ATLAS benchmark (tool-calling factual QA)"
+    )
+    p_atlas.add_argument("config", help="Path to YAML config")
+    p_atlas.add_argument("--limit", type=int, default=0)
+    p_atlas.add_argument("--max-turns", type=int, default=None)
+    p_atlas.add_argument("--base-url", type=str, default=None)
+    p_atlas.add_argument("--mcp-server-url", type=str, default=None)
+    p_atlas.add_argument("-v", "--verbose", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -1004,6 +1077,10 @@ def main():
         if hasattr(args, "verbose") and args.verbose:
             logging.basicConfig(level=logging.DEBUG)
         cmd_single_agent(args)
+    elif args.command == "mcp-atlas":
+        if hasattr(args, "verbose") and args.verbose:
+            logging.basicConfig(level=logging.DEBUG)
+        cmd_mcp_atlas(args)
     else:
         parser.print_help()
 
