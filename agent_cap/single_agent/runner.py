@@ -650,9 +650,12 @@ class SingleAgentRunner:
         print(
             f"  batch={m.batch_size:<3d}  mode={m.tool_mode:<12s}  "
             f"E2E_avg={m.e2e_latency_avg_ms:>8.1f}ms  "
+            f"E2E_p99={m.e2e_latency_p99_ms:>8.1f}ms  "
             f"RPS={m.requests_per_second:>6.2f}  "
             f"TTFT_avg={m.ttft_avg_ms:>7.1f}ms  "
+            f"TTFT_p99={m.ttft_p99_ms:>7.1f}ms  "
             f"TPOT_avg={m.tpot_avg_ms:>7.1f}ms  "
+            f"TPOT_p99={m.tpot_p99_ms:>7.1f}ms  "
             f"in_tok={m.total_input_tokens:>7d}  "
             f"out_tok={m.total_output_tokens:>7d}  "
             f"tools={m.total_tool_calls:>3d}  "
