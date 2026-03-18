@@ -456,21 +456,10 @@ class SingleAgentRunner:
             )
 
         finally:
-            if ws.container_id:
-                subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "-w",
-                        ws.workdir,
-                        ws.container_id,
-                        "git",
-                        "checkout",
-                        ".",
-                    ],
-                    capture_output=True,
-                    timeout=10,
-                )
+            if hasattr(ws, "_exec"):
+                ws._exec("git checkout . 2>/dev/null")
+            elif hasattr(ws, "_docker_exec"):
+                ws._docker_exec("git checkout .", timeout=10)
 
         return (
             resp,
