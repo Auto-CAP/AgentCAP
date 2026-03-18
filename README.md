@@ -1,82 +1,92 @@
 # AgentCAP
 
-Multi-agent combination cost-accuracy-performance analysis for local GPU clusters. Evaluates cascade, vote, best-of-n, adaptive-cascade, generate-verify, self-critique strategies across model pairs using BigCodeBench and MCP-Atlas.
+Benchmarking framework for AI agent systems — measuring **Cost**, **Accuracy**, and **Performance** across single-agent and multi-agent workloads.
 
-## Installation
+## Architecture
+
+```
+agent_cap/
+├── core/                  # Shared core
+│   ├── agentic_loop.py    # LLM → tool calls → metrics (TTFT, TPOT, tokens)
+│   ├── tool_backend.py    # Abstract ToolBackend interface
+│   ├── evaluator.py       # Abstract Evaluator interface
+│   └── metrics.py         # BenchmarkMetrics aggregation
+├── backends/              # Tool execution backends (pluggable)
+│   ├── swebench_backend   # Docker/Modal sandbox (SWE-bench Pro)
+│   └── mcp_backend        # MCP server HTTP API (MCP-ATLAS)
+├── evaluators/            # Evaluation methods (pluggable)
+│   ├── swebench_eval      # run_script.sh + parser.py
+│   └── gtfa_eval          # GTFA claims
+├── workloads/             # Workload types
+│   ├── single_agent       # 1 model autonomous loop
+│   └── agent_team         # Planner + Executor (plan-execute)
+└── server/
+    └── streaming_client   # aiohttp SSE streaming (TTFT/TPOT)
+```
+
+## Supported Benchmarks
+
+| Benchmark | Dataset | Tools | Evaluation |
+|---|---|---|---|
+| **SWE-bench Pro** | `ScaleAI/SWE-bench_Pro` | read/write/shell/search in Docker/Modal | run_script.sh per instance |
+| **MCP-ATLAS** | `ScaleAI/mcp-atlas` | GitHub, fetch, whois via MCP server | GTFA claims |
+
+## Workload Types
+
+| Workload | Description |
+|---|---|
+| **Single Agent** | One model autonomously reads code, writes fixes, runs tests |
+| **Agent Team** | Planner model creates step-by-step plan, Executor model follows it with tool calls |
+
+## Metrics Collected
+
+- **User-facing**: E2E latency (avg/p50/p99), Requests per second
+- **Inference**: TTFT avg/p99, TPOT avg/p99
+- **Agentic**: Total input/output tokens, tool call count, avg tool call latency
+- **Hardware**: GPU utilization, CPU utilization
+
+## Quick Start
+
+### SWE-bench Pro (Single Agent)
 
 ```bash
 pip install -e ".[all]"
-```
-Note: Requires SGLang in a conda env. Models served locally, no API keys needed for inference. Python path for SGLang env: `/mnt/raid0nvme0/sicheng/miniconda3/envs/sglang/bin/python`.
 
-## Quick Start: Run a BigCodeBench Combo Experiment
+# Start vLLM
+vllm serve unsloth/GPT-OSS-120b --port 8000
 
-### Step 1: Start SGLang servers
-Launch from `/tmp` to avoid import conflicts.
-```bash
-# GPU 0: Small Model (Qwen3-30B-A3B)
-python -m sglang.launch_server --model-path Qwen/Qwen3-30B-A3B --port 30000 --cuda-visible-devices 0
-
-# GPU 1: Large Model (Qwen3-32B)
-python -m sglang.launch_server --model-path Qwen/Qwen3-32B --port 30001 --cuda-visible-devices 1
+# Run benchmark (Modal runtime for RunPod)
+agent-cap single-agent configs/single_agent_with_tools.yaml \
+    --runtime modal --limit 5 --max-turns 10
 ```
 
-### Step 2: Run combo experiment
-```bash
-python -m agent_cap combo configs/qwen_combo_pairB.yaml --benchmark bigcodebench:50 --db results/combo.db
-```
+### MCP-ATLAS
 
-### Step 3: Analyze results
 ```bash
-python analyze_results.py --db results/combo.db --output-dir results/analysis/ --pair-label pairB
-```
-
-## Run MCP-Atlas (Agentic) Experiments
-
-### Step 1: Start SGLang with tool calling
-Qwen3 requires `--tool-call-parser qwen25`. Max tokens must be >= 8192 for thinking tags.
-```bash
-python -m sglang.launch_server --model-path Qwen/Qwen3-32B --port 30002 --cuda-visible-devices 2 --tool-call-parser qwen25 --context-length 65536
-```
-
-### Step 2: Start Docker MCP-Atlas env
-```bash
+# Start MCP server
 docker run --rm -d --name mcp-atlas-env -p 1984:1984 mcp-atlas-env
+
+# Run benchmark
+agent-cap mcp-atlas configs/mcp_atlas.yaml --limit 10
 ```
 
-### Step 3: Run combo experiment
+### Agent Team (Plan-Execute)
+
 ```bash
-python scripts/mcpatlas_combo.py --config configs/mcpatlas_pairB_gpu23.yaml --num-tasks 50 --db results/mcpatlas.db
+# Start two models
+vllm serve planner-model --port 8000
+vllm serve executor-model --port 8001
+
+# Run via workloads/agent_team.py
+python scripts/run_hybrid_experiment.py --config configs/hybrid_config.yaml
 ```
 
-### Step 4: Score with GPT-4o
-```bash
-cd /home/sicheng/mcp-atlas/services/mcp_eval
-EVAL_LLM_API_KEY=$OPENAI_API_KEY uv run python mcp_evals_scores.py --input-file="/home/sicheng/AgentCAP/results/mcpatlas/cascade.csv" --model-label="pairB-cascade" --evaluator-model="gpt-4o"
-```
+## Adding a New Benchmark
 
-## Config Format
-Detailed guide in `configs/README.md`. Key fields:
-- `small_model`/`large_model`: model ID, port, and GPU placement
-- `strategies`: List of methods (e.g., `cascade`, `vote`, `best-of-n-small`)
-- `max_tokens`: Generation limit (suggest 8192+)
-
-## Project Structure
-```
-agent_cap/       # Core multi-agent logic and CLI
-configs/         # YAML experiment specifications
-results/         # SQLite databases and analysis outputs
-scripts/         # MCP-Atlas and utility scripts
-analyze_results.py # result visualization and Pareto analysis
-```
-
-## Key Results (Pair A: 4B vs 30B-A3B)
-| Strategy | Pass@1 | GPU-s | $/correct (H100) |
-|---|---|---|---|
-| Best-of-N-Small (4B×3) | 50% | 104.4 | $0.070 |
-| Cascade | 44% | 23.9 | $0.018 |
-| Best-of-N-Large (30B×3) | 44% | 74.7 | $0.057 |
-| Adaptive-Cascade | 42% | 41.6 | $0.033 |
+1. Implement `ToolBackend` (how tools execute)
+2. Implement `Evaluator` (how to judge results)
+3. Both workloads (`single_agent`, `agent_team`) work automatically
 
 ## Acknowledgement
+
 This project is supported by the Advanced Research and Invention Agency (ARIA)'s grant "Scaling Compute: AI at 1/1000th the cost. Technical Area 4 Benchmarking".

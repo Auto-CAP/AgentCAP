@@ -84,3 +84,7 @@ tasks/
 # Orchestrator state
 .sisyphus/
 logs/
+*.log
+*.csv
+invalid_destination/
+server_sglang_*
