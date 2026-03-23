@@ -14,8 +14,19 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-
 import aiohttp
+from openai_harmony import (
+    HarmonyEncodingName, 
+    load_harmony_encoding, 
+    SystemContent, 
+    ReasoningEffort, 
+    ToolNamespaceConfig, 
+    Author, 
+    Message, 
+    Role, 
+    TextContent, 
+    Conversation
+)
 
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60)
 
@@ -392,3 +403,38 @@ class StreamingChatClient:
                     )
 
         return [r for r in results if r is not None]
+    
+    
+    def completion_from_prompt_ids(
+        self,
+        prompt_token_ids: List[int],
+        model: str = "default",
+        temperature: float = 0.0,
+        max_tokens: int = 16384,
+        timeout: int = 600,
+        stop_token_ids: Optional[List[int]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> StreamingChatResponse:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(
+                    self._async_completion_from_prompt_ids(
+                        prompt_token_ids=prompt_token_ids,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        timeout=timeout,
+                        stop_token_ids=stop_token_ids,
+                        extra_body=extra_body,
+                    )
+                )
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_run).result(timeout=timeout + 30)
