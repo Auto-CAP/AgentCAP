@@ -18,18 +18,8 @@ from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
 from agent_cap.core.agentic_loop import run_agentic_loop
 from agent_cap.server.streaming_client import StreamingChatClient
-from openai_harmony import (
-    HarmonyEncodingName, 
-    load_harmony_encoding, 
-    SystemContent, 
-    ReasoningEffort, 
-    ToolNamespaceConfig, 
-    Author, 
-    Message, 
-    Role, 
-    TextContent, 
-    Conversation
-)
+from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
 
 SYSTEM_PROMPT = """
 You are an expert mathematical problem solver with access to a Python execution tool.
@@ -307,8 +297,6 @@ class VLLMInfraGPTOSS:
         raise RuntimeError("Server failed to start (timeout).\n")
 
 
-
-
 def last_boxed_only_string(text: str) -> Optional[str]:
     positions = [m.start() for m in re.finditer(r"\\boxed\b", text)]
     if not positions:
@@ -330,7 +318,7 @@ def last_boxed_only_string(text: str) -> Optional[str]:
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    return text[start : j + 1]
+                    return text[start:j + 1]
             j += 1
 
     return None
@@ -347,7 +335,7 @@ def remove_boxed(boxed_str: str) -> str:
     if i >= len(boxed_str) or boxed_str[i] != "{":
         return boxed_str
 
-    return boxed_str[i + 1 : -1].strip()
+    return boxed_str[i + 1:-1].strip()
 
 
 def extract_last_boxed_content(text: str) -> Optional[str]:
@@ -355,6 +343,7 @@ def extract_last_boxed_content(text: str) -> Optional[str]:
     if boxed is None:
         return None
     return remove_boxed(boxed)
+
 
 def is_equiv(str1: str, str2: str, verbose: bool = False) -> bool:
     if "$" not in str1:
@@ -381,7 +370,6 @@ def compute_score(solution_str: str, ground_truth: str) -> float:
     return retval
 
 
-
 def solve_one_task(
     task,
     client: StreamingChatClient,
@@ -393,6 +381,7 @@ def solve_one_task(
     exec_timeout: float,
     preload: str,
     auto_print_last_expr: bool,
+    stop_token_ids: Optional[List[int]],
 ) -> Dict[str, Any]:
     backend = MathPythonBackend(
         startup_timeout=startup_timeout,
@@ -417,7 +406,7 @@ def solve_one_task(
             max_turns=max_turns,
             max_tokens=max_tokens,
             temperature=temperature,
-            stop_token_ids=None,
+            stop_token_ids=stop_token_ids,
         )
     finally:
         backend.teardown()
@@ -503,12 +492,11 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
             print(f"  {ans}: {cnt}")
 
 
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", type=str, default="http://localhost:8000")
-    parser.add_argument("--model", type=str, default="default")
+
+    # Benchmark / agent settings
+    parser.add_argument("--model", type=str, default="gpt-oss")
     parser.add_argument("--num-tasks", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-turns", type=int, default=10)
@@ -523,41 +511,80 @@ def main() -> None:
         choices=["none", "minimal", "full"],
     )
     parser.add_argument("--auto-print-last-expr", action="store_true")
-    args = parser.parse_args()
 
+    # vLLM server launch settings
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--served-model-name", type=str, default="gpt-oss")
+    parser.add_argument("--model-path", type=str, required=True)
+    parser.add_argument("--kv-cache-dtype", type=str, default="fp8_e4m3")
+    parser.add_argument("--dtype", type=str, default="auto")
+    parser.add_argument("--stream-interval", type=int, default=200)
+    parser.add_argument("--context-tokens", type=int, default=131072)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.92)
+    parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--server-timeout", type=int, default=600)
+    parser.add_argument("--preload-workers", type=int, default=8)
+
+    args = parser.parse_args()
     t0 = time.time()
 
-    tasks = load_benchmark("imo_answerbench", num_tasks=args.num_tasks, seed=args.seed)
-    client = StreamingChatClient(base_url=args.base_url)
+    runtime_cfg = RuntimeConfig(
+        served_model_name=args.served_model_name,
+        model_path=args.model_path,
+        port=args.port,
+        seed=args.seed,
+        kv_cache_dtype=args.kv_cache_dtype,
+        dtype=args.dtype,
+        stream_interval=args.stream_interval,
+        context_tokens=args.context_tokens,
+        batch_size=args.batch_size,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        tensor_parallel_size=args.tensor_parallel_size,
+        server_timeout=args.server_timeout,
+        preload_workers=args.preload_workers,
+    )
 
-    print(f"Loaded {len(tasks)} IMO AnswerBench tasks")
-    print(f"Server: {args.base_url}")
-    print(f"Model:  {args.model}")
-
+    infra = VLLMInfraGPTOSS(runtime_cfg)
     results: List[Dict[str, Any]] = []
 
-    for i, task in enumerate(tasks, start=1):
-        result = solve_one_task(
-            task=task,
-            client=client,
-            model=args.model,
-            max_turns=args.max_turns,
-            max_tokens=args.max_tokens,
-            temperature=args.temperature,
-            startup_timeout=args.startup_timeout,
-            exec_timeout=args.exec_timeout,
-            preload=args.preload,
-            auto_print_last_expr=args.auto_print_last_expr,
-        )
-        results.append(result)
-        print_task_result(i, len(tasks), result)
+    try:
+        infra.start()
+        if infra.client is None:
+            raise RuntimeError("Streaming client was not initialized.")
 
-        running_score = sum(float(r["score"]) for r in results)
-        running_avg = 100.0 * running_score / len(results)
-        print(f"\nRunning average score: {running_score:.1f}/{len(results)} ({running_avg:.1f}%)")
+        tasks = load_benchmark("imo_answerbench", num_tasks=args.num_tasks, seed=args.seed)
 
-    wall_time_s = time.time() - t0
-    print_summary(results, wall_time_s)
+        print(f"Loaded {len(tasks)} IMO AnswerBench tasks")
+        print(f"Server: {infra.base_url}")
+        print(f"Model:  {args.model}")
+
+        for i, task in enumerate(tasks, start=1):
+            result = solve_one_task(
+                task=task,
+                client=infra.client,
+                model=args.model,
+                max_turns=args.max_turns,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                startup_timeout=args.startup_timeout,
+                exec_timeout=args.exec_timeout,
+                preload=args.preload,
+                auto_print_last_expr=args.auto_print_last_expr,
+                stop_token_ids=infra.stop_token_ids,
+            )
+            results.append(result)
+            print_task_result(i, len(tasks), result)
+
+            running_score = sum(float(r["score"]) for r in results)
+            running_avg = 100.0 * running_score / len(results)
+            print(f"\nRunning average score: {running_score:.1f}/{len(results)} ({running_avg:.1f}%)")
+
+        wall_time_s = time.time() - t0
+        print_summary(results, wall_time_s)
+
+    finally:
+        infra.stop()
 
 
 if __name__ == "__main__":
