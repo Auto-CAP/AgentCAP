@@ -1,17 +1,18 @@
 import argparse
-import math
-import re
-import statistics
 import os
-import sys
+import re
+import signal
+import statistics
 import subprocess
-import threading
+import sys
 import time
-from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import urllib.request
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
 from math_verify import parse, verify
-sys.path.append("/home/yufan/data_101/AgentCAP")
 
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
@@ -45,10 +46,7 @@ Rules:
 
 
 class CFG:
- 
-
-    system_prompt = (
-"""You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level. Your goal is to find the correct answer through rigorous mathematical reasoning.
+    system_prompt = """You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level. Your goal is to find the correct answer through rigorous mathematical reasoning.
 
 # General rules:
 - Every claim must be logically justified.
@@ -89,9 +87,8 @@ Before finalizing your answer, carefully review the solution and ensure:
 ### Summary
 - **Verdict**: State whether a complete solution is obtained or only a partial solution.
 - **Result**:
-  - If complete: clearly state the final answer with a short summary. The final answer must be a non-negative integer between 0 and 99999. Place your final numerical answer inside \boxed{}, e.g., \boxed{42}
+  - If complete: clearly state the final answer with a short summary. The final answer must be a non-negative integer between 0 and 99999. Place your final numerical answer inside \\boxed{}, e.g., \\boxed{42}
   - If partial: state the main rigorously proven results.
-
 
 Think step-by-step and show your complete reasoning process. Quality of reasoning is as important as the final answer.
 
@@ -103,7 +100,7 @@ Think step-by-step and show your complete reasoning process. Quality of reasonin
 
 # Algebra Specific Hints:
 - The word "between" means not-enclusive of both endpoints of an interval.
-- If this problem requires proving an inequality, recall some common equalities in Olympiads: 
+- If this problem requires proving an inequality, recall some common equalities in Olympiads:
 * triangle inequality
 * Vasc's inequality
 * Muirhead inequality
@@ -116,10 +113,7 @@ Think step-by-step and show your complete reasoning process. Quality of reasonin
 # Geometry Specific Hints:
 - If the problem is a geometry problem and the conclusion cannot be deduced directly, try drawing additional points, lines, and circles.
 """
-    )
 
-
-    
     tool_prompt = (
         'Use this tool to execute Python code for:\n'
         '- Complex calculations that would be error-prone by hand\n'
@@ -127,17 +121,14 @@ Think step-by-step and show your complete reasoning process. Quality of reasonin
         '- Generating examples or testing conjectures\n'
         '- Visualizing problem structure when helpful\n'
         '- Brute-force verification for small cases\n\n'
-        
         'The environment is a stateful Jupyter notebook. Code persists between executions.\n'
         'Always use print() to display results. Write clear, well-commented code.\n\n'
-        
-        'Remember: Code should support your mathematical reasoning, not replace it. '
-        'Explain what you\'re computing and why before running code.'
+        "Remember: Code should support your mathematical reasoning, not replace it. "
+        "Explain what you're computing and why before running code."
     )
-    
+
     preference_prompt = (
         'You have access to `math`, `numpy`, and `sympy` for:\n\n'
-        
         '# Symbolic Computation (sympy):\n'
         '- Algebraic manipulation and simplification\n'
         '- Solving equations and systems of equations\n'
@@ -145,18 +136,15 @@ Think step-by-step and show your complete reasoning process. Quality of reasonin
         '- Number theory functions (primes, divisors, modular arithmetic)\n'
         '- Polynomial operations and factorization\n'
         '- Working with mathematical expressions symbolically\n\n'
-        
         '# Numerical Computation (numpy):\n'
         '- Array operations and linear algebra\n'
         '- Efficient numerical calculations for large datasets\n'
         '- Matrix operations and eigenvalue problems\n'
         '- Statistical computations\n\n'
-        
         '# Mathematical Functions (math):\n'
         '- Standard mathematical functions (trig, log, exp)\n'
         '- Constants like pi and e\n'
         '- Basic operations for single values\n\n'
-        
         'Best Practices:\n'
         '- Use sympy for exact symbolic answers when possible\n'
         '- Use numpy for numerical verification and large-scale computation\n'
@@ -164,131 +152,159 @@ Think step-by-step and show your complete reasoning process. Quality of reasonin
         '- Document your computational strategy clearly\n'
         '- Validate computational results against known cases or theoretical bounds'
     )
-    
-    served_model_name = 'gpt-oss'
-    model_path = '/workspace/models/unsloth/gpt-oss-120b'
-    kv_cache_dtype = 'fp8_e4m3'
-    dtype = 'auto'
-    python_exec_timeout = 1       # cap each python tool call
-    stream_interval = 200
-    context_tokens = 131072
-    top_logprobs = 5
-    batch_size = 256
-    turns = 128
-    seed = 57 # my favourite prime
-
-    gpu_memory_utilization = 0.92
-    temperature = 1.0
 
 
-class VLLM_infra_gpt_oss:
+@dataclass
+class RuntimeConfig:
+    served_model_name: str
+    model_path: str
+    port: int
+    seed: int
+    kv_cache_dtype: str
+    dtype: str
+    stream_interval: int
+    context_tokens: int
+    batch_size: int
+    gpu_memory_utilization: float
+    tensor_parallel_size: int
+    server_timeout: int
+    preload_workers: int
 
-    def __init__(
-            self,
-            cfg, 
-            port: int = 8000):
-    
+
+class VLLMInfraGPTOSS:
+    def __init__(self, cfg: RuntimeConfig):
         self.cfg = cfg
-        self.port = port
-        self.base_url = f'http://127.0.0.1:{port}'
-        self.api_key = 'sk-local'
+        self.port = cfg.port
+        self.base_url = f"http://127.0.0.1:{cfg.port}"
         self.encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
         self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
-        self._preload_model_weights()        
+
+        self.server_process: Optional[subprocess.Popen] = None
+        self.log_file = None
+        self.client: Optional[StreamingChatClient] = None
+
+    def start(self) -> None:
+        self._preload_model_weights()
         self.server_process = self._start_server()
-    
-    
         self._wait_for_server()
+        self.client = StreamingChatClient(base_url=self.base_url)
 
+    def stop(self) -> None:
+        if self.server_process is not None and self.server_process.poll() is None:
+            try:
+                os.killpg(os.getpgid(self.server_process.pid), signal.SIGTERM)
+                self.server_process.wait(timeout=10)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(self.server_process.pid), signal.SIGKILL)
+                except Exception:
+                    pass
 
-        if getattr(self.cfg, "use_speculative", False) and getattr(self.cfg, "use_min_p", False):
-            print("CFG warning: min_p is incompatible with speculative decoding; disabling use_min_p.")
-            self.cfg.use_min_p = False
-    
+        if self.log_file is not None:
+            try:
+                self.log_file.close()
+            except Exception:
+                pass
+
     def _preload_model_weights(self) -> None:
         if not os.path.isdir(self.cfg.model_path):
             raise FileNotFoundError(f"Model path does not exist: {self.cfg.model_path}")
-    
-        print(f'Loading model weights from {self.cfg.model_path} into OS Page Cache...')
+
+        print(f"Loading model weights from {self.cfg.model_path} into OS Page Cache...")
         start_time = time.time()
-        
-        files_to_load = []
+
+        files_to_load: List[str] = []
         total_size = 0
-    
+
         for root, _, files in os.walk(self.cfg.model_path):
             for file_name in files:
                 file_path = os.path.join(root, file_name)
-    
                 if os.path.isfile(file_path):
                     files_to_load.append(file_path)
                     total_size += os.path.getsize(file_path)
-    
+
         def _read_file(path: str) -> None:
-    
-            with open(path, 'rb') as file_object:
+            with open(path, "rb") as file_object:
                 while file_object.read(1024 * 1024 * 1024):
                     pass
-    
-        with ThreadPoolExecutor(max_workers=self.cfg.workers) as executor:
-            list(executor.map(_read_file, files_to_load))
-    
-        elapsed = time.time() - start_time
-        print(f'Processed {len(files_to_load)} files ({total_size / 1e9:.2f} GB) in {elapsed:.2f} seconds.\n')
-    
-    def _start_server(self) -> subprocess.Popen:
 
-    
+        with ThreadPoolExecutor(max_workers=self.cfg.preload_workers) as executor:
+            list(executor.map(_read_file, files_to_load))
+
+        elapsed = time.time() - start_time
+        print(f"Processed {len(files_to_load)} files ({total_size / 1e9:.2f} GB) in {elapsed:.2f} seconds.\n")
+
+    def _start_server(self) -> subprocess.Popen:
         cmd = [
-            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-            "--seed", str(self.cfg.seed),
-            "--model", self.cfg.model_path,
-            "--served-model-name", self.cfg.served_model_name,
-            "--tensor-parallel-size", "1",
-            "--max-num-seqs", str(self.cfg.batch_size),
-            "--gpu-memory-utilization", str(self.cfg.gpu_memory_utilization),
-            "--host", "127.0.0.1",
-            "--port", str(self.port),
-            "--dtype", self.cfg.dtype,
-            "--kv-cache-dtype", self.cfg.kv_cache_dtype,
-            "--max-model-len", str(self.cfg.context_tokens),
-            "--stream-interval", str(self.cfg.stream_interval),
+            sys.executable,
+            "-m",
+            "vllm.entrypoints.openai.api_server",
+            "--seed",
+            str(self.cfg.seed),
+            "--model",
+            self.cfg.model_path,
+            "--served-model-name",
+            self.cfg.served_model_name,
+            "--tensor-parallel-size",
+            str(self.cfg.tensor_parallel_size),
+            "--max-num-seqs",
+            str(self.cfg.batch_size),
+            "--gpu-memory-utilization",
+            str(self.cfg.gpu_memory_utilization),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(self.cfg.port),
+            "--dtype",
+            self.cfg.dtype,
+            "--kv-cache-dtype",
+            self.cfg.kv_cache_dtype,
+            "--max-model-len",
+            str(self.cfg.context_tokens),
+            "--stream-interval",
+            str(self.cfg.stream_interval),
             "--async-scheduling",
             "--disable-log-stats",
-            # "--disable-log-requests",
             "--enable-prefix-caching",
         ]
-    
+
         self.log_file = open("vllm_server.log", "w")
-        print("Launching vLLM:", " ".join(cmd))
-        return subprocess.Popen(cmd, stdout=self.log_file, stderr=subprocess.STDOUT, start_new_session=True)
-    
-    def _wait_for_server(self):
-    
-        print('Waiting for vLLM server...')
+        print("Launching vLLM:")
+        print(" ".join(cmd))
+        return subprocess.Popen(
+            cmd,
+            stdout=self.log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    def _wait_for_server(self) -> None:
+        print("Waiting for vLLM server...")
         start_time = time.time()
-    
+        models_url = f"{self.base_url}/v1/models"
+
         for _ in range(self.cfg.server_timeout):
+            if self.server_process is None:
+                raise RuntimeError("Server process was not created.")
+
             return_code = self.server_process.poll()
-    
             if return_code is not None:
                 self.log_file.flush()
-    
-                with open('vllm_server.log', 'r') as log_file:
+                with open("vllm_server.log", "r") as log_file:
                     logs = log_file.read()
-    
-                raise RuntimeError(f'Server died with code {return_code}. Full logs:\n{logs}\n')
-    
+                raise RuntimeError(f"Server died with code {return_code}. Full logs:\n{logs}\n")
+
             try:
-                self.client.models.list()
-                elapsed = time.time() - start_time
-                print(f'Server is ready (took {elapsed:.2f} seconds).\n')
-    
-                return
-    
+                req = urllib.request.Request(models_url, method="GET")
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.status == 200:
+                        elapsed = time.time() - start_time
+                        print(f"Server is ready (took {elapsed:.2f} seconds).\n")
+                        return
             except Exception:
                 time.sleep(1)
-    
-        raise RuntimeError('Server failed to start (timeout).\n')
+
+        raise RuntimeError("Server failed to start (timeout).\n")
 
 
 
