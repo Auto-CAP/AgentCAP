@@ -22,6 +22,7 @@ def load_benchmark(name: str, num_tasks: int = 50, seed: int = 42) -> List[TaskD
         "mmlu_pro": _load_mmlu_pro,
         "bigcodebench": _load_bigcodebench,
         "swebench_pro": _load_swebench_pro,
+        "imo_answerbench": _load_imo_answerbench,
     }
     if name not in loaders:
         raise ValueError(f"Unknown benchmark: {name}. Supported: {list(loaders)}")
@@ -304,6 +305,47 @@ def _load_swebench_pro(
                     "selected_test_files_to_run": ex.get(
                         "selected_test_files_to_run", ""
                     ),
+                },
+            )
+        )
+    return tasks
+
+
+def _load_imo_answerbench(num_tasks: int, seed: int) -> List[TaskDef]:
+    from datasets import load_dataset
+
+    ds = load_dataset("Hwilner/imo-answerbench", split="train")
+    samples = _sample(list(ds), num_tasks, seed)
+
+    tasks = []
+    for i, ex in enumerate(samples):
+        problem_id = ex.get("Problem ID", f"imo-answerbench-{i}")
+        problem = ex["Problem"]
+        short_answer = str(ex["Short Answer"]).strip()
+        category = ex.get("Category", "math")
+        subcategory = ex.get("Subcategory", "")
+        source = ex.get("Source", "")
+
+        prompt = (
+            f"{problem}\n\n"
+            r"Solve this step by step. After your reasoning, write your final "
+            r"Place your final numerical answer inside \boxed{}"
+        )
+
+        tasks.append(
+            TaskDef(
+                id=problem_id,
+                name=problem[:60],
+                messages=[{"role": "user", "content": prompt}],
+                category="math",
+                eval_config={
+                    "type": "string_match",
+                    "expected": short_answer,
+                    "metadata": {
+                        "category": category,
+                        "subcategory": subcategory,
+                        "source": source,
+                    },
                 },
             )
         )
