@@ -25,7 +25,7 @@ from agent_cap.cost.hybrid import (
     APICostConfig,
     LocalCostConfig,
     compute_api_cost,
-    compute_local_cost,
+    compute_local_cost_runtime,
 )
 
 LOGGER = logging.getLogger("hybrid_experiment")
@@ -73,7 +73,6 @@ class ModelConfig:
     base_url: str
     api_key: str = "dummy"
     is_local: bool = False
-    throughput_tok_per_sec: float = 50.0
     input_price_per_1m: float = 0.0
     output_price_per_1m: float = 0.0
 
@@ -87,17 +86,13 @@ class ModelConfig:
             base_url=str(raw["base_url"]),
             api_key=api_key,
             is_local=bool(raw.get("is_local", False)),
-            throughput_tok_per_sec=float(raw.get("throughput_tok_per_sec", 50.0)),
             input_price_per_1m=float(raw.get("input_price_per_1m", 0.0)),
             output_price_per_1m=float(raw.get("output_price_per_1m", 0.0)),
         )
 
     def cost_config(self) -> APICostConfig | LocalCostConfig:
         if self.is_local:
-            return LocalCostConfig(
-                model_id=self.id,
-                throughput_tok_per_sec=self.throughput_tok_per_sec,
-            )
+            return LocalCostConfig(model_id=self.id)
         return APICostConfig(
             model_id=self.id,
             input_price_per_1m=self.input_price_per_1m,
@@ -159,6 +154,15 @@ class PhaseResult:
     elapsed_seconds: float
     tool_call_count: int
     errors: List[str] = field(default_factory=list)
+    total_prefill_seconds: float = 0.0
+    total_decode_seconds: float = 0.0
+
+
+@dataclass
+class ChatCompletionTimedResult:
+    response_json: Dict[str, Any]
+    ttft_seconds: float
+    decode_seconds: float
 
 
 # ---------------------------------------------------------------------------
@@ -290,11 +294,12 @@ async def chat_completion(
         headers["Authorization"] = f"Bearer {api_key}"
 
     is_openai = "api.openai.com" in base_url
+    needs_temp_1 = "kimi" in model.lower() or "moonshot" in base_url
     token_key = "max_completion_tokens" if is_openai else "max_tokens"
     payload: Dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "temperature": temperature,
+        "temperature": 1.0 if needs_temp_1 else temperature,
         token_key: max_tokens,
         "stream": False,
     }
@@ -311,6 +316,134 @@ async def chat_completion(
             body = await resp.text()
             raise RuntimeError(f"chat failed ({resp.status}): {body}")
         return await resp.json()
+
+
+async def chat_completion_streaming(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+    max_tokens: int,
+    temperature: float = 0.0,
+) -> ChatCompletionTimedResult:
+    headers = {}
+    if api_key and api_key != "dummy":
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    is_openai = "api.openai.com" in base_url
+    needs_temp_1 = "kimi" in model.lower() or "moonshot" in base_url
+    token_key = "max_completion_tokens" if is_openai else "max_tokens"
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": 1.0 if needs_temp_1 else temperature,
+        token_key: max_tokens,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if tools:
+        payload["tools"] = tools
+
+    t_start = time.perf_counter()
+    t_first_token: Optional[float] = None
+    t_last_token = t_start
+
+    collected_content = ""
+    collected_tool_calls: Dict[int, Dict[str, Any]] = {}
+    finish_reason = None
+    usage: Dict[str, Any] = {}
+
+    async with session.post(
+        f"{base_url.rstrip('/')}/v1/chat/completions",
+        json=payload,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=600),
+    ) as resp:
+        if resp.status != 200:
+            body = await resp.text()
+            raise RuntimeError(f"chat failed ({resp.status}): {body}")
+
+        async for raw_line in resp.content:
+            text = raw_line.decode("utf-8").strip()
+            if not text or not text.startswith("data:"):
+                continue
+            data_str = text[5:].strip()
+            if data_str == "[DONE]":
+                break
+
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            now = time.perf_counter()
+            choices = chunk.get("choices") or []
+            if choices:
+                choice = choices[0]
+                delta = choice.get("delta") or {}
+
+                content_delta = delta.get("content")
+                if content_delta:
+                    if t_first_token is None:
+                        t_first_token = now
+                    t_last_token = now
+                    collected_content += content_delta
+
+                tool_call_deltas = delta.get("tool_calls") or []
+                if tool_call_deltas:
+                    if t_first_token is None:
+                        t_first_token = now
+                    t_last_token = now
+                    for tc_delta in tool_call_deltas:
+                        idx = int(tc_delta.get("index", 0))
+                        if idx not in collected_tool_calls:
+                            collected_tool_calls[idx] = {
+                                "id": tc_delta.get("id", ""),
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        if tc_delta.get("id"):
+                            collected_tool_calls[idx]["id"] = tc_delta["id"]
+                        fn = tc_delta.get("function") or {}
+                        if fn.get("name"):
+                            collected_tool_calls[idx]["function"]["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            collected_tool_calls[idx]["function"]["arguments"] += fn[
+                                "arguments"
+                            ]
+
+                if choice.get("finish_reason"):
+                    finish_reason = choice["finish_reason"]
+
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+
+    if t_first_token is None:
+        t_first_token = t_start
+
+    ttft = t_first_token - t_start
+    decode_time = t_last_token - t_first_token
+
+    assistant_message: Dict[str, Any] = {
+        "role": "assistant",
+        "content": collected_content or None,
+    }
+    if collected_tool_calls:
+        assistant_message["tool_calls"] = [
+            collected_tool_calls[i] for i in sorted(collected_tool_calls.keys())
+        ]
+
+    response_json = {
+        "choices": [{"message": assistant_message, "finish_reason": finish_reason}],
+        "usage": usage,
+    }
+    return ChatCompletionTimedResult(
+        response_json=response_json,
+        ttft_seconds=ttft,
+        decode_seconds=decode_time,
+    )
 
 
 async def mcp_call_tool(
@@ -363,16 +496,33 @@ async def run_plan_phase(
     ]
 
     start = time.perf_counter()
-    result = await chat_completion(
-        session,
-        planner.base_url,
-        planner.api_key,
-        planner.id,
-        messages,
-        None,
-        plan_max_tokens,
-        temperature=0.0,
-    )
+    if planner.is_local:
+        timed = await chat_completion_streaming(
+            session,
+            planner.base_url,
+            planner.api_key,
+            planner.id,
+            messages,
+            None,
+            plan_max_tokens,
+            temperature=0.0,
+        )
+        result = timed.response_json
+        prefill_time = timed.ttft_seconds
+        decode_time = timed.decode_seconds
+    else:
+        result = await chat_completion(
+            session,
+            planner.base_url,
+            planner.api_key,
+            planner.id,
+            messages,
+            None,
+            plan_max_tokens,
+            temperature=0.0,
+        )
+        prefill_time = 0.0
+        decode_time = 0.0
     elapsed = time.perf_counter() - start
 
     usage = result.get("usage") or {}
@@ -394,6 +544,8 @@ async def run_plan_phase(
         output_tokens=output_tokens,
         elapsed_seconds=elapsed,
         tool_call_count=0,
+        total_prefill_seconds=prefill_time,
+        total_decode_seconds=decode_time,
     )
 
 
@@ -428,20 +580,37 @@ async def run_exec_phase(
     errors: List[str] = []
     input_tokens = 0
     output_tokens = 0
+    total_prefill_time = 0.0
+    total_decode_time = 0.0
     start = time.perf_counter()
 
     for turn in range(max_turns):
         try:
-            result = await chat_completion(
-                session,
-                executor.base_url,
-                executor.api_key,
-                executor.id,
-                messages,
-                tools,
-                max_tokens,
-                temperature=0.0,
-            )
+            if executor.is_local:
+                timed = await chat_completion_streaming(
+                    session,
+                    executor.base_url,
+                    executor.api_key,
+                    executor.id,
+                    messages,
+                    tools,
+                    max_tokens,
+                    temperature=0.0,
+                )
+                result = timed.response_json
+                total_prefill_time += timed.ttft_seconds
+                total_decode_time += timed.decode_seconds
+            else:
+                result = await chat_completion(
+                    session,
+                    executor.base_url,
+                    executor.api_key,
+                    executor.id,
+                    messages,
+                    tools,
+                    max_tokens,
+                    temperature=0.0,
+                )
         except Exception as exc:
             errors.append(f"turn {turn}: {exc}")
             break
@@ -502,16 +671,31 @@ async def run_exec_phase(
             }
         )
         try:
-            final_result = await chat_completion(
-                session,
-                executor.base_url,
-                executor.api_key,
-                executor.id,
-                messages,
-                None,
-                max_tokens,
-                temperature=0.0,
-            )
+            if executor.is_local:
+                timed = await chat_completion_streaming(
+                    session,
+                    executor.base_url,
+                    executor.api_key,
+                    executor.id,
+                    messages,
+                    None,
+                    max_tokens,
+                    temperature=0.0,
+                )
+                final_result = timed.response_json
+                total_prefill_time += timed.ttft_seconds
+                total_decode_time += timed.decode_seconds
+            else:
+                final_result = await chat_completion(
+                    session,
+                    executor.base_url,
+                    executor.api_key,
+                    executor.id,
+                    messages,
+                    None,
+                    max_tokens,
+                    temperature=0.0,
+                )
             usage = final_result.get("usage") or {}
             input_tokens += int(usage.get("prompt_tokens", 0))
             output_tokens += int(usage.get("completion_tokens", 0))
@@ -533,6 +717,8 @@ async def run_exec_phase(
         elapsed_seconds=elapsed,
         tool_call_count=count_tool_calls(messages),
         errors=errors,
+        total_prefill_seconds=total_prefill_time,
+        total_decode_seconds=total_decode_time,
     )
 
 
@@ -541,12 +727,24 @@ async def run_exec_phase(
 # ---------------------------------------------------------------------------
 
 
-def compute_cost(model_cfg: ModelConfig, in_tokens: int, out_tokens: int) -> float:
+def compute_cost(
+    model_cfg: ModelConfig,
+    in_tokens: int,
+    out_tokens: int,
+    total_prefill_seconds: float = 0.0,
+    total_decode_seconds: float = 0.0,
+) -> float:
     """Compute cost in USD for a phase."""
     cfg = model_cfg.cost_config()
     if isinstance(cfg, APICostConfig):
         return compute_api_cost(cfg, in_tokens, out_tokens)
-    return compute_local_cost(cfg, in_tokens, out_tokens)
+    return compute_local_cost_runtime(
+        cfg,
+        in_tokens,
+        out_tokens,
+        total_prefill_seconds,
+        total_decode_seconds,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -753,11 +951,15 @@ async def run_experiment(args: argparse.Namespace) -> None:
                     config.planner,
                     plan_result.input_tokens,
                     plan_result.output_tokens,
+                    plan_result.total_prefill_seconds,
+                    plan_result.total_decode_seconds,
                 )
             exec_cost = compute_cost(
                 config.executor,
                 exec_result.input_tokens,
                 exec_result.output_tokens,
+                exec_result.total_prefill_seconds,
+                exec_result.total_decode_seconds,
             )
             total_cost = plan_cost + exec_cost
 
