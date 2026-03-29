@@ -1,0 +1,839 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import time
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, IO, List, Optional, Sequence, TextIO, Union
+
+import aiohttp
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+from agent_cap.server.gpu_monitor import GPUMetricsSummary, GPUMonitor
+
+
+@dataclass
+class UnifiedTask:
+    task_id: str
+    task_name: str
+    messages: List[Dict[str, Any]]
+
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "UnifiedTask":
+        task_id = raw.get("task_id") or raw.get("id") or ""
+        task_name = raw.get("task_name") or raw.get("name") or ""
+        messages = raw.get("messages") or []
+        if not isinstance(messages, list):
+            messages = []
+        return cls(
+            task_id=str(task_id),
+            task_name=str(task_name),
+            messages=[m for m in messages if isinstance(m, dict)],
+        )
+
+
+@dataclass
+class UnifiedConfig:
+    model_name: str
+    serving_engine: str
+    base_url: str
+    dataset: str
+    mcp_server_url: str
+    api_key: str = "dummy"
+    is_local: bool = True
+    precision: str = "bfloat16"
+    max_turns: int = 15
+    max_tokens: int = 8192
+    temperature: float = 0.0
+    enabled_tools: Sequence[str] = field(default_factory=list)
+    output_root: Path = Path("results")
+    use_streaming: bool = True
+
+
+@dataclass
+class ChatCompletionTimedResult:
+    response_json: Dict[str, Any]
+    ttft_seconds: float
+    decode_seconds: float
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass
+class ExampleResult:
+    example_index: int
+    task_id: str
+    task_name: str
+    total_input_tokens: int
+    total_output_tokens: int
+    tool_call_count: int
+    num_requests: int
+    e2e_latency_s: float
+    avg_input_tokens_per_request: float
+    avg_output_tokens_per_request: float
+    max_input_tokens_per_request: int
+    total_prefill_time_s: float
+    total_decode_time_s: float
+    output_text: str
+    errors: List[str] = field(default_factory=list)
+
+
+@dataclass
+class UnifiedRunResult:
+    output_dir: Path
+    metadata: Dict[str, Any]
+    metrics: Dict[str, Any]
+    example_results: List[ExampleResult]
+
+
+def _run_command(args: Sequence[str], timeout_s: float = 2.0) -> str:
+    try:
+        result = subprocess.run(
+            list(args),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+        return result.stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        return ""
+
+
+def collect_hardware_info() -> Dict[str, Any]:
+    gpu_name = "unknown"
+    gpu_count = 0
+    cpu_name = "unknown"
+    cpu_count = int(os.cpu_count() or 0)
+
+    gpu_name_raw = _run_command(
+        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+        timeout_s=3.0,
+    )
+    if gpu_name_raw:
+        lines = [line.strip() for line in gpu_name_raw.splitlines() if line.strip()]
+        if lines:
+            gpu_name = lines[0]
+
+    gpu_list_raw = _run_command(["nvidia-smi", "--list-gpus"], timeout_s=3.0)
+    if gpu_list_raw:
+        gpu_count = len([line for line in gpu_list_raw.splitlines() if line.strip()])
+
+    lscpu_raw = _run_command(["lscpu"], timeout_s=3.0)
+    if lscpu_raw:
+        for line in lscpu_raw.splitlines():
+            if line.startswith("Model name:"):
+                cpu_name = line.split(":", 1)[1].strip() if ":" in line else cpu_name
+                break
+
+    return {
+        "gpu_name": gpu_name,
+        "gpu_count": gpu_count,
+        "cpu_name": cpu_name,
+        "cpu_count": cpu_count,
+    }
+
+
+def flatten_tool_payload(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        if isinstance(payload.get("content"), list):
+            return flatten_tool_payload(payload["content"])
+        return json.dumps(payload, ensure_ascii=False)
+    if isinstance(payload, list):
+        parts: List[str] = []
+        for item in payload:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            else:
+                parts.append(json.dumps(item, ensure_ascii=False))
+        return "\n".join(part for part in parts if part)
+    return str(payload)
+
+
+def count_tool_calls(messages: Sequence[Dict[str, Any]]) -> int:
+    total = 0
+    for message in messages:
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            total += len(message.get("tool_calls") or [])
+    return total
+
+
+def extract_final_assistant_text(messages: Sequence[Dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "assistant" and message.get("content"):
+            return str(message.get("content", ""))
+    return ""
+
+
+async def list_openai_tools(
+    session: aiohttp.ClientSession,
+    mcp_server_url: str,
+    enabled_tools: Sequence[str],
+) -> List[Dict[str, Any]]:
+    async with session.post(f"{mcp_server_url.rstrip('/')}/list-tools") as resp:
+        if resp.status != 200:
+            body = await resp.text()
+            raise RuntimeError(f"list-tools failed ({resp.status}): {body}")
+        payload = await resp.json()
+    enabled = set(enabled_tools)
+    transformed: List[Dict[str, Any]] = []
+    for tool in payload:
+        if not isinstance(tool, dict):
+            continue
+        name = str(tool.get("name", ""))
+        if not name:
+            continue
+        if enabled and name not in enabled:
+            continue
+        transformed.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": str(tool.get("description", "")),
+                    "parameters": tool.get("input_schema", {}),
+                },
+            }
+        )
+    return transformed
+
+
+async def mcp_call_tool(
+    session: aiohttp.ClientSession,
+    mcp_server_url: str,
+    tool_name: str,
+    tool_args: Any,
+) -> Any:
+    async with session.post(
+        f"{mcp_server_url.rstrip('/')}/call-tool",
+        json={"tool_name": tool_name, "tool_args": tool_args},
+        timeout=aiohttp.ClientTimeout(total=120),
+    ) as resp:
+        if resp.status != 200:
+            body = await resp.text()
+            raise RuntimeError(f"tool call failed ({resp.status}): {body}")
+        return await resp.json()
+
+
+async def chat_completion(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+    max_tokens: int,
+    temperature: float = 0.0,
+) -> Dict[str, Any]:
+    headers = {}
+    if api_key and api_key != "dummy":
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    is_openai = "api.openai.com" in base_url
+    needs_temp_1 = "kimi" in model.lower() or "moonshot" in base_url
+    token_key = "max_completion_tokens" if is_openai else "max_tokens"
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": 1.0 if needs_temp_1 else temperature,
+        token_key: max_tokens,
+        "stream": False,
+    }
+    if tools:
+        payload["tools"] = tools
+
+    async with session.post(
+        f"{base_url.rstrip('/')}/v1/chat/completions",
+        json=payload,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=600),
+    ) as resp:
+        if resp.status != 200:
+            body = await resp.text()
+            raise RuntimeError(f"chat failed ({resp.status}): {body}")
+        return await resp.json()
+
+
+async def chat_completion_streaming(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+    max_tokens: int,
+    temperature: float = 0.0,
+) -> ChatCompletionTimedResult:
+    headers = {}
+    if api_key and api_key != "dummy":
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    is_openai = "api.openai.com" in base_url
+    needs_temp_1 = "kimi" in model.lower() or "moonshot" in base_url
+    token_key = "max_completion_tokens" if is_openai else "max_tokens"
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": 1.0 if needs_temp_1 else temperature,
+        token_key: max_tokens,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if tools:
+        payload["tools"] = tools
+
+    t_start = time.perf_counter()
+    t_first_token: Optional[float] = None
+    t_last_token = t_start
+
+    collected_content = ""
+    collected_tool_calls: Dict[int, Dict[str, Any]] = {}
+    finish_reason = None
+    usage: Dict[str, Any] = {}
+
+    async with session.post(
+        f"{base_url.rstrip('/')}/v1/chat/completions",
+        json=payload,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=600),
+    ) as resp:
+        if resp.status != 200:
+            body = await resp.text()
+            raise RuntimeError(f"chat failed ({resp.status}): {body}")
+
+        async for raw_line in resp.content:
+            text = raw_line.decode("utf-8").strip()
+            if not text or not text.startswith("data:"):
+                continue
+            data_str = text[5:].strip()
+            if data_str == "[DONE]":
+                break
+
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            now = time.perf_counter()
+            choices = chunk.get("choices") or []
+            if choices:
+                choice = choices[0]
+                delta = choice.get("delta") or {}
+
+                content_delta = delta.get("content")
+                if content_delta:
+                    if t_first_token is None:
+                        t_first_token = now
+                    t_last_token = now
+                    collected_content += content_delta
+
+                tool_call_deltas = delta.get("tool_calls") or []
+                if tool_call_deltas:
+                    if t_first_token is None:
+                        t_first_token = now
+                    t_last_token = now
+                    for tc_delta in tool_call_deltas:
+                        idx = int(tc_delta.get("index", 0))
+                        if idx not in collected_tool_calls:
+                            collected_tool_calls[idx] = {
+                                "id": tc_delta.get("id", ""),
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        if tc_delta.get("id"):
+                            collected_tool_calls[idx]["id"] = tc_delta["id"]
+                        fn = tc_delta.get("function") or {}
+                        if fn.get("name"):
+                            collected_tool_calls[idx]["function"]["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            collected_tool_calls[idx]["function"]["arguments"] += fn[
+                                "arguments"
+                            ]
+
+                if choice.get("finish_reason"):
+                    finish_reason = choice["finish_reason"]
+
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+
+    if t_first_token is None:
+        t_first_token = t_start
+
+    ttft = t_first_token - t_start
+    decode_time = t_last_token - t_first_token
+
+    assistant_message: Dict[str, Any] = {
+        "role": "assistant",
+        "content": collected_content or None,
+    }
+    if collected_tool_calls:
+        assistant_message["tool_calls"] = [
+            collected_tool_calls[i] for i in sorted(collected_tool_calls.keys())
+        ]
+
+    response_json = {
+        "choices": [{"message": assistant_message, "finish_reason": finish_reason}],
+        "usage": usage,
+    }
+
+    return ChatCompletionTimedResult(
+        response_json=response_json,
+        ttft_seconds=ttft,
+        decode_seconds=decode_time,
+        input_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        output_tokens=int(usage.get("completion_tokens", 0) or 0),
+    )
+
+
+async def _chat_with_fallback(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+    max_tokens: int,
+    temperature: float,
+    use_streaming: bool,
+    errors: List[str],
+) -> ChatCompletionTimedResult:
+    if use_streaming:
+        try:
+            return await chat_completion_streaming(
+                session=session,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            errors.append(f"streaming fallback: {exc}")
+
+    t0 = time.perf_counter()
+    response_json = await chat_completion(
+        session=session,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        messages=messages,
+        tools=tools,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    elapsed = time.perf_counter() - t0
+    usage = response_json.get("usage") or {}
+    return ChatCompletionTimedResult(
+        response_json=response_json,
+        ttft_seconds=elapsed,
+        decode_seconds=0.0,
+        input_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        output_tokens=int(usage.get("completion_tokens", 0) or 0),
+    )
+
+
+async def run_single_example(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    api_key: str,
+    model: str,
+    task: UnifiedTask,
+    tools: List[Dict[str, Any]],
+    mcp_server_url: str,
+    max_turns: int,
+    max_tokens: int,
+    temperature: float,
+    example_index: int,
+    request_details_file: IO[str],
+    use_streaming: bool = True,
+) -> ExampleResult:
+    messages = [dict(m) for m in task.messages]
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_prefill_time = 0.0
+    total_decode_time = 0.0
+    request_index = 0
+    per_request_input_tokens: List[int] = []
+    errors: List[str] = []
+
+    start = time.perf_counter()
+
+    for _ in range(max_turns):
+        try:
+            timed = await _chat_with_fallback(
+                session=session,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                use_streaming=use_streaming,
+                errors=errors,
+            )
+        except Exception as exc:
+            errors.append(f"llm_request_failed: {exc}")
+            break
+
+        result = timed.response_json
+        usage = result.get("usage") or {}
+        in_tok = int(usage.get("prompt_tokens", timed.input_tokens) or 0)
+        out_tok = int(usage.get("completion_tokens", timed.output_tokens) or 0)
+
+        total_input_tokens += in_tok
+        total_output_tokens += out_tok
+        total_prefill_time += timed.ttft_seconds
+        total_decode_time += timed.decode_seconds
+        per_request_input_tokens.append(in_tok)
+
+        choices = result.get("choices") or []
+        if not choices:
+            errors.append("model returned empty choices")
+            break
+        assistant = choices[0].get("message") or {}
+        if "role" not in assistant:
+            assistant["role"] = "assistant"
+        tool_calls = assistant.get("tool_calls") or []
+
+        tpot = timed.decode_seconds / out_tok if out_tok > 0 else 0.0
+        throughput = out_tok / timed.decode_seconds if timed.decode_seconds > 0 else 0.0
+        request_detail = {
+            "example_index": example_index,
+            "request_index": request_index,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "prefill_time_s": round(timed.ttft_seconds, 6),
+            "decode_time_s": round(timed.decode_seconds, 6),
+            "tpot_s": round(tpot, 6),
+            "output_throughput_tok_s": round(throughput, 2),
+            "has_tool_calls": len(tool_calls) > 0,
+            "num_tool_calls": len(tool_calls),
+        }
+        request_details_file.write(
+            json.dumps(request_detail, ensure_ascii=False) + "\n"
+        )
+        request_details_file.flush()
+        request_index += 1
+
+        messages.append(assistant)
+
+        if not tool_calls:
+            break
+
+        for tc in tool_calls:
+            function = tc.get("function") or {}
+            name = str(function.get("name", ""))
+            raw_args = function.get("arguments", "{}")
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except json.JSONDecodeError:
+                args = {}
+            try:
+                tool_result = await mcp_call_tool(session, mcp_server_url, name, args)
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+                tool_result = [{"type": "text", "text": f"ERROR: {exc}"}]
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": flatten_tool_payload(tool_result),
+                }
+            )
+
+    elapsed = time.perf_counter() - start
+    final_response = extract_final_assistant_text(messages)
+    tool_call_count = count_tool_calls(messages)
+
+    return ExampleResult(
+        example_index=example_index,
+        task_id=task.task_id,
+        task_name=task.task_name,
+        total_input_tokens=total_input_tokens,
+        total_output_tokens=total_output_tokens,
+        tool_call_count=tool_call_count,
+        num_requests=request_index,
+        e2e_latency_s=elapsed,
+        avg_input_tokens_per_request=(
+            total_input_tokens / request_index if request_index > 0 else 0.0
+        ),
+        avg_output_tokens_per_request=(
+            total_output_tokens / request_index if request_index > 0 else 0.0
+        ),
+        max_input_tokens_per_request=(
+            max(per_request_input_tokens) if per_request_input_tokens else 0
+        ),
+        total_prefill_time_s=total_prefill_time,
+        total_decode_time_s=total_decode_time,
+        output_text=final_response,
+        errors=errors,
+    )
+
+
+def _safe_mean(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+
+def _percentile(values: Sequence[float], p: float) -> float:
+    if not values:
+        return 0.0
+    sorted_vals = sorted(float(v) for v in values)
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    rank = (len(sorted_vals) - 1) * (p / 100.0)
+    low = int(rank)
+    high = min(low + 1, len(sorted_vals) - 1)
+    frac = rank - low
+    return sorted_vals[low] * (1.0 - frac) + sorted_vals[high] * frac
+
+
+def _read_jsonl(path: Optional[Path]) -> List[Dict[str, Any]]:
+    if path is None or not path.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fp:
+        for line in fp:
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+    return rows
+
+
+def compute_aggregated_metrics(
+    results: Sequence[ExampleResult],
+    gpu_stats: GPUMetricsSummary,
+    wall_time: float,
+    hw_info: Dict[str, Any],
+    request_details_path: Optional[Path] = None,
+    cpu_samples: Optional[Sequence[float]] = None,
+) -> Dict[str, Any]:
+    request_rows = _read_jsonl(request_details_path)
+
+    e2e_latencies = [r.e2e_latency_s for r in results]
+    prefill_times = [float(r.get("prefill_time_s", 0.0)) for r in request_rows]
+    decode_times = [float(r.get("decode_time_s", 0.0)) for r in request_rows]
+    tpot_vals = [
+        float(r.get("tpot_s", 0.0)) for r in request_rows if r.get("tpot_s") is not None
+    ]
+    throughput_vals = [
+        float(r.get("output_throughput_tok_s", 0.0))
+        for r in request_rows
+        if r.get("output_throughput_tok_s") is not None
+    ]
+
+    total_examples = len(results)
+    total_requests = sum(r.num_requests for r in results)
+    total_input_tokens = sum(r.total_input_tokens for r in results)
+    total_output_tokens = sum(r.total_output_tokens for r in results)
+
+    cpu_vals = [float(v) for v in (cpu_samples or [])]
+
+    return {
+        "user_facing": {
+            "avg_e2e_latency_s": _safe_mean(e2e_latencies),
+            "p50_e2e_latency_s": _percentile(e2e_latencies, 50),
+            "p99_e2e_latency_s": _percentile(e2e_latencies, 99),
+            "examples_per_second": (
+                (total_examples / wall_time)
+                if wall_time > 0 and total_examples > 0
+                else 0.0
+            ),
+        },
+        "inference_engine": {
+            "avg_prefill_time_s": _safe_mean(prefill_times),
+            "p99_prefill_time_s": _percentile(prefill_times, 99),
+            "avg_decode_time_s": _safe_mean(decode_times),
+            "p99_decode_time_s": _percentile(decode_times, 99),
+            "avg_tpot_s": _safe_mean(tpot_vals),
+            "p99_tpot_s": _percentile(tpot_vals, 99),
+            "avg_output_throughput_tok_s": _safe_mean(throughput_vals),
+        },
+        "agentic": {
+            "avg_total_input_tokens": _safe_mean(
+                [float(r.total_input_tokens) for r in results]
+            ),
+            "avg_total_output_tokens": _safe_mean(
+                [float(r.total_output_tokens) for r in results]
+            ),
+            "avg_tool_call_count": _safe_mean(
+                [float(r.tool_call_count) for r in results]
+            ),
+            "avg_num_requests": _safe_mean([float(r.num_requests) for r in results]),
+            "avg_input_tokens_per_request": _safe_mean(
+                [float(r.avg_input_tokens_per_request) for r in results]
+            ),
+            "avg_output_tokens_per_request": _safe_mean(
+                [float(r.avg_output_tokens_per_request) for r in results]
+            ),
+            "avg_max_input_tokens_per_request": _safe_mean(
+                [float(r.max_input_tokens_per_request) for r in results]
+            ),
+        },
+        "hardware": {
+            "gpu_name": hw_info.get("gpu_name", "unknown"),
+            "gpu_count": int(hw_info.get("gpu_count", 0) or 0),
+            "avg_gpu_utilization_pct": float(gpu_stats.avg_gpu_util_pct),
+            "peak_gpu_memory_used_mb": float(gpu_stats.peak_memory_used_mb),
+            "avg_cpu_utilization_pct": _safe_mean(cpu_vals),
+        },
+        "summary": {
+            "total_examples": total_examples,
+            "total_requests": total_requests,
+            "total_wall_time_s": wall_time,
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+        },
+    }
+
+
+async def run_experiment(
+    config: UnifiedConfig,
+    tasks: Sequence[Union[UnifiedTask, Dict[str, Any]]],
+) -> UnifiedRunResult:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = (
+        Path(config.output_root) / config.model_name / f"{config.dataset}_{timestamp}"
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    normalized_tasks: List[UnifiedTask] = [
+        task if isinstance(task, UnifiedTask) else UnifiedTask.from_dict(task)
+        for task in tasks
+    ]
+
+    hw = collect_hardware_info()
+    metadata = {
+        "hardware": hw,
+        "model_config": {
+            "model_name": config.model_name,
+            "serving_engine": config.serving_engine,
+            "base_url": config.base_url,
+            "is_local": config.is_local,
+            "precision": config.precision,
+        },
+        "experiment_config": {
+            "dataset": config.dataset,
+            "num_examples": len(normalized_tasks),
+            "max_turns": config.max_turns,
+            "max_tokens": config.max_tokens,
+            "temperature": config.temperature,
+            "timestamp": timestamp,
+        },
+    }
+    (out_dir / "metadata.json").write_text(
+        json.dumps(metadata, indent=4, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    request_details_path = out_dir / "per_request_details.jsonl"
+    example_results_path = out_dir / "per_example_results.jsonl"
+
+    gpu_monitor = GPUMonitor(interval=1.0)
+    gpu_monitor.start()
+
+    all_example_results: List[ExampleResult] = []
+    cpu_samples: List[float] = []
+    wall_start = time.perf_counter()
+    wall_end = wall_start
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            tools = await list_openai_tools(
+                session=session,
+                mcp_server_url=config.mcp_server_url,
+                enabled_tools=config.enabled_tools,
+            )
+
+            with (
+                request_details_path.open("w", encoding="utf-8") as req_f,
+                example_results_path.open("w", encoding="utf-8") as ex_f,
+            ):
+                wall_start = time.perf_counter()
+                for i, task in enumerate(normalized_tasks):
+                    result = await run_single_example(
+                        session=session,
+                        base_url=config.base_url,
+                        api_key=config.api_key,
+                        model=config.model_name,
+                        task=task,
+                        tools=tools,
+                        mcp_server_url=config.mcp_server_url,
+                        max_turns=config.max_turns,
+                        max_tokens=config.max_tokens,
+                        temperature=config.temperature,
+                        example_index=i,
+                        request_details_file=req_f,
+                        use_streaming=config.use_streaming,
+                    )
+                    ex_f.write(json.dumps(asdict(result), ensure_ascii=False) + "\n")
+                    ex_f.flush()
+                    all_example_results.append(result)
+
+                    if psutil is not None:
+                        try:
+                            cpu_samples.append(float(psutil.cpu_percent(interval=None)))
+                        except Exception:
+                            pass
+                wall_end = time.perf_counter()
+    finally:
+        gpu_stats = gpu_monitor.stop()
+
+    metrics = compute_aggregated_metrics(
+        results=all_example_results,
+        gpu_stats=gpu_stats,
+        wall_time=max(0.0, wall_end - wall_start),
+        hw_info=hw,
+        request_details_path=request_details_path,
+        cpu_samples=cpu_samples,
+    )
+    (out_dir / "metrics.json").write_text(
+        json.dumps(metrics, indent=4, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    return UnifiedRunResult(
+        output_dir=out_dir,
+        metadata=metadata,
+        metrics=metrics,
+        example_results=all_example_results,
+    )
+
+
+__all__ = [
+    "UnifiedTask",
+    "UnifiedConfig",
+    "ChatCompletionTimedResult",
+    "ExampleResult",
+    "UnifiedRunResult",
+    "collect_hardware_info",
+    "flatten_tool_payload",
+    "count_tool_calls",
+    "extract_final_assistant_text",
+    "list_openai_tools",
+    "mcp_call_tool",
+    "chat_completion",
+    "chat_completion_streaming",
+    "run_single_example",
+    "compute_aggregated_metrics",
+    "run_experiment",
+]

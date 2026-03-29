@@ -6,7 +6,6 @@ executor:
   id: Qwen/Qwen3.5-9B
   base_url: http://localhost:30002
   is_local: true
-  throughput_tok_per_sec: 0
 
 mcp_server_url: http://localhost:1984
 max_turns: 20
