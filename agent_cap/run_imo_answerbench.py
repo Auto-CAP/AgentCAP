@@ -274,6 +274,8 @@ class VLLMInfraGPTOSS:
         models_url = f"{self.base_url}/v1/models"
 
         for _ in range(self.cfg.server_timeout):
+            if _ % 100 == 0:
+                print(f'waiting for server to start: poll count={_}')
             if self.server_process is None:
                 raise RuntimeError("Server process was not created.")
 
@@ -523,7 +525,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.92)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
-    parser.add_argument("--server-timeout", type=int, default=600)
+    parser.add_argument("--server-timeout", type=int, default=3600)
     parser.add_argument("--preload-workers", type=int, default=8)
 
     args = parser.parse_args()
