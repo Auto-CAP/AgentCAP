@@ -281,12 +281,14 @@ class MathPythonBackend(ToolBackend):
             )
 
         code = arguments.get("code", "")
+        if code == "":
+            code = arguments.get("raw", "")
         if not isinstance(code, str) or not code.strip():
             latency_ms = (time.perf_counter() - started) * 1000.0
             return ToolResult(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
-                output="[ERROR] Tool argument 'code' must be a non-empty string.",
+                output="[ERROR] Tool argument 'code' must be a non-empty string. Currently accepted keys in arg-dict: 'code' and 'raw'. Please check arg-dict again.",
                 latency_ms=latency_ms,
                 success=False,
             )
