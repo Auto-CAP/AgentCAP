@@ -89,6 +89,24 @@ def compute_local_cost(
     )
 
 
+def compute_local_cost_runtime(
+    config: LocalCostConfig,
+    input_tokens: int,
+    output_tokens: int,
+    total_prefill_seconds: float,
+    total_decode_seconds: float,
+) -> float:
+    """Compute local cost using runtime-measured timing.
+
+    Cost = hourly_rate × actual_gpu_time_used.
+    GPU time = time spent on prefill + time spent on decode.
+    """
+    del input_tokens, output_tokens
+    gpu_seconds = total_prefill_seconds + total_decode_seconds
+    gpu_hours = gpu_seconds / 3600
+    return config.total_per_hour * gpu_hours
+
+
 def compute_hybrid_cost(
     plan_config: APICostConfig,
     exec_config,
