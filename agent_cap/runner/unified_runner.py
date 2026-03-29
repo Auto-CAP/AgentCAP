@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, IO, List, Optional, Sequence, TextIO, Union
@@ -88,6 +88,7 @@ class ExampleResult:
 @dataclass
 class UnifiedRunResult:
     output_dir: Path
+    suffix: str
     metadata: Dict[str, Any]
     metrics: Dict[str, Any]
     example_results: List[ExampleResult]
@@ -108,10 +109,10 @@ def _run_command(args: Sequence[str], timeout_s: float = 2.0) -> str:
 
 
 def collect_hardware_info() -> Dict[str, Any]:
-    gpu_name = "unknown"
-    gpu_count = 0
-    cpu_name = "unknown"
-    cpu_count = int(os.cpu_count() or 0)
+    gpu_type = "unknown"
+    num_gpus = 0
+    cpu_type = "unknown"
+    num_cpus = int(os.cpu_count() or 0)
 
     gpu_name_raw = _run_command(
         ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
@@ -120,24 +121,24 @@ def collect_hardware_info() -> Dict[str, Any]:
     if gpu_name_raw:
         lines = [line.strip() for line in gpu_name_raw.splitlines() if line.strip()]
         if lines:
-            gpu_name = lines[0]
+            gpu_type = lines[0]
 
     gpu_list_raw = _run_command(["nvidia-smi", "--list-gpus"], timeout_s=3.0)
     if gpu_list_raw:
-        gpu_count = len([line for line in gpu_list_raw.splitlines() if line.strip()])
+        num_gpus = len([line for line in gpu_list_raw.splitlines() if line.strip()])
 
     lscpu_raw = _run_command(["lscpu"], timeout_s=3.0)
     if lscpu_raw:
         for line in lscpu_raw.splitlines():
             if line.startswith("Model name:"):
-                cpu_name = line.split(":", 1)[1].strip() if ":" in line else cpu_name
+                cpu_type = line.split(":", 1)[1].strip() if ":" in line else cpu_type
                 break
 
     return {
-        "gpu_name": gpu_name,
-        "gpu_count": gpu_count,
-        "cpu_name": cpu_name,
-        "cpu_count": cpu_count,
+        "gpu_type": gpu_type,
+        "num_gpus": num_gpus,
+        "cpu_type": cpu_type,
+        "num_cpus": num_cpus,
     }
 
 
@@ -624,10 +625,10 @@ def compute_aggregated_metrics(
     gpu_stats: GPUMetricsSummary,
     wall_time: float,
     hw_info: Dict[str, Any],
-    request_details_path: Optional[Path] = None,
+    detailed_results_path: Optional[Path] = None,
     cpu_samples: Optional[Sequence[float]] = None,
 ) -> Dict[str, Any]:
-    request_rows = _read_jsonl(request_details_path)
+    request_rows = _read_jsonl(detailed_results_path)
 
     e2e_latencies = [r.e2e_latency_s for r in results]
     prefill_times = [float(r.get("prefill_time_s", 0.0)) for r in request_rows]
@@ -645,11 +646,15 @@ def compute_aggregated_metrics(
     total_requests = sum(r.num_requests for r in results)
     total_input_tokens = sum(r.total_input_tokens for r in results)
     total_output_tokens = sum(r.total_output_tokens for r in results)
+    total_tool_calls = sum(r.tool_call_count for r in results)
+    error_examples = sum(1 for r in results if r.errors)
+    completed_examples = total_examples - error_examples
 
     cpu_vals = [float(v) for v in (cpu_samples or [])]
 
     return {
-        "user_facing": {
+        "performance": {
+            "e2e_s": wall_time,
             "avg_e2e_latency_s": _safe_mean(e2e_latencies),
             "p50_e2e_latency_s": _percentile(e2e_latencies, 50),
             "p99_e2e_latency_s": _percentile(e2e_latencies, 99),
@@ -658,15 +663,13 @@ def compute_aggregated_metrics(
                 if wall_time > 0 and total_examples > 0
                 else 0.0
             ),
-        },
-        "inference_engine": {
-            "avg_prefill_time_s": _safe_mean(prefill_times),
-            "p99_prefill_time_s": _percentile(prefill_times, 99),
-            "avg_decode_time_s": _safe_mean(decode_times),
+            "ttft": _safe_mean(prefill_times),
+            "p99_ttft": _percentile(prefill_times, 99),
+            "tpot": _safe_mean(tpot_vals),
+            "p99_tpot": _percentile(tpot_vals, 99),
+            "decode_time_s": _safe_mean(decode_times),
             "p99_decode_time_s": _percentile(decode_times, 99),
-            "avg_tpot_s": _safe_mean(tpot_vals),
-            "p99_tpot_s": _percentile(tpot_vals, 99),
-            "avg_output_throughput_tok_s": _safe_mean(throughput_vals),
+            "output_throughput_tok_s": _safe_mean(throughput_vals),
         },
         "agentic": {
             "avg_total_input_tokens": _safe_mean(
@@ -688,20 +691,22 @@ def compute_aggregated_metrics(
             "avg_max_input_tokens_per_request": _safe_mean(
                 [float(r.max_input_tokens_per_request) for r in results]
             ),
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "total_requests": total_requests,
+            "total_tool_calls": total_tool_calls,
+        },
+        "quality": {
+            "total_examples": total_examples,
+            "completed": completed_examples,
+            "errors": error_examples,
         },
         "hardware": {
-            "gpu_name": hw_info.get("gpu_name", "unknown"),
-            "gpu_count": int(hw_info.get("gpu_count", 0) or 0),
+            "gpu_type": hw_info.get("gpu_type", "unknown"),
+            "num_gpus": int(hw_info.get("num_gpus", 0) or 0),
             "avg_gpu_utilization_pct": float(gpu_stats.avg_gpu_util_pct),
             "peak_gpu_memory_used_mb": float(gpu_stats.peak_memory_used_mb),
             "avg_cpu_utilization_pct": _safe_mean(cpu_vals),
-        },
-        "summary": {
-            "total_examples": total_examples,
-            "total_requests": total_requests,
-            "total_wall_time_s": wall_time,
-            "total_input_tokens": total_input_tokens,
-            "total_output_tokens": total_output_tokens,
         },
     }
 
@@ -711,10 +716,13 @@ async def run_experiment(
     tasks: Sequence[Union[UnifiedTask, Dict[str, Any]]],
 ) -> UnifiedRunResult:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = (
-        Path(config.output_root) / config.model_name / f"{config.dataset}_{timestamp}"
-    )
+    out_dir = Path(config.output_root) / config.model_name
     out_dir.mkdir(parents=True, exist_ok=True)
+    suffix = f"{config.dataset}_{timestamp}"
+    metadata_path = out_dir / f"metadata_{suffix}.json"
+    metrics_path = out_dir / f"metrics_{suffix}.json"
+    detailed_results_path = out_dir / f"detailed_results_{suffix}.jsonl"
+    output_data_path = out_dir / f"output_data_{suffix}.jsonl"
 
     normalized_tasks: List[UnifiedTask] = [
         task if isinstance(task, UnifiedTask) else UnifiedTask.from_dict(task)
@@ -726,12 +734,13 @@ async def run_experiment(
         "hardware": hw,
         "model_config": {
             "model_name": config.model_name,
-            "serving_engine": config.serving_engine,
-            "base_url": config.base_url,
-            "is_local": config.is_local,
             "precision": config.precision,
         },
-        "experiment_config": {
+        "system_environment": {
+            "inference_engine": config.serving_engine,
+            "base_url": config.base_url,
+            "is_local": config.is_local,
+            "mcp_server_url": config.mcp_server_url,
             "dataset": config.dataset,
             "num_examples": len(normalized_tasks),
             "max_turns": config.max_turns,
@@ -740,13 +749,10 @@ async def run_experiment(
             "timestamp": timestamp,
         },
     }
-    (out_dir / "metadata.json").write_text(
+    metadata_path.write_text(
         json.dumps(metadata, indent=4, ensure_ascii=False),
         encoding="utf-8",
     )
-
-    request_details_path = out_dir / "per_request_details.jsonl"
-    example_results_path = out_dir / "per_example_results.jsonl"
 
     gpu_monitor = GPUMonitor(interval=1.0)
     gpu_monitor.start()
@@ -765,8 +771,8 @@ async def run_experiment(
             )
 
             with (
-                request_details_path.open("w", encoding="utf-8") as req_f,
-                example_results_path.open("w", encoding="utf-8") as ex_f,
+                detailed_results_path.open("w", encoding="utf-8") as req_f,
+                output_data_path.open("w", encoding="utf-8") as out_f,
             ):
                 wall_start = time.perf_counter()
                 for i, task in enumerate(normalized_tasks):
@@ -785,8 +791,19 @@ async def run_experiment(
                         request_details_file=req_f,
                         use_streaming=config.use_streaming,
                     )
-                    ex_f.write(json.dumps(asdict(result), ensure_ascii=False) + "\n")
-                    ex_f.flush()
+                    output_data = {
+                        "index": i,
+                        "task_id": result.task_id,
+                        "input_tokens": result.total_input_tokens,
+                        "output_tokens": result.total_output_tokens,
+                        "tool_call_count": result.tool_call_count,
+                        "num_requests": result.num_requests,
+                        "e2e_latency_s": result.e2e_latency_s,
+                        "output_text": result.output_text,
+                        "errors": result.errors,
+                    }
+                    out_f.write(json.dumps(output_data, ensure_ascii=False) + "\n")
+                    out_f.flush()
                     all_example_results.append(result)
 
                     if psutil is not None:
@@ -803,20 +820,221 @@ async def run_experiment(
         gpu_stats=gpu_stats,
         wall_time=max(0.0, wall_end - wall_start),
         hw_info=hw,
-        request_details_path=request_details_path,
+        detailed_results_path=detailed_results_path,
         cpu_samples=cpu_samples,
     )
-    (out_dir / "metrics.json").write_text(
+    metrics_path.write_text(
         json.dumps(metrics, indent=4, ensure_ascii=False),
         encoding="utf-8",
     )
 
     return UnifiedRunResult(
         output_dir=out_dir,
+        suffix=suffix,
         metadata=metadata,
         metrics=metrics,
         example_results=all_example_results,
     )
+
+
+def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
+    name = dataset_name.lower().replace("-", "_").replace(" ", "_")
+
+    if name in ("mcp_atlas", "mcpatlas"):
+        from datasets import load_dataset as hf_load
+
+        ds = hf_load("ScaleAI/mcp-atlas", split="train")
+        tasks: List[UnifiedTask] = []
+        for ex in ds:
+            if not isinstance(ex, dict):
+                continue
+            tasks.append(
+                UnifiedTask(
+                    task_id=ex.get("TASK", ""),
+                    task_name=ex.get("PROMPT", "")[:80],
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a factual, tool-aware assistant connected to a variety of tools. Use the available tools to answer the user query. Do not ask the user for clarification; fully complete the task using the information provided.",
+                        },
+                        {"role": "user", "content": ex.get("PROMPT", "")},
+                    ],
+                )
+            )
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
+    raise ValueError(f"Unknown dataset: {dataset_name}. Supported: mcp-atlas")
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="AgentCAP Unified Single-Agent Runner",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # All CLI args:
+  python -m agent_cap.runner.unified_runner \\
+    --model-name Qwen/Qwen3-30B-A3B \\
+    --dataset mcp-atlas \\
+    --base-url http://localhost:30000 \\
+    --mcp-server-url http://localhost:1984
+
+  # With config file (CLI overrides):
+  python -m agent_cap.runner.unified_runner \\
+    --config configs/experiment.yaml \\
+    --base-url http://localhost:30000
+
+  # API model via OpenRouter:
+  python -m agent_cap.runner.unified_runner \\
+    --model-name deepseek-chat \\
+    --dataset mcp-atlas \\
+    --base-url https://openrouter.ai/api \\
+    --api-key sk-xxx \\
+    --no-local
+""",
+    )
+    parser.add_argument(
+        "--config", type=str, help="YAML config file path. CLI args override."
+    )
+
+    parser.add_argument("--model-name", type=str, help="Model name/ID")
+    parser.add_argument(
+        "--dataset", type=str, help="Dataset name (e.g. mcp-atlas, swe-bench-pro)"
+    )
+    parser.add_argument(
+        "--base-url", type=str, help="LLM server URL (e.g. http://localhost:30000)"
+    )
+    parser.add_argument(
+        "--mcp-server-url",
+        type=str,
+        help="MCP tool server URL (e.g. http://localhost:1984)",
+    )
+
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help="API key for LLM server (default: dummy)",
+    )
+    parser.add_argument(
+        "--serving-engine",
+        type=str,
+        default=None,
+        help="Serving engine name (default: sglang)",
+    )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default=None,
+        help="Model precision (default: bfloat16)",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help="Max tool-call turns per example (default: 15)",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Max output tokens per LLM call (default: 8192)",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Sampling temperature (default: 0.0)",
+    )
+    parser.add_argument(
+        "--num-tasks",
+        type=int,
+        default=None,
+        help="Limit number of tasks (default: all)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Output root directory (default: results)",
+    )
+    parser.add_argument(
+        "--enabled-tools",
+        nargs="*",
+        default=None,
+        help="Optional allowlist of tool names",
+    )
+    parser.add_argument(
+        "--no-local", action="store_true", help="Mark model as API (not self-hosted)"
+    )
+    parser.add_argument(
+        "--no-streaming",
+        action="store_true",
+        help="Disable streaming (use non-stream API)",
+    )
+
+    args = parser.parse_args()
+
+    file_cfg: Dict[str, Any] = {}
+    if args.config:
+        try:
+            import yaml
+        except Exception as exc:
+            parser.error(f"failed to import yaml for --config: {exc}")
+        with open(args.config, "r", encoding="utf-8") as f:
+            file_cfg = yaml.safe_load(f) or {}
+
+    def resolve(cli_val: Any, yaml_key: str, default: Any = None) -> Any:
+        if cli_val is not None:
+            return cli_val
+        if yaml_key in file_cfg:
+            return file_cfg[yaml_key]
+        return default
+
+    config = UnifiedConfig(
+        model_name=resolve(args.model_name, "model_name", ""),
+        serving_engine=resolve(args.serving_engine, "serving_engine", "sglang"),
+        base_url=resolve(args.base_url, "base_url", "http://localhost:30000"),
+        dataset=resolve(args.dataset, "dataset", ""),
+        mcp_server_url=resolve(
+            args.mcp_server_url, "mcp_server_url", "http://localhost:1984"
+        ),
+        api_key=resolve(args.api_key, "api_key", "dummy"),
+        is_local=False if args.no_local else resolve(None, "is_local", True),
+        precision=resolve(args.precision, "precision", "bfloat16"),
+        max_turns=resolve(args.max_turns, "max_turns", 15),
+        max_tokens=resolve(args.max_tokens, "max_tokens", 8192),
+        temperature=resolve(args.temperature, "temperature", 0.0),
+        enabled_tools=resolve(args.enabled_tools, "enabled_tools", []),
+        output_root=Path(
+            resolve(
+                args.output_dir, "output_dir", file_cfg.get("output_root", "results")
+            )
+        ),
+        use_streaming=(
+            False if args.no_streaming else resolve(None, "use_streaming", True)
+        ),
+    )
+
+    if not config.model_name:
+        parser.error("--model-name is required (or set model_name in config file)")
+    if not config.dataset:
+        parser.error("--dataset is required (or set dataset in config file)")
+
+    tasks = _load_dataset_tasks(config.dataset, resolve(args.num_tasks, "num_tasks", 0))
+
+    import asyncio
+
+    result = asyncio.run(run_experiment(config, tasks))
+    print(f"\nDone. Output directory: {result.output_dir}")
+    print(f"  metadata:         metadata_{result.suffix}.json")
+    print(f"  metrics:          metrics_{result.suffix}.json")
+    print(f"  detailed_results: detailed_results_{result.suffix}.jsonl")
+    print(f"  output_data:      output_data_{result.suffix}.jsonl")
 
 
 __all__ = [
@@ -836,4 +1054,10 @@ __all__ = [
     "run_single_example",
     "compute_aggregated_metrics",
     "run_experiment",
+    "_load_dataset_tasks",
+    "main",
 ]
+
+
+if __name__ == "__main__":
+    main()
