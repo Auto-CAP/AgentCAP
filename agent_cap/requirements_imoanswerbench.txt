@@ -10,4 +10,3 @@ PyYAML==6.0.3
 pyzmq==27.1.0
 sympy==1.14.0
 transformers==4.57.1
-vllm==0.18.0
