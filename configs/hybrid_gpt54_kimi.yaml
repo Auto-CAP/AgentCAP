@@ -1,7 +1,6 @@
-name: gpt54-qwen35-9b
-description: "GPT-5.4 plans, Qwen3.5-9B executes"
+name: gpt54-kimi
+description: "GPT-5.4 plans, Kimi K2.5 executes"
 experiment_type: plan-execute
-
 planner:
   id: gpt-5.4
   base_url: https://api.openai.com
@@ -9,12 +8,13 @@ planner:
   is_local: false
   input_price_per_1m: 2.5
   output_price_per_1m: 15.0
-
 executor:
-  id: Qwen/Qwen3.5-9B
-  base_url: http://localhost:30002
-  is_local: true
-
+  id: kimi-k2.5
+  base_url: https://api.moonshot.cn
+  api_key: ${MOONSHOT_API_KEY}
+  is_local: false
+  input_price_per_1m: 0.60
+  output_price_per_1m: 3.00
 mcp_server_url: http://localhost:1984
 max_turns: 20
 max_tokens: 8192
