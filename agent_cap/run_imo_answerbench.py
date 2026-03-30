@@ -457,7 +457,7 @@ def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
     if result["errors"]:
         print(f"Errors: {result['errors']}")
     print("\nResponse preview:")
-    print(result["response"][:1200])
+    print(result["response"])
 
 
 def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
