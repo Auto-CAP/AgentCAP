@@ -501,7 +501,7 @@ def main() -> None:
     parser.add_argument("--model", type=str, default="gpt-oss")
     parser.add_argument("--num-tasks", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max-turns", type=int, default=10)
+    parser.add_argument("--max-turns", type=int, default=128)
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--startup-timeout", type=float, default=30.0)
