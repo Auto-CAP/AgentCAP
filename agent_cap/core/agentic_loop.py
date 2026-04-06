@@ -97,7 +97,7 @@ def run_agentic_loop(
             except (json.JSONDecodeError, TypeError):
                 args = {"raw": tc["arguments"]}
 
-            result = backend.execute(tc["name"], tc["id"], args)
+            result = backend.execute(tc["name"], tc["id"], arguments=args)
             tool_latencies.append(result.latency_ms)
             total_tool_calls += 1
 
