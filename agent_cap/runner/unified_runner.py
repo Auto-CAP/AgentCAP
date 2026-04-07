@@ -250,6 +250,8 @@ def _clean_tool_args(
     if not schema:
         return args
     properties = schema.get("properties", {})
+    if not properties:
+        return args
     required = set(schema.get("required", []))
     allowed = set(properties.keys())
     extra_keys = set(args.keys()) - allowed
