@@ -241,6 +241,41 @@ async def list_openai_tools(
     return transformed
 
 
+def _clean_tool_args(
+    tool_name: str,
+    args: Dict[str, Any],
+    tool_schemas: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    schema = tool_schemas.get(tool_name)
+    if not schema:
+        return args
+    properties = schema.get("properties", {})
+    required = set(schema.get("required", []))
+    allowed = set(properties.keys())
+    extra_keys = set(args.keys()) - allowed
+    cleaned = {k: v for k, v in args.items() if k in allowed}
+    for req in required:
+        if req not in cleaned:
+            for ek in extra_keys:
+                if isinstance(args[ek], str) and args[ek]:
+                    cleaned[req] = args[ek]
+                    extra_keys.discard(ek)
+                    break
+            else:
+                prop_type = properties.get(req, {}).get("type", "string")
+                if prop_type == "string":
+                    cleaned[req] = ""
+                elif prop_type in ("number", "integer"):
+                    cleaned[req] = 0
+                elif prop_type == "boolean":
+                    cleaned[req] = False
+                elif prop_type == "array":
+                    cleaned[req] = []
+                else:
+                    cleaned[req] = ""
+    return cleaned
+
+
 async def mcp_call_tool(
     session: aiohttp.ClientSession,
     mcp_server_url: str,
@@ -538,6 +573,11 @@ async def run_single_example(
     use_streaming: bool = True,
 ) -> ExampleResult:
     messages = [dict(m) for m in task.messages]
+    tool_schemas: Dict[str, Dict[str, Any]] = {}
+    for t in tools:
+        fn = t.get("function", {})
+        if fn.get("name"):
+            tool_schemas[fn["name"]] = fn.get("parameters", {})
     total_input_tokens = 0
     total_output_tokens = 0
     total_cached_tokens = 0
@@ -626,6 +666,8 @@ async def run_single_example(
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             except json.JSONDecodeError:
                 args = {}
+            if isinstance(args, dict):
+                args = _clean_tool_args(name, args, tool_schemas)
             try:
                 tool_result = await mcp_call_tool(session, mcp_server_url, name, args)
             except Exception as exc:
