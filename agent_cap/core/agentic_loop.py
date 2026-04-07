@@ -104,12 +104,33 @@ def run_agentic_loop(
             out_preview = (
                 result.output[:150].replace("\n", "\\n") if result.output else "(empty)"
             )
-            print(
+            # print(
+            #     f"      -> {tc['name']}({json.dumps(args)[:80]})  "
+            #     f"ok={result.success}  {result.latency_ms:.0f}ms  "
+            #     f"out={out_preview}"
+            # )
+
+            ######################################################################################################
+            out_preview = (
+                result.output[:150].replace("\n", "\\n") if result.output else "(empty)"
+            )
+
+            log_line = (
                 f"      -> {tc['name']}({json.dumps(args)[:80]})  "
                 f"ok={result.success}  {result.latency_ms:.0f}ms  "
                 f"out={out_preview}"
             )
 
+            if result.output and result.output.startswith("[WARN]"):
+                input_code = args.get("code", args.get("raw", ""))
+                log_line += (
+                    f"\n         full_input_code:\n"
+                    f"{input_code}"
+                )
+
+            print(log_line)
+            ######################################################################################################
+            
             messages.append(
                 {
                     "role": "tool",
