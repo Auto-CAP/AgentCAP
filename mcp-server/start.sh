@@ -10,8 +10,16 @@ PORT="${MCP_PORT:-1984}"
 ENABLED_SERVERS="${ENABLED_SERVERS:-calculator,fetch,whois,weather,pubmed,brave-search,exa,google-maps,github,airtable,alchemy,clinicaltrialsgov-mcp-server,context7,ddg-search,lara-translate,met-museum,open-library,osm-mcp-server,mongodb}"
 
 if [ ! -f "$ENV_FILE" ]; then
-    echo "Error: $ENV_FILE not found. Set MCP_ENV_FILE to your .env path."
-    exit 1
+    if [ -f "$ATLAS_DIR/env.template" ]; then
+        cp "$ATLAS_DIR/env.template" "$ENV_FILE"
+        echo "Created $ENV_FILE from template."
+        echo "Fill in your API keys, then re-run this script."
+        echo "See $ATLAS_DIR/env.template for links to obtain each key."
+        exit 1
+    else
+        echo "Error: $ENV_FILE not found. Set MCP_ENV_FILE to your .env path."
+        exit 1
+    fi
 fi
 
 AGENT_ENV_DIR="$ATLAS_DIR/services/agent-environment"
