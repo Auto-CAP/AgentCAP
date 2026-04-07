@@ -198,6 +198,16 @@ def _extract_cached_tokens(usage: Dict[str, Any]) -> int:
     return cached_tokens
 
 
+def _fix_tool_schema(schema: Any) -> Dict[str, Any]:
+    if not isinstance(schema, dict):
+        return {"type": "object", "properties": {}}
+    if schema.get("type") is None:
+        schema["type"] = "object"
+    if "properties" not in schema:
+        schema["properties"] = {}
+    return schema
+
+
 async def list_openai_tools(
     session: aiohttp.ClientSession,
     mcp_server_url: str,
@@ -224,7 +234,7 @@ async def list_openai_tools(
                 "function": {
                     "name": name,
                     "description": str(tool.get("description", "")),
-                    "parameters": tool.get("input_schema", {}),
+                    "parameters": _fix_tool_schema(tool.get("input_schema", {})),
                 },
             }
         )
@@ -288,7 +298,7 @@ async def chat_completion(
         }
 
     async with session.post(
-        f"{base_url.rstrip('/')}/v1/chat/completions",
+        f"{base_url.rstrip('/')}/chat/completions",
         json=payload,
         headers=headers,
         timeout=aiohttp.ClientTimeout(total=600),
@@ -357,7 +367,7 @@ async def chat_completion_streaming(
     usage: Dict[str, Any] = {}
 
     async with session.post(
-        f"{base_url.rstrip('/')}/v1/chat/completions",
+        f"{base_url.rstrip('/')}/chat/completions",
         json=payload,
         headers=headers,
         timeout=aiohttp.ClientTimeout(total=600),
