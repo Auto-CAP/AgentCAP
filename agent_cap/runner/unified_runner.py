@@ -47,6 +47,9 @@ class UnifiedConfig:
     dataset: str
     mcp_server_url: str
     api_key: str = "dummy"
+    api_provider: str = ""
+    openrouter_provider_pin: str = ""
+    openrouter_provider: str = ""
     is_local: bool = True
     precision: str = "bfloat16"
     max_turns: int = 15
@@ -64,6 +67,7 @@ class ChatCompletionTimedResult:
     decode_seconds: float
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_tokens: int = 0
 
 
 @dataclass
@@ -82,6 +86,7 @@ class ExampleResult:
     total_prefill_time_s: float
     total_decode_time_s: float
     output_text: str
+    total_cached_tokens: int = 0
     errors: List[str] = field(default_factory=list)
 
 
@@ -175,6 +180,24 @@ def extract_final_assistant_text(messages: Sequence[Dict[str, Any]]) -> str:
     return ""
 
 
+def _to_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_cached_tokens(usage: Dict[str, Any]) -> int:
+    cached_tokens = 0
+    ptd = usage.get("prompt_tokens_details") or {}
+    cached_tokens = _to_int(ptd.get("cached_tokens", 0))
+    if cached_tokens == 0:
+        cached_tokens = _to_int(usage.get("prompt_cache_hit_tokens", 0))
+    if cached_tokens == 0:
+        cached_tokens = _to_int(usage.get("cache_read_input_tokens", 0))
+    return cached_tokens
+
+
 async def list_openai_tools(
     session: aiohttp.ClientSession,
     mcp_server_url: str,
@@ -234,13 +257,20 @@ async def chat_completion(
     tools: Optional[List[Dict[str, Any]]],
     max_tokens: int,
     temperature: float = 0.0,
+    openrouter_provider: str = "",
 ) -> Dict[str, Any]:
     headers = {}
     if api_key and api_key != "dummy":
         headers["Authorization"] = f"Bearer {api_key}"
 
     is_openai = "api.openai.com" in base_url
-    needs_temp_1 = "kimi" in model.lower() or "moonshot" in base_url
+    is_openrouter = "openrouter.ai" in base_url
+    provider_text = openrouter_provider.lower()
+    needs_temp_1 = (
+        "kimi" in model.lower()
+        or "moonshot" in base_url.lower()
+        or "moonshot" in provider_text
+    )
     token_key = "max_completion_tokens" if is_openai else "max_tokens"
     payload: Dict[str, Any] = {
         "model": model,
@@ -251,6 +281,11 @@ async def chat_completion(
     }
     if tools:
         payload["tools"] = tools
+    if is_openrouter and openrouter_provider:
+        payload["provider"] = {
+            "order": [openrouter_provider],
+            "allow_fallbacks": False,
+        }
 
     async with session.post(
         f"{base_url.rstrip('/')}/v1/chat/completions",
@@ -261,7 +296,15 @@ async def chat_completion(
         if resp.status != 200:
             body = await resp.text()
             raise RuntimeError(f"chat failed ({resp.status}): {body}")
-        return await resp.json()
+        result = await resp.json()
+
+    usage = result.get("usage") or {}
+    cached_tokens = _extract_cached_tokens(usage)
+    if isinstance(result.get("usage"), dict):
+        result["usage"]["cached_tokens"] = cached_tokens
+    else:
+        result["usage"] = {"cached_tokens": cached_tokens}
+    return result
 
 
 async def chat_completion_streaming(
@@ -273,13 +316,20 @@ async def chat_completion_streaming(
     tools: Optional[List[Dict[str, Any]]],
     max_tokens: int,
     temperature: float = 0.0,
+    openrouter_provider: str = "",
 ) -> ChatCompletionTimedResult:
     headers = {}
     if api_key and api_key != "dummy":
         headers["Authorization"] = f"Bearer {api_key}"
 
     is_openai = "api.openai.com" in base_url
-    needs_temp_1 = "kimi" in model.lower() or "moonshot" in base_url
+    is_openrouter = "openrouter.ai" in base_url
+    provider_text = openrouter_provider.lower()
+    needs_temp_1 = (
+        "kimi" in model.lower()
+        or "moonshot" in base_url.lower()
+        or "moonshot" in provider_text
+    )
     token_key = "max_completion_tokens" if is_openai else "max_tokens"
     payload: Dict[str, Any] = {
         "model": model,
@@ -291,6 +341,11 @@ async def chat_completion_streaming(
     }
     if tools:
         payload["tools"] = tools
+    if is_openrouter and openrouter_provider:
+        payload["provider"] = {
+            "order": [openrouter_provider],
+            "allow_fallbacks": False,
+        }
 
     t_start = time.perf_counter()
     t_first_token: Optional[float] = None
@@ -386,12 +441,17 @@ async def chat_completion_streaming(
         "usage": usage,
     }
 
+    cached_tokens = _extract_cached_tokens(usage)
+    if isinstance(response_json.get("usage"), dict):
+        response_json["usage"]["cached_tokens"] = cached_tokens
+
     return ChatCompletionTimedResult(
         response_json=response_json,
         ttft_seconds=ttft,
         decode_seconds=decode_time,
-        input_tokens=int(usage.get("prompt_tokens", 0) or 0),
-        output_tokens=int(usage.get("completion_tokens", 0) or 0),
+        input_tokens=_to_int(usage.get("prompt_tokens", 0)),
+        output_tokens=_to_int(usage.get("completion_tokens", 0)),
+        cached_tokens=cached_tokens,
     )
 
 
@@ -404,6 +464,7 @@ async def _chat_with_fallback(
     tools: Optional[List[Dict[str, Any]]],
     max_tokens: int,
     temperature: float,
+    openrouter_provider: str,
     use_streaming: bool,
     errors: List[str],
 ) -> ChatCompletionTimedResult:
@@ -418,6 +479,7 @@ async def _chat_with_fallback(
                 tools=tools,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                openrouter_provider=openrouter_provider,
             )
         except Exception as exc:
             errors.append(f"streaming fallback: {exc}")
@@ -432,15 +494,20 @@ async def _chat_with_fallback(
         tools=tools,
         max_tokens=max_tokens,
         temperature=temperature,
+        openrouter_provider=openrouter_provider,
     )
     elapsed = time.perf_counter() - t0
     usage = response_json.get("usage") or {}
+    cached_tokens = _to_int(usage.get("cached_tokens", 0))
+    if cached_tokens == 0:
+        cached_tokens = _extract_cached_tokens(usage)
     return ChatCompletionTimedResult(
         response_json=response_json,
         ttft_seconds=elapsed,
         decode_seconds=0.0,
-        input_tokens=int(usage.get("prompt_tokens", 0) or 0),
-        output_tokens=int(usage.get("completion_tokens", 0) or 0),
+        input_tokens=_to_int(usage.get("prompt_tokens", 0)),
+        output_tokens=_to_int(usage.get("completion_tokens", 0)),
+        cached_tokens=cached_tokens,
     )
 
 
@@ -455,6 +522,7 @@ async def run_single_example(
     max_turns: int,
     max_tokens: int,
     temperature: float,
+    openrouter_provider: str,
     example_index: int,
     request_details_file: IO[str],
     use_streaming: bool = True,
@@ -462,6 +530,7 @@ async def run_single_example(
     messages = [dict(m) for m in task.messages]
     total_input_tokens = 0
     total_output_tokens = 0
+    total_cached_tokens = 0
     total_prefill_time = 0.0
     total_decode_time = 0.0
     request_index = 0
@@ -481,6 +550,7 @@ async def run_single_example(
                 tools=tools,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                openrouter_provider=openrouter_provider,
                 use_streaming=use_streaming,
                 errors=errors,
             )
@@ -490,11 +560,15 @@ async def run_single_example(
 
         result = timed.response_json
         usage = result.get("usage") or {}
-        in_tok = int(usage.get("prompt_tokens", timed.input_tokens) or 0)
-        out_tok = int(usage.get("completion_tokens", timed.output_tokens) or 0)
+        in_tok = _to_int(usage.get("prompt_tokens", timed.input_tokens))
+        out_tok = _to_int(usage.get("completion_tokens", timed.output_tokens))
+        cached_tok = _to_int(usage.get("cached_tokens", timed.cached_tokens))
+        if cached_tok == 0:
+            cached_tok = _extract_cached_tokens(usage)
 
         total_input_tokens += in_tok
         total_output_tokens += out_tok
+        total_cached_tokens += cached_tok
         total_prefill_time += timed.ttft_seconds
         total_decode_time += timed.decode_seconds
         per_request_input_tokens.append(in_tok)
@@ -515,6 +589,7 @@ async def run_single_example(
             "request_index": request_index,
             "input_tokens": in_tok,
             "output_tokens": out_tok,
+            "cached_tokens": cached_tok,
             "prefill_time_s": round(timed.ttft_seconds, 6),
             "decode_time_s": round(timed.decode_seconds, 6),
             "tpot_s": round(tpot, 6),
@@ -564,6 +639,7 @@ async def run_single_example(
         task_name=task.task_name,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
+        total_cached_tokens=total_cached_tokens,
         tool_call_count=tool_call_count,
         num_requests=request_index,
         e2e_latency_s=elapsed,
@@ -646,6 +722,7 @@ def compute_aggregated_metrics(
     total_requests = sum(r.num_requests for r in results)
     total_input_tokens = sum(r.total_input_tokens for r in results)
     total_output_tokens = sum(r.total_output_tokens for r in results)
+    total_cached_tokens = sum(r.total_cached_tokens for r in results)
     total_tool_calls = sum(r.tool_call_count for r in results)
     error_examples = sum(1 for r in results if r.errors)
     completed_examples = total_examples - error_examples
@@ -693,6 +770,14 @@ def compute_aggregated_metrics(
             ),
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
+            "total_cached_tokens": total_cached_tokens,
+            "avg_cache_hit_rate": _safe_mean(
+                [
+                    (r.total_cached_tokens / r.total_input_tokens)
+                    for r in results
+                    if r.total_input_tokens > 0
+                ]
+            ),
             "total_requests": total_requests,
             "total_tool_calls": total_tool_calls,
         },
@@ -776,6 +861,9 @@ async def run_experiment(
             ):
                 wall_start = time.perf_counter()
                 for i, task in enumerate(normalized_tasks):
+                    openrouter_provider = (
+                        config.openrouter_provider or config.openrouter_provider_pin
+                    )
                     result = await run_single_example(
                         session=session,
                         base_url=config.base_url,
@@ -787,6 +875,7 @@ async def run_experiment(
                         max_turns=config.max_turns,
                         max_tokens=config.max_tokens,
                         temperature=config.temperature,
+                        openrouter_provider=openrouter_provider,
                         example_index=i,
                         request_details_file=req_f,
                         use_streaming=config.use_streaming,
@@ -976,6 +1065,12 @@ Examples:
         action="store_true",
         help="Disable streaming (use non-stream API)",
     )
+    parser.add_argument(
+        "--openrouter-provider",
+        type=str,
+        default=None,
+        help="Pin to specific OpenRouter provider (e.g. 'Moonshot AI', 'Z.AI', 'Minimax')",
+    )
 
     args = parser.parse_args()
 
@@ -995,6 +1090,12 @@ Examples:
             return file_cfg[yaml_key]
         return default
 
+    resolved_openrouter_provider = resolve(
+        args.openrouter_provider, "openrouter_provider", ""
+    )
+    if not resolved_openrouter_provider:
+        resolved_openrouter_provider = resolve(None, "openrouter_provider_pin", "")
+
     config = UnifiedConfig(
         model_name=resolve(args.model_name, "model_name", ""),
         serving_engine=resolve(args.serving_engine, "serving_engine", "sglang"),
@@ -1004,6 +1105,11 @@ Examples:
             args.mcp_server_url, "mcp_server_url", "http://localhost:1984"
         ),
         api_key=resolve(args.api_key, "api_key", "dummy"),
+        api_provider=resolve(None, "api_provider", ""),
+        openrouter_provider_pin=resolve(
+            None, "openrouter_provider_pin", resolved_openrouter_provider
+        ),
+        openrouter_provider=resolved_openrouter_provider,
         is_local=False if args.no_local else resolve(None, "is_local", True),
         precision=resolve(args.precision, "precision", "bfloat16"),
         max_turns=resolve(args.max_turns, "max_turns", 15),
