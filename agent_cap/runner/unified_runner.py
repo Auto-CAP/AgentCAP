@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any, Dict, IO, List, Optional, Sequence, TextIO, Union
 
 import aiohttp
+from agent_cap.runner.tool_backends import (
+    MCPToolBackend,
+    SWEBenchToolBackend,
+    ToolBackend,
+)
 
 try:
     import psutil
@@ -24,6 +29,7 @@ class UnifiedTask:
     task_id: str
     task_name: str
     messages: List[Dict[str, Any]]
+    eval_config: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "UnifiedTask":
@@ -32,10 +38,14 @@ class UnifiedTask:
         messages = raw.get("messages") or []
         if not isinstance(messages, list):
             messages = []
+        eval_config = raw.get("eval_config")
+        if not isinstance(eval_config, dict):
+            eval_config = None
         return cls(
             task_id=str(task_id),
             task_name=str(task_name),
             messages=[m for m in messages if isinstance(m, dict)],
+            eval_config=eval_config,
         )
 
 
@@ -46,6 +56,8 @@ class UnifiedConfig:
     base_url: str
     dataset: str
     mcp_server_url: str
+    backend: str = "mcp"
+    swebench_runtime: str = "docker"
     api_key: str = "dummy"
     api_provider: str = ""
     openrouter_provider_pin: str = ""
@@ -258,39 +270,6 @@ def _fix_tool_schema(schema: Any, tool_name: str = "") -> Dict[str, Any]:
     return schema
 
 
-async def list_openai_tools(
-    session: aiohttp.ClientSession,
-    mcp_server_url: str,
-    enabled_tools: Sequence[str],
-) -> List[Dict[str, Any]]:
-    async with session.post(f"{mcp_server_url.rstrip('/')}/list-tools") as resp:
-        if resp.status != 200:
-            body = await resp.text()
-            raise RuntimeError(f"list-tools failed ({resp.status}): {body}")
-        payload = await resp.json()
-    enabled = set(enabled_tools)
-    transformed: List[Dict[str, Any]] = []
-    for tool in payload:
-        if not isinstance(tool, dict):
-            continue
-        name = str(tool.get("name", ""))
-        if not name:
-            continue
-        if enabled and name not in enabled:
-            continue
-        transformed.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": str(tool.get("description", "")),
-                    "parameters": _fix_tool_schema(tool.get("input_schema", {}), name),
-                },
-            }
-        )
-    return transformed
-
-
 def _clean_tool_args(
     tool_name: str,
     args: Dict[str, Any],
@@ -326,23 +305,6 @@ def _clean_tool_args(
                 else:
                     cleaned[req] = ""
     return cleaned
-
-
-async def mcp_call_tool(
-    session: aiohttp.ClientSession,
-    mcp_server_url: str,
-    tool_name: str,
-    tool_args: Any,
-) -> Any:
-    async with session.post(
-        f"{mcp_server_url.rstrip('/')}/call-tool",
-        json={"tool_name": tool_name, "tool_args": tool_args},
-        timeout=aiohttp.ClientTimeout(total=120),
-    ) as resp:
-        if resp.status != 200:
-            body = await resp.text()
-            raise RuntimeError(f"tool call failed ({resp.status}): {body}")
-        return await resp.json()
 
 
 async def chat_completion(
@@ -635,7 +597,7 @@ async def run_single_example(
     model: str,
     task: UnifiedTask,
     tools: List[Dict[str, Any]],
-    mcp_server_url: str,
+    backend: ToolBackend,
     max_turns: int,
     max_tokens: int,
     temperature: float,
@@ -800,12 +762,7 @@ async def run_single_example(
             is_error = False
             error_msg = None
             try:
-                tool_result = await mcp_call_tool(
-                    session,
-                    mcp_server_url,
-                    name,
-                    cleaned_args,
-                )
+                tool_result = await backend.call_tool(name, cleaned_args)
             except Exception as exc:
                 is_error = True
                 error_msg = str(exc)
@@ -1062,6 +1019,8 @@ async def run_experiment(
             "base_url": config.base_url,
             "is_local": config.is_local,
             "mcp_server_url": config.mcp_server_url,
+            "backend": config.backend,
+            "swebench_runtime": config.swebench_runtime,
             "dataset": config.dataset,
             "num_examples": len(normalized_tasks),
             "max_turns": config.max_turns,
@@ -1085,11 +1044,38 @@ async def run_experiment(
 
     try:
         async with aiohttp.ClientSession() as session:
-            tools = await list_openai_tools(
-                session=session,
-                mcp_server_url=config.mcp_server_url,
-                enabled_tools=config.enabled_tools,
+            backend_name = (config.backend or "mcp").lower().replace("_", "-")
+            runtime_name = (
+                (config.swebench_runtime or "docker").lower().replace("_", "-")
             )
+            if backend_name == "mcp":
+                backend: ToolBackend = MCPToolBackend(
+                    session=session,
+                    mcp_server_url=config.mcp_server_url,
+                    enabled_tools=config.enabled_tools,
+                )
+            elif backend_name in ("swebench", "swe-bench"):
+                if runtime_name not in ("docker", "modal"):
+                    raise ValueError(
+                        f"Unknown swebench runtime: {config.swebench_runtime}. Supported: docker, modal"
+                    )
+                backend = SWEBenchToolBackend(runtime=runtime_name)
+            elif backend_name in ("swebench-docker", "swe-bench-docker"):
+                backend = SWEBenchToolBackend(runtime="docker")
+            elif backend_name in ("swebench-modal", "swe-bench-modal"):
+                backend = SWEBenchToolBackend(runtime="modal")
+            else:
+                raise ValueError(
+                    f"Unknown backend: {config.backend}. Supported: mcp, swebench-docker, swebench-modal"
+                )
+
+            if backend_name == "mcp":
+                setup_ok = await backend.setup({})
+                if not setup_ok:
+                    raise RuntimeError("MCP backend setup failed")
+                tools = await backend.list_tools()
+            else:
+                tools = []
 
             with (
                 detailed_results_path.open("w", encoding="utf-8") as req_f,
@@ -1097,26 +1083,90 @@ async def run_experiment(
             ):
                 wall_start = time.perf_counter()
                 for i, task in enumerate(normalized_tasks):
+                    if backend_name != "mcp":
+                        task_config = task.eval_config or {}
+                        task_setup_ok = await backend.setup(task_config)
+                        if not task_setup_ok:
+                            result = ExampleResult(
+                                example_index=i,
+                                task_id=task.task_id,
+                                task_name=task.task_name,
+                                total_input_tokens=0,
+                                total_output_tokens=0,
+                                total_cached_tokens=0,
+                                tool_call_count=0,
+                                num_requests=0,
+                                e2e_latency_s=0.0,
+                                avg_input_tokens_per_request=0.0,
+                                avg_output_tokens_per_request=0.0,
+                                max_input_tokens_per_request=0,
+                                total_prefill_time_s=0.0,
+                                total_decode_time_s=0.0,
+                                output_text="",
+                                errors=["backend_setup_failed"],
+                            )
+                            output_data = {
+                                "index": i,
+                                "task_id": result.task_id,
+                                "input_tokens": result.total_input_tokens,
+                                "output_tokens": result.total_output_tokens,
+                                "tool_call_count": result.tool_call_count,
+                                "num_requests": result.num_requests,
+                                "e2e_latency_s": result.e2e_latency_s,
+                                "output_text": result.output_text,
+                                "errors": result.errors,
+                            }
+                            out_f.write(
+                                json.dumps(output_data, ensure_ascii=False) + "\n"
+                            )
+                            out_f.flush()
+                            all_example_results.append(result)
+                            if psutil is not None:
+                                try:
+                                    cpu_samples.append(
+                                        float(psutil.cpu_percent(interval=None))
+                                    )
+                                except Exception:
+                                    pass
+                            await backend.teardown()
+                            continue
+                        tools = await backend.list_tools()
+
                     openrouter_provider = (
                         config.openrouter_provider or config.openrouter_provider_pin
                     )
-                    result = await run_single_example(
-                        session=session,
-                        base_url=config.base_url,
-                        api_key=config.api_key,
-                        model=config.model_name,
-                        task=task,
-                        tools=tools,
-                        mcp_server_url=config.mcp_server_url,
-                        max_turns=config.max_turns,
-                        max_tokens=config.max_tokens,
-                        temperature=config.temperature,
-                        openrouter_provider=openrouter_provider,
-                        example_index=i,
-                        request_details_file=req_f,
-                        use_streaming=config.use_streaming,
-                        traj_dir=traj_dir,
-                    )
+                    try:
+                        result = await run_single_example(
+                            session=session,
+                            base_url=config.base_url,
+                            api_key=config.api_key,
+                            model=config.model_name,
+                            task=task,
+                            tools=tools,
+                            backend=backend,
+                            max_turns=config.max_turns,
+                            max_tokens=config.max_tokens,
+                            temperature=config.temperature,
+                            openrouter_provider=openrouter_provider,
+                            example_index=i,
+                            request_details_file=req_f,
+                            use_streaming=config.use_streaming,
+                            traj_dir=traj_dir,
+                        )
+                    finally:
+                        if backend_name != "mcp":
+                            try:
+                                patch = await backend.get_patch()
+                                if patch:
+                                    task_dir = traj_dir / f"task_{i:03d}"
+                                    task_dir.mkdir(parents=True, exist_ok=True)
+                                    (task_dir / "patch.diff").write_text(
+                                        patch, encoding="utf-8"
+                                    )
+                            except Exception:
+                                pass
+                            await backend.teardown()
+
                     output_data = {
                         "index": i,
                         "task_id": result.task_id,
@@ -1138,6 +1188,9 @@ async def run_experiment(
                         except Exception:
                             pass
                 wall_end = time.perf_counter()
+
+            if backend_name == "mcp":
+                await backend.teardown()
     finally:
         gpu_stats = gpu_monitor.stop()
 
@@ -1191,7 +1244,51 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
             tasks = tasks[:limit]
         return tasks
 
-    raise ValueError(f"Unknown dataset: {dataset_name}. Supported: mcp-atlas")
+    if name in ("swebench_pro", "swe_bench_pro", "swebench", "swe_bench"):
+        from datasets import load_dataset as hf_load
+
+        ds = hf_load("ScaleAI/SWE-bench_Pro", split="test")
+        tasks = []
+        for ex in ds:
+            if not isinstance(ex, dict):
+                continue
+            instance_id = ex.get("instance_id", "")
+            repo = ex.get("repo", "")
+            problem = ex.get("problem_statement", "")
+            prompt = (
+                f"You are working on {repo}. Fix this issue:\n\n{problem}\n\n"
+                "Use the available tools (read_file, write_file, run_shell, search_code) "
+                "to explore the codebase and make the fix."
+            )
+            tasks.append(
+                UnifiedTask(
+                    task_id=instance_id,
+                    task_name=f"[{repo}] {problem[:60]}",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a software engineer. Use the available tools to read files, search code, run commands, and write fixes. Make minimal changes to fix the issue.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    eval_config={
+                        "instance_id": instance_id,
+                        "repo": repo,
+                        "base_commit": ex.get("base_commit", ""),
+                        "dockerhub_tag": ex.get("dockerhub_tag", ""),
+                        "test_patch": ex.get("test_patch", ""),
+                        "fail_to_pass": ex.get("fail_to_pass", ""),
+                        "patch": ex.get("patch", ""),
+                    },
+                )
+            )
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
+    raise ValueError(
+        f"Unknown dataset: {dataset_name}. Supported: mcp-atlas, swe-bench-pro"
+    )
 
 
 def main() -> None:
@@ -1238,6 +1335,18 @@ Examples:
         "--mcp-server-url",
         type=str,
         help="MCP tool server URL (e.g. http://localhost:1984)",
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="mcp",
+        help="Tool backend: 'mcp' or 'swebench-docker' or 'swebench-modal'",
+    )
+    parser.add_argument(
+        "--swebench-runtime",
+        type=str,
+        default="docker",
+        help="SWE-bench runtime: 'docker' or 'modal'",
     )
 
     parser.add_argument(
@@ -1341,6 +1450,8 @@ Examples:
         mcp_server_url=resolve(
             args.mcp_server_url, "mcp_server_url", "http://localhost:1984"
         ),
+        backend=resolve(args.backend, "backend", "mcp"),
+        swebench_runtime=resolve(args.swebench_runtime, "swebench_runtime", "docker"),
         api_key=resolve(args.api_key, "api_key", "dummy"),
         api_provider=resolve(None, "api_provider", ""),
         openrouter_provider_pin=resolve(
@@ -1390,8 +1501,6 @@ __all__ = [
     "flatten_tool_payload",
     "count_tool_calls",
     "extract_final_assistant_text",
-    "list_openai_tools",
-    "mcp_call_tool",
     "chat_completion",
     "chat_completion_streaming",
     "run_single_example",
