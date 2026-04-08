@@ -363,7 +363,7 @@ async def chat_completion(
             "allow_fallbacks": False,
         }
     if is_gpt_oss:
-        payload["extra_body"] = _get_gpt_oss_extra()
+        payload.update(_get_gpt_oss_extra())
 
     async with session.post(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -426,7 +426,7 @@ async def chat_completion_streaming(
             "allow_fallbacks": False,
         }
     if is_gpt_oss:
-        payload["extra_body"] = _get_gpt_oss_extra()
+        payload.update(_get_gpt_oss_extra())
 
     t_start = time.perf_counter()
     t_first_token: Optional[float] = None
