@@ -198,12 +198,26 @@ def _extract_cached_tokens(usage: Dict[str, Any]) -> int:
     return cached_tokens
 
 
-def _fix_tool_schema(schema: Any) -> Dict[str, Any]:
+def _load_schema_patches() -> Dict[str, Dict[str, Any]]:
+    patch_path = Path(__file__).parent / "tool_schema_patches.json"
+    if patch_path.exists():
+        with open(patch_path) as f:
+            return json.load(f)
+    return {}
+
+
+_SCHEMA_PATCHES = _load_schema_patches()
+
+
+def _fix_tool_schema(schema: Any, tool_name: str = "") -> Dict[str, Any]:
     if not isinstance(schema, dict):
-        return {"type": "object", "properties": {}}
+        schema = {}
     if schema.get("type") is None:
         schema["type"] = "object"
-    if "properties" not in schema:
+    if "properties" not in schema or not schema["properties"]:
+        patch = _SCHEMA_PATCHES.get(tool_name)
+        if patch:
+            return patch
         schema["properties"] = {}
     return schema
 
@@ -234,7 +248,7 @@ async def list_openai_tools(
                 "function": {
                     "name": name,
                     "description": str(tool.get("description", "")),
-                    "parameters": _fix_tool_schema(tool.get("input_schema", {})),
+                    "parameters": _fix_tool_schema(tool.get("input_schema", {}), name),
                 },
             }
         )
