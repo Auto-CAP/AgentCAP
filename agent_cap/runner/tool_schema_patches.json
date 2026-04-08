@@ -1,0 +1,1245 @@
+{
+  "arxiv_download_paper": {
+    "type": "object",
+    "properties": {
+      "paper_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "paper_id"
+    ]
+  },
+  "arxiv_read_paper": {
+    "type": "object",
+    "properties": {
+      "paper_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "paper_id"
+    ]
+  },
+  "arxiv_search_papers": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "calculator_calculate": {
+    "type": "object",
+    "properties": {
+      "expression": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "expression"
+    ]
+  },
+  "cli-mcp-server_run_command": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "command"
+    ]
+  },
+  "clinicaltrialsgov-mcp-server_clinicaltrials_get_study": {
+    "type": "object",
+    "properties": {
+      "nctIds": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "nctIds"
+    ]
+  },
+  "clinicaltrialsgov-mcp-server_clinicaltrials_analyze_trends": {
+    "type": "object",
+    "properties": {
+      "analysisType": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "analysisType"
+    ]
+  },
+  "context7_resolve-library-id": {
+    "type": "object",
+    "properties": {
+      "libraryName": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "libraryName"
+    ]
+  },
+  "context7_get-library-docs": {
+    "type": "object",
+    "properties": {
+      "context7CompatibleLibraryID": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "context7CompatibleLibraryID"
+    ]
+  },
+  "ddg-search_fetch_content": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ]
+  },
+  "ddg-search_search": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "desktop-commander_set_config_value": {
+    "type": "object",
+    "properties": {
+      "key": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "key"
+    ]
+  },
+  "desktop-commander_read_file": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "desktop-commander_read_multiple_files": {
+    "type": "object",
+    "properties": {
+      "paths": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "paths"
+    ]
+  },
+  "desktop-commander_write_file": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "desktop-commander_create_directory": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "desktop-commander_search_files": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "desktop-commander_list_directory": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "desktop-commander_move_file": {
+    "type": "object",
+    "properties": {
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "source"
+    ]
+  },
+  "desktop-commander_get_file_info": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "desktop-commander_edit_block": {
+    "type": "object",
+    "properties": {
+      "file_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "desktop-commander_start_process": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "command"
+    ]
+  },
+  "desktop-commander_search_code": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "desktop-commander_read_process_output": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "pid"
+    ]
+  },
+  "desktop-commander_force_terminate": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "pid"
+    ]
+  },
+  "desktop-commander_kill_process": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "pid"
+    ]
+  },
+  "desktop-commander_interact_with_process": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "pid"
+    ]
+  },
+  "fetch_fetch": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ]
+  },
+  "filesystem_read_file": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_read_text_file": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_read_media_file": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_read_multiple_files": {
+    "type": "object",
+    "properties": {
+      "paths": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "paths"
+    ]
+  },
+  "filesystem_write_file": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_edit_file": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_create_directory": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_list_directory": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_list_directory_with_sizes": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_directory_tree": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_move_file": {
+    "type": "object",
+    "properties": {
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "source"
+    ]
+  },
+  "filesystem_get_file_info": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "filesystem_search_files": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "git_git_status": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_diff_unstaged": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_diff_staged": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_diff": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_commit": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_add": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_reset": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_log": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_create_branch": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_checkout": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_show": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_init": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "git_git_branch": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo_path"
+    ]
+  },
+  "mcp-code-executor_execute_code": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "code"
+    ]
+  },
+  "mcp-code-executor_initialize_code_file": {
+    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "content"
+    ]
+  },
+  "mcp-code-executor_append_to_code_file": {
+    "type": "object",
+    "properties": {
+      "file_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "mcp-code-executor_execute_code_file": {
+    "type": "object",
+    "properties": {
+      "file_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "mcp-code-executor_read_code_file": {
+    "type": "object",
+    "properties": {
+      "file_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "mcp-code-executor_install_dependencies": {
+    "type": "object",
+    "properties": {
+      "packages": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "packages"
+    ]
+  },
+  "mcp-code-executor_check_installed_packages": {
+    "type": "object",
+    "properties": {
+      "packages": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "packages"
+    ]
+  },
+  "mcp-code-executor_configure_environment": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "type"
+    ]
+  },
+  "mcp-server-code-runner_run-code": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "code"
+    ]
+  },
+  "memory_create_entities": {
+    "type": "object",
+    "properties": {
+      "entities": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "entities"
+    ]
+  },
+  "memory_create_relations": {
+    "type": "object",
+    "properties": {
+      "relations": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "relations"
+    ]
+  },
+  "memory_add_observations": {
+    "type": "object",
+    "properties": {
+      "observations": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "observations"
+    ]
+  },
+  "memory_delete_entities": {
+    "type": "object",
+    "properties": {
+      "entityNames": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "entityNames"
+    ]
+  },
+  "memory_delete_observations": {
+    "type": "object",
+    "properties": {
+      "deletions": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "deletions"
+    ]
+  },
+  "memory_delete_relations": {
+    "type": "object",
+    "properties": {
+      "relations": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "relations"
+    ]
+  },
+  "memory_search_nodes": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "memory_open_nodes": {
+    "type": "object",
+    "properties": {
+      "names": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "names"
+    ]
+  },
+  "met-museum_search-museum-objects": {
+    "type": "object",
+    "properties": {
+      "q": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "q"
+    ]
+  },
+  "met-museum_get-museum-object": {
+    "type": "object",
+    "properties": {
+      "objectId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "objectId"
+    ]
+  },
+  "open-library_get_book_by_title": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "open-library_get_authors_by_name": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
+  "open-library_get_author_info": {
+    "type": "object",
+    "properties": {
+      "author_key": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "author_key"
+    ]
+  },
+  "open-library_get_author_photo": {
+    "type": "object",
+    "properties": {
+      "olid": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "olid"
+    ]
+  },
+  "open-library_get_book_cover": {
+    "type": "object",
+    "properties": {
+      "key": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "key"
+    ]
+  },
+  "open-library_get_book_by_id": {
+    "type": "object",
+    "properties": {
+      "idType": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "idType"
+    ]
+  },
+  "osm-mcp-server_geocode_address": {
+    "type": "object",
+    "properties": {
+      "address": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "address"
+    ]
+  },
+  "osm-mcp-server_reverse_geocode": {
+    "type": "object",
+    "properties": {
+      "latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "latitude"
+    ]
+  },
+  "osm-mcp-server_find_nearby_places": {
+    "type": "object",
+    "properties": {
+      "latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "latitude"
+    ]
+  },
+  "osm-mcp-server_search_category": {
+    "type": "object",
+    "properties": {
+      "category": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "category"
+    ]
+  },
+  "osm-mcp-server_get_route_directions": {
+    "type": "object",
+    "properties": {
+      "from_latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "from_latitude"
+    ]
+  },
+  "osm-mcp-server_suggest_meeting_point": {
+    "type": "object",
+    "properties": {
+      "locations": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "locations"
+    ]
+  },
+  "osm-mcp-server_explore_area": {
+    "type": "object",
+    "properties": {
+      "latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "latitude"
+    ]
+  },
+  "osm-mcp-server_find_schools_nearby": {
+    "type": "object",
+    "properties": {
+      "latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "latitude"
+    ]
+  },
+  "osm-mcp-server_analyze_commute": {
+    "type": "object",
+    "properties": {
+      "home_latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "home_latitude"
+    ]
+  },
+  "osm-mcp-server_find_ev_charging_stations": {
+    "type": "object",
+    "properties": {
+      "latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "latitude"
+    ]
+  },
+  "osm-mcp-server_analyze_neighborhood": {
+    "type": "object",
+    "properties": {
+      "latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "latitude"
+    ]
+  },
+  "osm-mcp-server_find_parking_facilities": {
+    "type": "object",
+    "properties": {
+      "latitude": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "latitude"
+    ]
+  },
+  "pubmed_search_pubmed_key_words": {
+    "type": "object",
+    "properties": {
+      "key_words": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "key_words"
+    ]
+  },
+  "pubmed_get_pubmed_article_metadata": {
+    "type": "object",
+    "properties": {
+      "pmid": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "pmid"
+    ]
+  },
+  "weather_get_current_weather": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "location"
+    ]
+  },
+  "pubmed_download_pubmed_pdf": {
+    "type": "object",
+    "properties": {
+      "pmid": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "pmid"
+    ]
+  },
+  "weather_get_weather_forecast": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "location"
+    ]
+  },
+  "weather_get_hourly_forecast": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "location"
+    ]
+  },
+  "weather_get_weather_alerts": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "location"
+    ]
+  },
+  "weather_find_weather_stations": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "location"
+    ]
+  },
+  "whois_whois_domain": {
+    "type": "object",
+    "properties": {
+      "domain": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "domain"
+    ]
+  },
+  "whois_whois_tld": {
+    "type": "object",
+    "properties": {
+      "tld": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tld"
+    ]
+  },
+  "weather_get_local_time": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "location"
+    ]
+  },
+  "wikipedia_search_wikipedia": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "whois_whois_as": {
+    "type": "object",
+    "properties": {
+      "asn": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "asn"
+    ]
+  },
+  "wikipedia_get_article": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "whois_whois_ip": {
+    "type": "object",
+    "properties": {
+      "ip": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "ip"
+    ]
+  },
+  "wikipedia_get_summary": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "wikipedia_summarize_article_for_query": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "wikipedia_summarize_article_section": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "wikipedia_get_related_topics": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "wikipedia_extract_key_facts": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "wikipedia_get_links": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "wikipedia_get_sections": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  }
+}
