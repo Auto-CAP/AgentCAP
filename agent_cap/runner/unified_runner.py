@@ -68,6 +68,7 @@ class ChatCompletionTimedResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
+    is_streaming: bool = False
 
 
 @dataclass
@@ -196,6 +197,41 @@ def _extract_cached_tokens(usage: Dict[str, Any]) -> int:
     if cached_tokens == 0:
         cached_tokens = _to_int(usage.get("cache_read_input_tokens", 0))
     return cached_tokens
+
+
+def _extract_thinking_content(message: Dict[str, Any]) -> str:
+    reasoning_content = message.get("reasoning_content")
+    if isinstance(reasoning_content, str) and reasoning_content:
+        return reasoning_content
+
+    reasoning = message.get("reasoning")
+    if isinstance(reasoning, str) and reasoning:
+        return reasoning
+    if reasoning is not None:
+        try:
+            return json.dumps(reasoning, ensure_ascii=False)
+        except Exception:
+            return str(reasoning)
+
+    content = message.get("content")
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = str(block.get("type", "")).lower()
+            if block_type not in {"thinking", "reasoning"}:
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+                continue
+            inner_content = block.get("content")
+            if isinstance(inner_content, str) and inner_content:
+                parts.append(inner_content)
+        return "\n".join(parts)
+
+    return ""
 
 
 def _load_schema_patches() -> Dict[str, Dict[str, Any]]:
@@ -413,6 +449,7 @@ async def chat_completion_streaming(
     t_last_token = t_start
 
     collected_content = ""
+    collected_reasoning_content = ""
     collected_tool_calls: Dict[int, Dict[str, Any]] = {}
     finish_reason = None
     usage: Dict[str, Any] = {}
@@ -453,6 +490,21 @@ async def chat_completion_streaming(
                     t_last_token = now
                     collected_content += content_delta
 
+                reasoning_delta = delta.get("reasoning_content")
+                if isinstance(reasoning_delta, str) and reasoning_delta:
+                    if t_first_token is None:
+                        t_first_token = now
+                    t_last_token = now
+                    collected_reasoning_content += reasoning_delta
+
+                if not reasoning_delta:
+                    alt_reasoning_delta = delta.get("reasoning")
+                    if isinstance(alt_reasoning_delta, str) and alt_reasoning_delta:
+                        if t_first_token is None:
+                            t_first_token = now
+                        t_last_token = now
+                        collected_reasoning_content += alt_reasoning_delta
+
                 tool_call_deltas = delta.get("tool_calls") or []
                 if tool_call_deltas:
                     if t_first_token is None:
@@ -492,6 +544,8 @@ async def chat_completion_streaming(
         "role": "assistant",
         "content": collected_content or None,
     }
+    if collected_reasoning_content:
+        assistant_message["reasoning_content"] = collected_reasoning_content
     if collected_tool_calls:
         assistant_message["tool_calls"] = [
             collected_tool_calls[i] for i in sorted(collected_tool_calls.keys())
@@ -513,6 +567,7 @@ async def chat_completion_streaming(
         input_tokens=_to_int(usage.get("prompt_tokens", 0)),
         output_tokens=_to_int(usage.get("completion_tokens", 0)),
         cached_tokens=cached_tokens,
+        is_streaming=True,
     )
 
 
@@ -569,6 +624,7 @@ async def _chat_with_fallback(
         input_tokens=_to_int(usage.get("prompt_tokens", 0)),
         output_tokens=_to_int(usage.get("completion_tokens", 0)),
         cached_tokens=cached_tokens,
+        is_streaming=False,
     )
 
 
@@ -587,6 +643,7 @@ async def run_single_example(
     example_index: int,
     request_details_file: IO[str],
     use_streaming: bool = True,
+    traj_dir: Optional[Path] = None,
 ) -> ExampleResult:
     messages = [dict(m) for m in task.messages]
     tool_schemas: Dict[str, Dict[str, Any]] = {}
@@ -602,10 +659,31 @@ async def run_single_example(
     request_index = 0
     per_request_input_tokens: List[int] = []
     errors: List[str] = []
+    task_dir: Optional[Path] = None
+    if traj_dir:
+        task_dir = traj_dir / f"task_{example_index:03d}"
+        task_dir.mkdir(parents=True, exist_ok=True)
 
     start = time.perf_counter()
+    executed_turns = 0
 
-    for _ in range(max_turns):
+    for turn_index in range(max_turns):
+        executed_turns = turn_index + 1
+        if task_dir is not None:
+            request_data = {
+                "turn": turn_index,
+                "timestamp": datetime.now().isoformat(),
+                "model": model,
+                "messages": messages,
+                "tools_count": len(tools) if tools else 0,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            (task_dir / f"turn_{turn_index:03d}_request.json").write_text(
+                json.dumps(request_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
         try:
             timed = await _chat_with_fallback(
                 session=session,
@@ -648,6 +726,24 @@ async def run_single_example(
             assistant["role"] = "assistant"
         tool_calls = assistant.get("tool_calls") or []
 
+        if task_dir is not None:
+            response_data = {
+                "turn": turn_index,
+                "timestamp": datetime.now().isoformat(),
+                "raw_response": result,
+                "thinking_content": _extract_thinking_content(assistant),
+                "content": assistant.get("content", ""),
+                "tool_calls": tool_calls,
+                "usage": usage,
+                "cached_tokens": cached_tok,
+                "ttft_s": timed.ttft_seconds if timed.is_streaming else 0.0,
+                "decode_s": timed.decode_seconds if timed.is_streaming else 0.0,
+            }
+            (task_dir / f"turn_{turn_index:03d}_response.json").write_text(
+                json.dumps(response_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
         tpot = timed.decode_seconds / out_tok if out_tok > 0 else 0.0
         throughput = out_tok / timed.decode_seconds if timed.decode_seconds > 0 else 0.0
         request_detail = {
@@ -674,32 +770,102 @@ async def run_single_example(
         if not tool_calls:
             break
 
+        tool_calls_log: List[Dict[str, Any]] = []
+        tool_results_log: List[Dict[str, Any]] = []
         for tc in tool_calls:
             function = tc.get("function") or {}
             name = str(function.get("name", ""))
             raw_args = function.get("arguments", "{}")
             try:
-                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                parsed_args = (
+                    json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                )
             except json.JSONDecodeError:
-                args = {}
-            if isinstance(args, dict):
-                args = _clean_tool_args(name, args, tool_schemas)
+                parsed_args = {}
+            cleaned_args = parsed_args
+            if isinstance(parsed_args, dict):
+                cleaned_args = _clean_tool_args(name, parsed_args, tool_schemas)
+
+            tool_calls_log.append(
+                {
+                    "tool_call_id": tc.get("id", ""),
+                    "name": name,
+                    "arguments_raw": raw_args,
+                    "arguments_parsed": parsed_args,
+                    "arguments_cleaned": cleaned_args,
+                }
+            )
+
+            tool_start = time.perf_counter()
+            is_error = False
+            error_msg = None
             try:
-                tool_result = await mcp_call_tool(session, mcp_server_url, name, args)
+                tool_result = await mcp_call_tool(
+                    session,
+                    mcp_server_url,
+                    name,
+                    cleaned_args,
+                )
             except Exception as exc:
+                is_error = True
+                error_msg = str(exc)
                 errors.append(f"{name}: {exc}")
                 tool_result = [{"type": "text", "text": f"ERROR: {exc}"}]
+
+            tool_latency = time.perf_counter() - tool_start
+            flattened_result = flatten_tool_payload(tool_result)
+            tool_results_log.append(
+                {
+                    "tool_call_id": tc.get("id", ""),
+                    "name": name,
+                    "success": not is_error,
+                    "result": flattened_result,
+                    "error": error_msg,
+                    "latency_s": round(tool_latency, 4),
+                }
+            )
+
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
-                    "content": flatten_tool_payload(tool_result),
+                    "content": flattened_result,
                 }
+            )
+
+        if task_dir is not None:
+            (task_dir / f"turn_{turn_index:03d}_tool_calls.json").write_text(
+                json.dumps(tool_calls_log, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (task_dir / f"turn_{turn_index:03d}_tool_results.json").write_text(
+                json.dumps(tool_results_log, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
 
     elapsed = time.perf_counter() - start
     final_response = extract_final_assistant_text(messages)
     tool_call_count = count_tool_calls(messages)
+
+    if task_dir is not None:
+        summary = {
+            "task_id": task.task_id,
+            "task_name": task.task_name,
+            "model": model,
+            "total_turns": executed_turns,
+            "total_tool_calls": tool_call_count,
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "total_cached_tokens": total_cached_tokens,
+            "e2e_latency_s": elapsed,
+            "errors": errors,
+            "final_output": final_response,
+            "tools": tools,
+        }
+        (task_dir / "summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     return ExampleResult(
         example_index=example_index,
@@ -872,6 +1038,8 @@ async def run_experiment(
     out_dir = Path(config.output_root) / config.model_name
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"{config.dataset}_{timestamp}"
+    traj_dir = out_dir / f"trajectories_{suffix}"
+    traj_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = out_dir / f"metadata_{suffix}.json"
     metrics_path = out_dir / f"metrics_{suffix}.json"
     detailed_results_path = out_dir / f"detailed_results_{suffix}.jsonl"
@@ -947,6 +1115,7 @@ async def run_experiment(
                         example_index=i,
                         request_details_file=req_f,
                         use_streaming=config.use_streaming,
+                        traj_dir=traj_dir,
                     )
                     output_data = {
                         "index": i,
