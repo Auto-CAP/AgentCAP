@@ -6,6 +6,9 @@ class APICostConfig:
     model_id: str
     input_price_per_1m: float
     output_price_per_1m: float
+    cache_read_price_per_1m: float = (
+        0.0  # price for cached input tokens (typically 90% discount)
+    )
 
 
 @dataclass(frozen=True)
@@ -29,7 +32,7 @@ class LocalCostConfig:
     decode_tok_per_sec: float = 0.0
     gpu_count: int = 1
     gpu_life_years: float = 3.0
-    gpu_utilization: float = 0.80
+    gpu_utilization: float = 1.0
     pue: float = 1.3
     electricity_per_kwh: float = 0.1778
 
@@ -73,11 +76,16 @@ class HybridCostResult:
 
 
 def compute_api_cost(
-    config: APICostConfig, input_tokens: int, output_tokens: int
+    config: APICostConfig,
+    input_tokens: int,
+    output_tokens: int,
+    cached_tokens: int = 0,
 ) -> float:
-    input_cost = (input_tokens / 1_000_000) * config.input_price_per_1m
+    uncached_tokens = input_tokens - cached_tokens
+    input_cost = (uncached_tokens / 1_000_000) * config.input_price_per_1m
+    cache_cost = (cached_tokens / 1_000_000) * config.cache_read_price_per_1m
     output_cost = (output_tokens / 1_000_000) * config.output_price_per_1m
-    return input_cost + output_cost
+    return input_cost + cache_cost + output_cost
 
 
 def compute_local_cost(
