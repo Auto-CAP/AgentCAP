@@ -200,6 +200,22 @@ def _to_int(value: Any) -> int:
         return 0
 
 
+_GPT_OSS_STOP_TOKENS: Optional[List[int]] = None
+
+
+def _get_gpt_oss_extra() -> Dict[str, Any]:
+    global _GPT_OSS_STOP_TOKENS
+    if _GPT_OSS_STOP_TOKENS is None:
+        try:
+            from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
+            encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+            _GPT_OSS_STOP_TOKENS = encoding.stop_tokens_for_assistant_actions()
+        except ImportError:
+            _GPT_OSS_STOP_TOKENS = [200002, 200012]
+    return {"stop_token_ids": _GPT_OSS_STOP_TOKENS}
+
+
 def _extract_cached_tokens(usage: Dict[str, Any]) -> int:
     cached_tokens = 0
     ptd = usage.get("prompt_tokens_details") or {}
@@ -324,6 +340,7 @@ async def chat_completion(
 
     is_openai = "api.openai.com" in base_url
     is_openrouter = "openrouter.ai" in base_url
+    is_gpt_oss = "gpt-oss" in model.lower() or "harmony" in model.lower()
     provider_text = openrouter_provider.lower()
     needs_temp_1 = (
         "kimi" in model.lower()
@@ -345,6 +362,8 @@ async def chat_completion(
             "order": [openrouter_provider],
             "allow_fallbacks": False,
         }
+    if is_gpt_oss:
+        payload["extra_body"] = _get_gpt_oss_extra()
 
     async with session.post(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -383,6 +402,7 @@ async def chat_completion_streaming(
 
     is_openai = "api.openai.com" in base_url
     is_openrouter = "openrouter.ai" in base_url
+    is_gpt_oss = "gpt-oss" in model.lower() or "harmony" in model.lower()
     provider_text = openrouter_provider.lower()
     needs_temp_1 = (
         "kimi" in model.lower()
@@ -405,6 +425,8 @@ async def chat_completion_streaming(
             "order": [openrouter_provider],
             "allow_fallbacks": False,
         }
+    if is_gpt_oss:
+        payload["extra_body"] = _get_gpt_oss_extra()
 
     t_start = time.perf_counter()
     t_first_token: Optional[float] = None
