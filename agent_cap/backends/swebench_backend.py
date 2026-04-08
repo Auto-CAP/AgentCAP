@@ -19,10 +19,6 @@ class SWEBenchBackend(ToolBackend):
             from agent_cap.backends.modal_env import ModalWorkspace
 
             self._workspace = ModalWorkspace(task_config)
-        elif self.runtime == "local":
-            from agent_cap.backends.local_env import LocalWorkspace
-
-            self._workspace = LocalWorkspace(task_config)
         else:
             from agent_cap.backends.docker_env import DockerWorkspace
 
