@@ -262,6 +262,7 @@ async def chat_completion_streaming(
     collected_content = ""
     collected_reasoning_content = ""
     collected_tool_calls: Dict[int, Dict[str, Any]] = {}
+    last_tool_call_index: Optional[int] = None
     finish_reason = None
     usage: Dict[str, Any] = {}
 
@@ -322,22 +323,40 @@ async def chat_completion_streaming(
                         t_first_token = now
                     t_last_token = now
                     for tc_delta in tool_call_deltas:
-                        idx = int(tc_delta.get("index", 0))
+                        raw_idx = tc_delta.get("index")
+                        try:
+                            idx = int(raw_idx if raw_idx is not None else 0)
+                        except (TypeError, ValueError):
+                            idx = 0
+
+                        fn = tc_delta.get("function") or {}
+                        tc_id = tc_delta.get("id", "")
+                        fn_name = fn.get("name", "")
+                        fn_arguments = fn.get("arguments", "")
+
+                        is_continuation_fragment = (
+                            not tc_id
+                            and not fn_name
+                            and bool(fn_arguments)
+                            and last_tool_call_index is not None
+                            and idx not in collected_tool_calls
+                        )
+                        if is_continuation_fragment:
+                            idx = last_tool_call_index
+
                         if idx not in collected_tool_calls:
                             collected_tool_calls[idx] = {
-                                "id": tc_delta.get("id", ""),
+                                "id": tc_id,
                                 "type": "function",
                                 "function": {"name": "", "arguments": ""},
                             }
-                        if tc_delta.get("id"):
-                            collected_tool_calls[idx]["id"] = tc_delta["id"]
-                        fn = tc_delta.get("function") or {}
-                        if fn.get("name"):
-                            collected_tool_calls[idx]["function"]["name"] += fn["name"]
-                        if fn.get("arguments"):
-                            collected_tool_calls[idx]["function"]["arguments"] += fn[
-                                "arguments"
-                            ]
+                        if tc_id:
+                            collected_tool_calls[idx]["id"] = tc_id
+                        if fn_name:
+                            collected_tool_calls[idx]["function"]["name"] += fn_name
+                        if fn_arguments:
+                            collected_tool_calls[idx]["function"]["arguments"] += fn_arguments
+                        last_tool_call_index = idx
 
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
