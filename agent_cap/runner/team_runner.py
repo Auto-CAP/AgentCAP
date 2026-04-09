@@ -19,6 +19,7 @@ from agent_cap.runner.llm_client import (
     _to_int,
 )
 from agent_cap.runner.tool_backends import (
+    MedAgentBenchToolBackend,
     MCPToolBackend,
     SWEBenchToolBackend,
     ToolBackend,
@@ -925,10 +926,17 @@ class TeamRunner:
                     backend = SWEBenchToolBackend(runtime="docker")
                 elif backend_name in ("swebench-modal", "swe-bench-modal"):
                     backend = SWEBenchToolBackend(runtime="modal")
+                elif backend_name in ("medagentbench", "med-agent-bench"):
+                    backend = MedAgentBenchToolBackend(
+                        session=session,
+                        fhir_base_url=(
+                            self.config.mcp_server_url or "http://localhost:8080/fhir"
+                        ),
+                    )
                 else:
                     raise ValueError(
                         "Unknown backend: "
-                        f"{self.config.backend}. Supported: mcp, swebench-docker, swebench-modal"
+                        f"{self.config.backend}. Supported: mcp, swebench-docker, swebench-modal, medagentbench"
                     )
 
                 if backend_name == "mcp":

@@ -23,6 +23,7 @@ from agent_cap.runner.llm_client import (
     _SCHEMA_PATCHES,
 )
 from agent_cap.runner.tool_backends import (
+    MedAgentBenchToolBackend,
     MCPToolBackend,
     SWEBenchToolBackend,
     ToolBackend,
@@ -668,9 +669,17 @@ async def run_experiment(
                 backend = SWEBenchToolBackend(runtime="docker")
             elif backend_name in ("swebench-modal", "swe-bench-modal"):
                 backend = SWEBenchToolBackend(runtime="modal")
+            elif backend_name in ("medagentbench", "med-agent-bench"):
+                backend = MedAgentBenchToolBackend(
+                    session=session,
+                    fhir_base_url=(
+                        config.mcp_server_url or "http://localhost:8080/fhir"
+                    ),
+                )
             else:
                 raise ValueError(
-                    f"Unknown backend: {config.backend}. Supported: mcp, swebench-docker, swebench-modal"
+                    "Unknown backend: "
+                    f"{config.backend}. Supported: mcp, swebench-docker, swebench-modal, medagentbench"
                 )
 
             if backend_name == "mcp":
@@ -890,8 +899,54 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
             tasks = tasks[:limit]
         return tasks
 
+    if name in ("medagentbench", "med_agent_bench"):
+        data_path = (
+            Path(__file__).parent.parent.parent
+            / "third_party"
+            / "MedAgentBench"
+            / "data"
+            / "medagentbench"
+            / "test_data_v2.json"
+        )
+        if not data_path.exists():
+            raise FileNotFoundError(
+                f"MedAgentBench data not found at {data_path}. "
+                "Clone https://github.com/stanfordmlgroup/MedAgentBench into third_party/"
+            )
+        with data_path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        tasks = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            task_id = str(item.get("id", ""))
+            instruction = str(item.get("instruction", ""))
+            tasks.append(
+                UnifiedTask(
+                    task_id=task_id,
+                    task_name=f"medagentbench_{task_id}",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a medical AI assistant with access to a FHIR-compliant EHR system. Use the available tools to query patient records, create observations, and manage medication/procedure orders. When you have found the answer, provide it clearly.",
+                        },
+                        {"role": "user", "content": instruction},
+                    ],
+                    eval_config={
+                        "type": "medagentbench",
+                        "expected_answer": item.get("sol", []),
+                        "eval_mrn": item.get("eval_MRN", ""),
+                        "context": item.get("context", ""),
+                    },
+                )
+            )
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
     raise ValueError(
-        f"Unknown dataset: {dataset_name}. Supported: mcp-atlas, swe-bench-pro"
+        "Unknown dataset: "
+        f"{dataset_name}. Supported: mcp-atlas, swe-bench-pro, medagentbench"
     )
 
 
