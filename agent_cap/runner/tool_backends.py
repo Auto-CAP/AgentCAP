@@ -1,7 +1,10 @@
 import abc
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 import aiohttp
+
+if TYPE_CHECKING:
+    from agent_cap.runner.fhir_mock_server import FHIRMockServer
 
 
 class ToolBackend(abc.ABC):
@@ -129,7 +132,7 @@ class SWEBenchToolBackend(ToolBackend):
 
 
 class MedAgentBenchToolBackend(ToolBackend):
-    """Tool backend for MedAgentBench — FHIR API on a local Docker container."""
+    """Tool backend for MedAgentBench FHIR tools."""
 
     FHIR_TOOLS: List[Dict[str, Any]] = [
         {
@@ -617,17 +620,33 @@ class MedAgentBenchToolBackend(ToolBackend):
     def __init__(
         self,
         session: aiohttp.ClientSession,
-        fhir_base_url: str = "http://localhost:8080/fhir",
+        fhir_base_url: Optional[str] = None,
+        data_dir: Optional[str] = None,
     ):
         self._session = session
-        self._fhir_base = fhir_base_url.rstrip("/")
+        self._external_url = fhir_base_url.rstrip("/") if fhir_base_url else None
+        self._data_dir = data_dir
+        self._fhir_base = ""
+        self._mock_server: Optional["FHIRMockServer"] = None
 
     async def setup(self, task_config: Dict[str, Any]) -> bool:
         del task_config
+
+        if self._external_url:
+            self._fhir_base = self._external_url
+        else:
+            from agent_cap.runner.fhir_mock_server import FHIRMockServer
+
+            self._mock_server = FHIRMockServer(data_dir=self._data_dir)
+            self._fhir_base = await self._mock_server.start()
+
         try:
             async with self._session.get(f"{self._fhir_base}/metadata") as resp:
                 return resp.status == 200
         except Exception:
+            if self._mock_server is not None:
+                await self._mock_server.stop()
+                self._mock_server = None
             return False
 
     async def list_tools(self) -> List[Dict[str, Any]]:
@@ -666,7 +685,9 @@ class MedAgentBenchToolBackend(ToolBackend):
         raise RuntimeError(f"Unsupported HTTP method for {name}: {method}")
 
     async def teardown(self) -> None:
-        pass
+        if self._mock_server is not None:
+            await self._mock_server.stop()
+            self._mock_server = None
 
     def _resolve_endpoint(self, name: str) -> tuple[str, str]:
         """Map tool name to FHIR endpoint + HTTP method."""

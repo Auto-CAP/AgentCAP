@@ -670,11 +670,14 @@ async def run_experiment(
             elif backend_name in ("swebench-modal", "swe-bench-modal"):
                 backend = SWEBenchToolBackend(runtime="modal")
             elif backend_name in ("medagentbench", "med-agent-bench"):
+                fhir_url = (
+                    config.mcp_server_url
+                    if config.mcp_server_url and "fhir" in config.mcp_server_url
+                    else None
+                )
                 backend = MedAgentBenchToolBackend(
                     session=session,
-                    fhir_base_url=(
-                        config.mcp_server_url or "http://localhost:8080/fhir"
-                    ),
+                    fhir_base_url=fhir_url,
                 )
             else:
                 raise ValueError(
