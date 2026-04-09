@@ -835,17 +835,66 @@ async def run_experiment(
 def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
     name = dataset_name.lower().replace("-", "_").replace(" ", "_")
 
-    if name in ("mcp_atlas", "mcpatlas"):
+    if name in (
+        "mcp_atlas",
+        "mcpatlas",
+        "mcp_atlas_finance",
+        "mcp_atlas_general",
+    ):
         from datasets import load_dataset as hf_load
 
         ds = hf_load("ScaleAI/mcp-atlas", split="train")
+
+        subset_filter: Optional[str] = None
+        if "finance" in name:
+            subset_filter = "finance"
+        elif "general" in name:
+            subset_filter = "general"
+
+        domain_task_ids: Optional[set[str]] = None
+        if subset_filter:
+            classifications_path = (
+                Path(__file__).parent.parent.parent
+                / "results"
+                / "mcpatlas_domain_classifications.jsonl"
+            )
+            if not classifications_path.exists():
+                raise FileNotFoundError(
+                    f"Domain classifications not found at {classifications_path}. "
+                    "Run scripts/classify_mcpatlas_domains.py first."
+                )
+
+            finance_ids: set[str] = set()
+            all_ids: set[str] = set()
+            with classifications_path.open("r", encoding="utf-8") as cf:
+                for line in cf:
+                    text = line.strip()
+                    if not text:
+                        continue
+                    entry = json.loads(text)
+                    task_id = str(entry.get("task_id", ""))
+                    if not task_id:
+                        continue
+                    all_ids.add(task_id)
+                    if "finance" in (entry.get("domains") or []):
+                        finance_ids.add(task_id)
+
+            if subset_filter == "finance":
+                domain_task_ids = finance_ids
+            else:
+                # general = NOT in finance set
+                domain_task_ids = all_ids - finance_ids
+
         tasks: List[UnifiedTask] = []
         for ex in ds:
             if not isinstance(ex, dict):
                 continue
+            task_id = str(ex.get("TASK", ""))
+            if domain_task_ids is not None and task_id not in domain_task_ids:
+                continue
             tasks.append(
                 UnifiedTask(
-                    task_id=ex.get("TASK", ""),
+                    task_id=task_id,
                     task_name=ex.get("PROMPT", "")[:80],
                     messages=[
                         {
