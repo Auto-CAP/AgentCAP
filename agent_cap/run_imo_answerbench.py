@@ -14,10 +14,10 @@ from typing import Any, Dict, List, Optional
 
 from math_verify import parse, verify
 
-from agent_cap.benchmarks import load_benchmark
-from agent_cap.backends.math_python_backend import MathPythonBackend
-from agent_cap.core.agentic_loop import run_agentic_loop
-from agent_cap.server.streaming_client import StreamingChatClient
+from benchmarks import load_benchmark
+from backends.math_python_backend import MathPythonBackend
+from core.agentic_loop import run_agentic_loop
+from server.streaming_client import StreamingChatClient
 from openai_harmony import HarmonyEncodingName, load_harmony_encoding
 
 
