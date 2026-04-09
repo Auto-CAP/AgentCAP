@@ -92,7 +92,8 @@ class FHIRMockServer:
 
         resources = self._db.get(resource_type, [])
         params = dict(request.query)
-        filtered = self._filter_resources(resources, params, resource_type)
+        date_values = request.query.getall("date", [])
+        filtered = self._filter_resources(resources, params, resource_type, date_values)
 
         bundle = {
             "resourceType": "Bundle",
@@ -136,6 +137,7 @@ class FHIRMockServer:
         resources: List[Dict[str, Any]],
         params: Dict[str, str],
         resource_type: str,
+        date_values: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Filter resources by common FHIR search parameters used in MedAgentBench."""
         results = resources
@@ -222,9 +224,14 @@ class FHIRMockServer:
                     or identifier in json.dumps(r.get("identifier", []))
                 ]
 
-        date_param = params.get("date")
-        if date_param:
-            clauses = [c.strip() for c in date_param.split(",") if c.strip()]
+        all_date_clauses = date_values if date_values else []
+        single = params.get("date")
+        if single and not all_date_clauses:
+            all_date_clauses = [single]
+        if all_date_clauses:
+            clauses = []
+            for dv in all_date_clauses:
+                clauses.extend([c.strip() for c in dv.split(",") if c.strip()])
             for clause in clauses:
                 op = "eq"
                 target = clause
@@ -270,7 +277,13 @@ class FHIRMockServer:
 
         sort = params.get("_sort")
         if sort == "-date":
-            results = sorted(results, key=self._extract_date_value, reverse=True)
+            results = sorted(
+                results,
+                key=lambda r: (self._extract_date_value(r), str(r.get("id", ""))),
+                reverse=True,
+            )
+        elif not sort:
+            results = sorted(results, key=lambda r: str(r.get("id", "")))
 
         count = params.get("_count")
         try:
