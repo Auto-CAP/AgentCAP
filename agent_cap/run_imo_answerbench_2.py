@@ -26,18 +26,16 @@ from agent_cap.runner.unified_runner import UnifiedTask, run_single_example
 from openai_harmony import HarmonyEncodingName, load_harmony_encoding
 
 
-SYSTEM_PROMPT = """
-You are an expert mathematical problem solver with access to a Python execution tool.
+SYSTEM_PROMPT = (
+"""You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
 
-Your goal is to solve the problem rigorously and correctly.
+# Output Format:
+### Summary
+  - Clearly state the final answer with a short summary. The final answer must be a non-negative integer between 0 and 99999. Place your final numerical answer inside \boxed{}, e.g., \boxed{42}.
+  - You must always provide a summary of the solution, in addition to the final answer.
 
-Rules:
-- Justify important steps.
-- Use the python tool for calculations, symbolic checks, sanity checks, and small experiments when useful.
-- Keep Python usage focused and relevant.
-- If you use the python tool, incorporate its output into your reasoning.
-- Put your final answer in \\boxed{...}.
-""".strip()
+"""
+    )
 
 
 @dataclass
@@ -61,7 +59,7 @@ class AsyncMathPythonBackend(ToolBackend):
     def __init__(
         self,
         startup_timeout: float = 30.0,
-        exec_timeout: float = 30.0,
+        exec_timeout: float = 5.0,
         preload: str = "minimal",
         auto_print_last_expr: bool = True,
     ):

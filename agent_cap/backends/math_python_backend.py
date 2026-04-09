@@ -270,7 +270,8 @@ class MathPythonBackend(ToolBackend):
     ) -> ToolResult:
         started = time.perf_counter()
 
-        if tool_name != "python":
+        # if tool_name != "python":
+        if "python" not in tool_name:
             latency_ms = (time.perf_counter() - started) * 1000.0
             return ToolResult(
                 tool_name=tool_name,
