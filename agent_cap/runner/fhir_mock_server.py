@@ -98,7 +98,7 @@ class FHIRMockServer:
             "resourceType": "Bundle",
             "type": "searchset",
             "total": len(filtered),
-            "entry": [{"resource": r} for r in filtered[:500]],
+            "entry": [{"resource": r} for r in filtered],
         }
         return web.json_response(bundle)
 
@@ -139,6 +139,10 @@ class FHIRMockServer:
     ) -> List[Dict[str, Any]]:
         """Filter resources by common FHIR search parameters used in MedAgentBench."""
         results = resources
+
+        _id = params.get("_id")
+        if _id:
+            results = [r for r in results if str(r.get("id", "")) == _id]
 
         patient_id = params.get("patient") or params.get("subject")
         if patient_id:
@@ -269,13 +273,12 @@ class FHIRMockServer:
             results = sorted(results, key=self._extract_date_value, reverse=True)
 
         count = params.get("_count")
-        if count:
-            try:
-                count_value = int(count)
-                if count_value >= 0:
-                    results = results[:count_value]
-            except ValueError:
-                pass
+        try:
+            page_size = int(count) if count else 20
+        except ValueError:
+            page_size = 20
+        if page_size >= 0:
+            results = results[:page_size]
 
         return results
 
