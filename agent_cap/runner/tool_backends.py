@@ -48,7 +48,7 @@ class MCPToolBackend(ToolBackend):
                 raise RuntimeError(f"list-tools failed ({resp.status}): {body}")
             payload = await resp.json()
 
-        from agent_cap.runner.unified_runner import _fix_tool_schema
+        from agent_cap.runner.llm_client import _fix_tool_schema
 
         enabled = set(self._enabled_tools)
         for tool in payload:

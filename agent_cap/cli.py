@@ -42,8 +42,12 @@ class ComboModelConfig:
 class ComboConfig:
     name: str
     description: str = ""
-    small_model: ComboModelConfig | None = None
-    large_model: ComboModelConfig | None = None
+    small_model: ComboModelConfig = field(
+        default_factory=lambda: ComboModelConfig(id="")
+    )
+    large_model: ComboModelConfig = field(
+        default_factory=lambda: ComboModelConfig(id="")
+    )
     strategies: List[str] = field(default_factory=list)
     serving_engine: str = "sglang"
     max_tokens: int = 8192
@@ -892,74 +896,6 @@ def cmd_mcp_atlas(args):
     print(f"Results: {out_dir}/results.jsonl")
 
 
-def cmd_single_agent(args):
-    """Run single-agent performance benchmark."""
-    import json as _json
-
-    from agent_cap.single_agent.config import SingleAgentBenchConfig
-    from agent_cap.single_agent.runner import SingleAgentRunner
-
-    config = SingleAgentBenchConfig.from_yaml(args.config)
-
-    if args.max_turns is not None:
-        config.max_turns = args.max_turns
-    if args.max_tokens is not None:
-        config.max_tokens = args.max_tokens
-    if args.batch_sizes is not None:
-        config.batch_sizes = [int(x) for x in args.batch_sizes.split(",")]
-    if args.runtime is not None:
-        config.runtime = args.runtime
-    if args.dataset is not None:
-        config.dataset = args.dataset
-    if args.repo_filter is not None:
-        config.repo_filter = args.repo_filter
-    if args.base_url is not None:
-        config.base_url = args.base_url
-    if args.temperature is not None:
-        config.temperature = args.temperature
-
-    print("=" * 70)
-    print("Single-Agent Benchmark")
-    print("=" * 70)
-    print(f"  Name:        {config.name}")
-    print(f"  Model:       {config.model_id}")
-    print(f"  Engine:      {config.serving_engine}")
-    print(f"  Server:      {config.base_url}")
-    print(f"  Dataset:     {config.dataset} (n={config.dataset_count})")
-    print(f"  Batch sizes: {config.batch_sizes}")
-    print(f"  Tool calls:  {'yes' if config.enable_tool_calls else 'no'}")
-    print("=" * 70)
-
-    if args.dry_run:
-        print("\n--- Dry run: full config ---")
-        print(_json.dumps(config.to_dict(), indent=2))
-        return
-
-    runner = SingleAgentRunner(config)
-    limit = getattr(args, "limit", 0) or 0
-    results, task_results = runner.run(limit=limit)
-
-    print("\n" + "=" * 70)
-    print("Results Summary")
-    print("=" * 70)
-    for m in results:
-        print(
-            f"  batch={m.batch_size:<3d}  mode={m.tool_mode:<12s}  "
-            f"E2E_avg={m.e2e_latency_avg_ms:>8.1f}ms  "
-            f"E2E_p99={m.e2e_latency_p99_ms:>8.1f}ms  "
-            f"RPS={m.requests_per_second:>6.2f}  "
-            f"TTFT_avg={m.ttft_avg_ms:>7.1f}ms  "
-            f"TTFT_p99={m.ttft_p99_ms:>7.1f}ms  "
-            f"TPOT_avg={m.tpot_avg_ms:>7.1f}ms  "
-            f"TPOT_p99={m.tpot_p99_ms:>7.1f}ms  "
-            f"GPU={m.avg_gpu_util_pct:>5.1f}%  "
-            f"CPU={m.avg_cpu_util_pct:>5.1f}%"
-        )
-
-    out_dir = runner.save_results(results, task_results, args.output_dir)
-    print(f"\nResults saved to: {out_dir}")
-
-
 def main():
     parser = argparse.ArgumentParser(
         prog="agent-cap",
@@ -1016,35 +952,6 @@ def main():
     )
     p_reeval.add_argument("-v", "--verbose", action="store_true")
 
-    p_single = sub.add_parser(
-        "single-agent",
-        help="Run single-agent performance benchmark (batch-size sweep)",
-    )
-    p_single.add_argument("config", help="Path to single-agent YAML config")
-    p_single.add_argument(
-        "--output-dir", default=None, help="Override output directory"
-    )
-    p_single.add_argument(
-        "--dry-run", action="store_true", help="Print config without running"
-    )
-    p_single.add_argument("-v", "--verbose", action="store_true")
-    p_single.add_argument(
-        "--limit",
-        type=int,
-        default=0,
-        help="Only run first N tasks (0 = all)",
-    )
-    p_single.add_argument("--max-turns", type=int, default=None)
-    p_single.add_argument("--max-tokens", type=int, default=None)
-    p_single.add_argument("--batch-sizes", type=str, default=None, help="e.g. '1,2,4'")
-    p_single.add_argument(
-        "--runtime", type=str, default=None, choices=["docker", "modal"]
-    )
-    p_single.add_argument("--dataset", type=str, default=None)
-    p_single.add_argument("--repo-filter", type=str, default=None)
-    p_single.add_argument("--base-url", type=str, default=None)
-    p_single.add_argument("--temperature", type=float, default=None)
-
     p_atlas = sub.add_parser(
         "mcp-atlas", help="Run MCP-ATLAS benchmark (tool-calling factual QA)"
     )
@@ -1073,10 +980,6 @@ def main():
         if hasattr(args, "verbose") and args.verbose:
             logging.basicConfig(level=logging.DEBUG)
         cmd_reeval(args)
-    elif args.command == "single-agent":
-        if hasattr(args, "verbose") and args.verbose:
-            logging.basicConfig(level=logging.DEBUG)
-        cmd_single_agent(args)
     elif args.command == "mcp-atlas":
         if hasattr(args, "verbose") and args.verbose:
             logging.basicConfig(level=logging.DEBUG)
