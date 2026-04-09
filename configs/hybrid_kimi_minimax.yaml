@@ -1,0 +1,21 @@
+name: kimi-minimax
+description: "Kimi K2.5 plans, MiniMax M2.5 executes"
+experiment_type: plan-execute
+planner:
+  id: kimi-k2.5
+  base_url: https://api.moonshot.cn
+  api_key: ${MOONSHOT_API_KEY}
+  is_local: false
+  input_price_per_1m: 0.60
+  output_price_per_1m: 3.00
+executor:
+  id: MiniMax-M2.5
+  base_url: https://api.minimaxi.com
+  api_key: ${ANTHROPIC_API_KEY}
+  is_local: false
+  input_price_per_1m: 0.30
+  output_price_per_1m: 1.20
+mcp_server_url: http://localhost:1984
+max_turns: 20
+max_tokens: 8192
+plan_max_tokens: 4096
