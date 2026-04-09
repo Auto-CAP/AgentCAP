@@ -189,7 +189,7 @@ async def chat_completion(
             "order": [openrouter_provider],
             "allow_fallbacks": False,
         }
-    if is_gpt_oss:
+    if is_gpt_oss and not tools:
         payload.update(_get_gpt_oss_extra())
 
     async with session.post(
@@ -252,7 +252,7 @@ async def chat_completion_streaming(
             "order": [openrouter_provider],
             "allow_fallbacks": False,
         }
-    if is_gpt_oss:
+    if is_gpt_oss and not tools:
         payload.update(_get_gpt_oss_extra())
 
     t_start = time.perf_counter()
