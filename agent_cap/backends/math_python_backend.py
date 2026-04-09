@@ -286,6 +286,7 @@ class MathPythonBackend(ToolBackend):
             code = arguments.get("raw", "")
         if not isinstance(code, str) or not code.strip():
             latency_ms = (time.perf_counter() - started) * 1000.0
+            print(arguments)
             return ToolResult(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
