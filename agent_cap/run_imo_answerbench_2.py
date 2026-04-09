@@ -178,6 +178,8 @@ class VLLMInfraGPTOSS:
             str(self.cfg.context_tokens),
             "--stream-interval",
             str(self.cfg.stream_interval),
+            "--tool-call-parser",
+            "openai",
             "--async-scheduling",
             "--disable-log-stats",
             "--enable-prefix-caching",
