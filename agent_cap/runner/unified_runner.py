@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -42,6 +43,7 @@ class UnifiedTask:
     task_name: str
     messages: List[Dict[str, Any]]
     eval_config: Optional[Dict[str, Any]] = None
+    enabled_tools: Optional[List[str]] = None
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "UnifiedTask":
@@ -210,6 +212,7 @@ async def run_single_example(
     request_details_file: IO[str],
     use_streaming: bool = True,
     traj_dir: Optional[Path] = None,
+    parallel_tool_calls: bool = True,
 ) -> ExampleResult:
     messages = [dict(m) for m in task.messages]
     tool_schemas: Dict[str, Dict[str, Any]] = {}
@@ -263,6 +266,7 @@ async def run_single_example(
                 openrouter_provider=openrouter_provider,
                 use_streaming=use_streaming,
                 errors=errors,
+                parallel_tool_calls=parallel_tool_calls,
             )
         except Exception as exc:
             errors.append(f"llm_request_failed: {exc}")
@@ -342,6 +346,8 @@ async def run_single_example(
         for tc in tool_calls:
             function = tc.get("function") or {}
             name = str(function.get("name", ""))
+            if not name:
+                continue
             raw_args = function.get("arguments", "{}")
             try:
                 parsed_args = (
@@ -373,13 +379,18 @@ async def run_single_example(
             tool_start = time.perf_counter()
             is_error = False
             error_msg = None
-            try:
-                tool_result = await backend.call_tool(name, cleaned_args)
-            except Exception as exc:
-                is_error = True
-                error_msg = str(exc)
-                errors.append(f"{name}: {exc}")
-                tool_result = [{"type": "text", "text": f"ERROR: {exc}"}]
+            for _retry in range(3):
+                try:
+                    tool_result = await backend.call_tool(name, cleaned_args)
+                    break
+                except Exception as exc:
+                    if _retry < 2 and ("Cannot connect" in str(exc) or "500" in str(exc)):
+                        await asyncio.sleep(2 ** _retry)
+                        continue
+                    is_error = True
+                    error_msg = str(exc)
+                    errors.append(f"{name}: {exc}")
+                    tool_result = [{"type": "text", "text": f"ERROR: {exc}"}]
 
             tool_latency = time.perf_counter() - tool_start
             flattened_result = flatten_tool_payload(tool_result)
@@ -676,6 +687,8 @@ async def run_experiment(
                 backend = SWEBenchToolBackend(runtime="docker")
             elif backend_name in ("swebench-modal", "swe-bench-modal"):
                 backend = SWEBenchToolBackend(runtime="modal")
+            elif backend_name in ("swebench-k8s", "swe-bench-k8s"):
+                backend = SWEBenchToolBackend(runtime="k8s")
             else:
                 raise ValueError(
                     f"Unknown backend: {config.backend}. Supported: mcp, swebench-docker, swebench-modal"
@@ -685,9 +698,9 @@ async def run_experiment(
                 setup_ok = await backend.setup({})
                 if not setup_ok:
                     raise RuntimeError("MCP backend setup failed")
-                tools = await backend.list_tools()
+                all_tools = await backend.list_tools()
             else:
-                tools = []
+                all_tools = []
 
             with (
                 detailed_results_path.open("w", encoding="utf-8") as req_f,
@@ -744,6 +757,16 @@ async def run_experiment(
                             continue
                         tools = await backend.list_tools()
 
+                    # Per-task tool filtering (MCP-ATLAS exposes 10-25 tools per task)
+                    if task.enabled_tools and all_tools:
+                        allowed = set(
+                            t if isinstance(t, str) else t.get("name", "")
+                            for t in task.enabled_tools
+                        )
+                        tools = [t for t in all_tools if t.get("function", {}).get("name", "") in allowed]
+                    else:
+                        tools = all_tools
+
                     openrouter_provider = (
                         config.openrouter_provider or config.openrouter_provider_pin
                     )
@@ -764,19 +787,38 @@ async def run_experiment(
                             request_details_file=req_f,
                             use_streaming=config.use_streaming,
                             traj_dir=traj_dir,
+                            parallel_tool_calls=True,
                         )
                     finally:
                         if backend_name != "mcp":
                             try:
+                                print(f"[task {i}] getting patch...", flush=True)
                                 patch = await backend.get_patch()
+                                task_dir = traj_dir / f"task_{i:03d}"
+                                task_dir.mkdir(parents=True, exist_ok=True)
                                 if patch:
-                                    task_dir = traj_dir / f"task_{i:03d}"
-                                    task_dir.mkdir(parents=True, exist_ok=True)
                                     (task_dir / "patch.diff").write_text(
                                         patch, encoding="utf-8"
                                     )
-                            except Exception:
-                                pass
+                                    print(f"[task {i}] patch saved ({len(patch)} chars)", flush=True)
+                                else:
+                                    print(f"[task {i}] no patch generated", flush=True)
+                                # Run tests and save results
+                                print(f"[task {i}] running tests...", flush=True)
+                                test_result = backend.run_tests(timeout=300)
+                                print(f"[task {i}] test_result: {test_result}", flush=True)
+                                (task_dir / "test_result.json").write_text(
+                                    json.dumps(test_result, ensure_ascii=False, indent=2),
+                                    encoding="utf-8",
+                                )
+                                print(
+                                    f"[task {i}] TEST: "
+                                    f"{'PASS' if test_result.get('passed') else 'FAIL'}",
+                                    flush=True,
+                                )
+                            except Exception as exc:
+                                print(f"[task {i}] post-loop error: {type(exc).__name__}: {exc}", flush=True)
+                                import traceback; traceback.print_exc()
                             await backend.teardown()
 
                     output_data = {
@@ -835,10 +877,35 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
         from datasets import load_dataset as hf_load
 
         ds = hf_load("ScaleAI/mcp-atlas", split="train")
+
+        # Servers available without paid API keys
+        _FREE_SERVERS = {
+            "arxiv", "brave-search", "calculator", "cli-mcp-server",
+            "clinicaltrialsgov-mcp-server", "context7", "ddg-search",
+            "desktop-commander", "fetch", "filesystem", "git", "github",
+            "mcp-code-executor", "mcp-server-code-runner", "memory",
+            "met-museum", "open-library", "osm-mcp-server", "pubmed",
+            "weather", "whois", "wikipedia",
+        }
+
+        def _get_server(tool_name: str) -> str:
+            for s in sorted(_FREE_SERVERS, key=len, reverse=True):
+                if tool_name.startswith(s):
+                    return s
+            return tool_name.split("_")[0]
+
         tasks: List[UnifiedTask] = []
         for ex in ds:
             if not isinstance(ex, dict):
                 continue
+            # Filter: only keep tasks whose tools are all free
+            raw_tools = ex.get("ENABLED_TOOLS", "[]")
+            enabled = json.loads(raw_tools) if isinstance(raw_tools, str) else raw_tools
+            tool_names = [t if isinstance(t, str) else t.get("name", "") for t in enabled]
+            servers = {_get_server(t) for t in tool_names if t}
+            if not servers.issubset(_FREE_SERVERS):
+                continue
+
             tasks.append(
                 UnifiedTask(
                     task_id=ex.get("TASK", ""),
@@ -850,6 +917,7 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         },
                         {"role": "user", "content": ex.get("PROMPT", "")},
                     ],
+                    enabled_tools=tool_names,
                 )
             )
         if limit > 0:
