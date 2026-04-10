@@ -26,17 +26,17 @@ AgentCAP fills this gap. We evaluate 64 planner-executor combinations (8 models 
 
 ## 2. Research Questions
 
-**RQ1: To what extent can a cheap executor, guided by a frontier planner, close the gap with a frontier model running end-to-end?**
-We quantify the plan leverage ratio — the accuracy gain a weak executor obtains from a strong plan — across model sizes, deployment types, and domains. This directly measures whether delegation is a viable cost reduction strategy or merely an accuracy sacrifice.
+**RQ1: How much accuracy does a frontier plan recover for a cheap executor?**
+Existing benchmarks evaluate single models in isolation. They cannot tell you whether a $0.02 executor guided by a $0.10 plan reaches 80% or 20% of a $1.00 frontier model's accuracy. We measure this directly.
 
-**RQ2: How does the plan-critical vs. execute-critical nature of a task reshape the optimal team composition?**
-We introduce an empirical task taxonomy based on model-swap sensitivity (Section 4.3) and analyze whether these two task categories demand fundamentally different resource allocation between planner and executor. The hypothesis: plan-critical tasks tolerate cheap executors but demand expensive planners, while execute-critical tasks show the reverse — and the boundary between them shifts across domains.
+**RQ2: Which role matters more — the planner or the executor?**
+No benchmark separates planning capability from execution capability. We introduce a model-swap sensitivity method that empirically classifies each task as plan-critical or execute-critical, revealing where to allocate budget.
 
-**RQ3: Where on the cost-accuracy Pareto frontier do hybrid teams (API planner + self-hosted executor) sit relative to pure-API and pure-local alternatives?**
-We map the full Pareto surface across 64 model combinations and three deployment regimes. The practical question: at what quality threshold and operational scale does each regime dominate, and what is the break-even point for self-hosting the executor?
+**RQ3: What is the cost-accuracy Pareto frontier for model teams?**
+Single-model benchmarks produce a single point per model. We map the full 64-combination Pareto surface across API, self-hosted, and hybrid deployments, showing which teams dominate and at what price.
 
-**RQ4: How does domain structure (coding, medical, finance, open-domain, math) modulate the delegation benefit and the shape of the Pareto frontier?**
-We run identical experiments across five domain-stratified benchmarks to isolate domain-specific effects. The hypothesis: domains that require deep sequential reasoning (medicine, math) are plan-critical and see large delegation gains, while domains that require precise multi-step tool use (coding) are execute-critical and see diminishing returns from stronger planners.
+**RQ4: How does domain shift the optimal team?**
+Current benchmarks are single-domain. We evaluate identical model teams across coding, medicine, finance, open-domain, and math to determine whether one team fits all or whether domain demands fundamentally different compositions.
 
 ---
 
