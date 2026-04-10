@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import Any, Dict, List, Optional
+from google import genai
 
 import aiohttp
 from math_verify import parse, verify
@@ -84,6 +85,126 @@ class AsyncMathPythonBackend(ToolBackend):
 
     async def teardown(self) -> None:
         await asyncio.to_thread(self._backend.teardown)
+
+
+class GeminiEquivalenceJudge:
+    def __init__(self, model_name: str = "gemini-2.5-flash"):
+        self.model_name = model_name
+        self.client = genai.Client()
+
+    def _extract_json_bool(self, text: str) -> Optional[bool]:
+        text = text.strip()
+
+        # Try direct JSON first
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict) and "equivalent" in data:
+                return bool(data["equivalent"])
+        except Exception:
+            pass
+
+        # Try to find a JSON object inside the text
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                if isinstance(data, dict) and "equivalent" in data:
+                    return bool(data["equivalent"])
+            except Exception:
+                pass
+
+        # Fallback: simple heuristic
+        lowered = text.lower()
+        if '"equivalent": true' in lowered or lowered.startswith("yes"):
+            return True
+        if '"equivalent": false' in lowered or lowered.startswith("no"):
+            return False
+
+        return None
+
+    def judge_equivalence(self, predicted: Optional[str], expected: Optional[str]) -> Dict[str, Any]:
+        if predicted is None or expected is None:
+            return {
+                "equivalent": False,
+                "raw_response": "Missing predicted or expected value.",
+            }
+
+        prompt = f"""You are a strict mathematical answer equivalence judge.
+
+Determine whether the following two final answers are mathematically equivalent.
+
+Rules:
+- Focus only on whether the predicted answer and expected answer represent the same mathematical value.
+- Ignore formatting differences like whitespace, commas, LaTeX wrappers, or extra prose.
+- If they represent the same integer or the same mathematical expression/value, return equivalent=true.
+- If they do not represent the same value, return equivalent=false.
+- Return ONLY valid JSON with this exact schema:
+{{"equivalent": true_or_false, "reason": "short reason"}}
+
+Predicted answer:
+{predicted}
+
+Expected answer:
+{expected}
+"""
+
+        resp = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+        )
+
+        text = getattr(resp, "text", None) or getattr(resp, "output_text", None) or str(resp)
+        equivalent = self._extract_json_bool(text)
+
+        return {
+            "equivalent": bool(equivalent) if equivalent is not None else False,
+            "raw_response": text,
+        }
+
+    async def judge_equivalence_async(
+        self, predicted: Optional[str], expected: Optional[str]
+    ) -> Dict[str, Any]:
+        return await asyncio.to_thread(self.judge_equivalence, predicted, expected)
+    
+
+async def apply_gemini_judgment(
+    result: Dict[str, Any],
+    judge: GeminiEquivalenceJudge,
+    max_retries: int = 5,
+) -> Dict[str, Any]:
+    predicted = result.get("predicted")
+    expected = result.get("expected")
+
+    # Preserve original rule-based scoring
+    result["rule_score"] = result["score"]
+    result["rule_correct"] = result["correct"]
+
+    last_raw_response = None
+    gemini_equivalent = False
+    gemini_attempts = 0
+
+    for attempt in range(1, max_retries + 1):
+        gemini_attempts = attempt
+        try:
+            gemini_eval = await judge.judge_equivalence_async(predicted, expected)
+            last_raw_response = gemini_eval.get("raw_response")
+            gemini_equivalent = bool(gemini_eval.get("equivalent", False))
+
+            if gemini_equivalent:
+                break
+        except Exception as exc:
+            last_raw_response = f"Gemini judge attempt {attempt} failed: {exc}"
+
+    result["gemini_equivalent"] = gemini_equivalent
+    result["gemini_judge_response"] = last_raw_response
+    result["gemini_attempts"] = gemini_attempts
+
+    # After up to max_retries attempts, mark wrong if Gemini never said equivalent
+    result["score"] = 1.0 if gemini_equivalent else 0.0
+    result["correct"] = gemini_equivalent
+
+    return result
+    
 
 
 class VLLMInfraGPTOSS:
@@ -459,6 +580,9 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
 async def async_main(args: argparse.Namespace) -> List[Dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=600)
     connector = aiohttp.TCPConnector(limit=1)
+
+    gemini_judge = GeminiEquivalenceJudge(model_name=args.gemini_model)
+
     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         tasks = load_benchmark("imo_answerbench", num_tasks=args.num_tasks, seed=args.seed)
         print(f"Loaded {len(tasks)} IMO AnswerBench tasks")
@@ -478,6 +602,9 @@ async def async_main(args: argparse.Namespace) -> List[Dict[str, Any]]:
                 preload=args.preload,
                 auto_print_last_expr=args.auto_print_last_expr,
             )
+
+            result = await apply_gemini_judgment(result, gemini_judge, max_retries=5) # 5 max retries, unless move off free API key
+
             results.append(result)
             print_task_result(index, len(tasks), result)
         return results
@@ -514,6 +641,7 @@ def main() -> None:
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--server-timeout", type=int, default=3600)
     parser.add_argument("--preload-workers", type=int, default=8)
+    parser.add_argument("--gemini-model", type=str, default="gemini-3.1-flash-lite-preview")
 
     args = parser.parse_args()
     t0 = time.time()
