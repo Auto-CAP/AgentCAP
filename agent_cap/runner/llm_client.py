@@ -160,6 +160,7 @@ async def chat_completion(
     max_tokens: int,
     temperature: float = 0.0,
     openrouter_provider: str = "",
+    parallel_tool_calls: bool = True,
 ) -> Dict[str, Any]:
     headers = {}
     if api_key and api_key != "dummy":
@@ -184,6 +185,8 @@ async def chat_completion(
     }
     if tools:
         payload["tools"] = tools
+        if not parallel_tool_calls:
+            payload["parallel_tool_calls"] = False
     if is_openrouter and openrouter_provider:
         payload["provider"] = {
             "order": [openrouter_provider],
@@ -222,6 +225,7 @@ async def chat_completion_streaming(
     max_tokens: int,
     temperature: float = 0.0,
     openrouter_provider: str = "",
+    parallel_tool_calls: bool = True,
 ) -> ChatCompletionTimedResult:
     headers = {}
     if api_key and api_key != "dummy":
@@ -247,6 +251,8 @@ async def chat_completion_streaming(
     }
     if tools:
         payload["tools"] = tools
+        if not parallel_tool_calls:
+            payload["parallel_tool_calls"] = False
     if is_openrouter and openrouter_provider:
         payload["provider"] = {
             "order": [openrouter_provider],
@@ -433,6 +439,7 @@ async def _chat_with_fallback(
     openrouter_provider: str,
     use_streaming: bool,
     errors: List[str],
+    parallel_tool_calls: bool = True,
 ) -> ChatCompletionTimedResult:
     if use_streaming:
         try:
@@ -446,6 +453,7 @@ async def _chat_with_fallback(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 openrouter_provider=openrouter_provider,
+                parallel_tool_calls=parallel_tool_calls,
             )
         except Exception as exc:
             errors.append(f"streaming fallback: {exc}")
@@ -461,6 +469,7 @@ async def _chat_with_fallback(
         max_tokens=max_tokens,
         temperature=temperature,
         openrouter_provider=openrouter_provider,
+        parallel_tool_calls=parallel_tool_calls,
     )
     elapsed = time.perf_counter() - t0
     usage = response_json.get("usage") or {}
