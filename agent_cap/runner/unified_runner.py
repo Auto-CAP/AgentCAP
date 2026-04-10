@@ -291,6 +291,7 @@ async def run_single_example(
         if "role" not in assistant:
             assistant["role"] = "assistant"
         tool_calls = assistant.get("tool_calls") or []
+        # print(f'[TOOL CALLS (unified_runner.py line 294)]: {tool_calls}')
 
         if task_dir is not None:
             response_data = {
@@ -347,7 +348,10 @@ async def run_single_example(
                     json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 )
             except json.JSONDecodeError:
-                parsed_args = {}
+                if isinstance(raw_args, str) and raw_args.strip():
+                    parsed_args = {"raw": raw_args}
+                else:
+                    parsed_args = {}
             cleaned_args = parsed_args
             if isinstance(parsed_args, dict):
                 cleaned_args = _clean_tool_args(name, parsed_args, tool_schemas)
@@ -361,6 +365,10 @@ async def run_single_example(
                     "arguments_cleaned": cleaned_args,
                 }
             )
+
+            if name == "python" and isinstance(raw_args, str) and not raw_args.strip():
+                errors.append("python: skipped empty tool call")
+                continue
 
             tool_start = time.perf_counter()
             is_error = False
