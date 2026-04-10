@@ -26,17 +26,17 @@ AgentCAP fills this gap. We evaluate 64 planner-executor combinations (8 models 
 
 ## 2. Research Questions
 
-**RQ1: When does delegation beat single-model?**
-Under what conditions does a planner-plus-executor team Pareto-dominate the best single model at the same cost? We hypothesize that delegation is beneficial when the task has separable planning and execution phases and when execution does not require the same level of reasoning as planning.
+**RQ1: To what extent can a cheap executor, guided by a frontier planner, close the gap with a frontier model running end-to-end?**
+We quantify the plan leverage ratio — the accuracy gain a weak executor obtains from a strong plan — across model sizes, deployment types, and domains. This directly measures whether delegation is a viable cost reduction strategy or merely an accuracy sacrifice.
 
-**RQ2: Is the optimal team task-dependent?**
-Do plan-critical and execute-critical tasks demand different team configurations? We introduce an empirical task taxonomy (Section 4.3) based on model-swap sensitivity analysis and hypothesize that plan-critical tasks benefit from expensive planners paired with cheap executors, while execute-critical tasks show the opposite pattern.
+**RQ2: How does the plan-critical vs. execute-critical nature of a task reshape the optimal team composition?**
+We introduce an empirical task taxonomy based on model-swap sensitivity (Section 4.3) and analyze whether these two task categories demand fundamentally different resource allocation between planner and executor. The hypothesis: plan-critical tasks tolerate cheap executors but demand expensive planners, while execute-critical tasks show the reverse — and the boundary between them shifts across domains.
 
-**RQ3: Does hybrid deployment dominate pure deployments?**
-Can cross-deployment teams (API planner plus self-hosted executor) outperform both pure-API and pure-local teams on the cost-accuracy Pareto frontier? This is the most practically actionable question: if hybrid dominates, practitioners should deploy this way.
+**RQ3: Where on the cost-accuracy Pareto frontier do hybrid teams (API planner + self-hosted executor) sit relative to pure-API and pure-local alternatives?**
+We map the full Pareto surface across 64 model combinations and three deployment regimes. The practical question: at what quality threshold and operational scale does each regime dominate, and what is the break-even point for self-hosting the executor?
 
-**RQ4: Does the optimal team generalize across domains?**
-Is the best planner-executor pair for coding also the best for medical and finance tasks? Our five domain-stratified datasets enable domain-specific analysis. We hypothesize that coding tasks are more execute-critical (requiring precise tool use) while medical tasks are more plan-critical (requiring diagnostic reasoning chains).
+**RQ4: How does domain structure (coding, medical, finance, open-domain, math) modulate the delegation benefit and the shape of the Pareto frontier?**
+We run identical experiments across five domain-stratified benchmarks to isolate domain-specific effects. The hypothesis: domains that require deep sequential reasoning (medicine, math) are plan-critical and see large delegation gains, while domains that require precise multi-step tool use (coding) are execute-critical and see diminishing returns from stronger planners.
 
 ---
 
