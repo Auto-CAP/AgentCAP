@@ -353,7 +353,9 @@ async def chat_completion_streaming(
                         if tc_id:
                             collected_tool_calls[idx]["id"] = tc_id
                         if fn_name:
-                            collected_tool_calls[idx]["function"]["name"] += fn_name
+                            # Providers may resend the full function name on continuation
+                            # chunks; keep the latest non-empty name rather than duplicating.
+                            collected_tool_calls[idx]["function"]["name"] = fn_name
                         if fn_arguments:
                             collected_tool_calls[idx]["function"]["arguments"] += fn_arguments
                         last_tool_call_index = idx

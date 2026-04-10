@@ -348,7 +348,10 @@ async def run_single_example(
                     json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 )
             except json.JSONDecodeError:
-                parsed_args = {}
+                if name == "python" and isinstance(raw_args, str) and raw_args.strip():
+                    parsed_args = {"code": raw_args}
+                else:
+                    parsed_args = {}
             cleaned_args = parsed_args
             if isinstance(parsed_args, dict):
                 cleaned_args = _clean_tool_args(name, parsed_args, tool_schemas)
