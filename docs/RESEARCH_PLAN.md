@@ -1,44 +1,26 @@
 # AgentCAP: Cost-Accuracy Pareto Frontiers for Heterogeneous LLM Agent Teams
 
-## 1. Background
+## 1. Introduction and Motivation
 
-### 1.1 The Single-Model Default
+The way we deploy LLM agents is fundamentally wasteful. Today's default is to run a single frontier model for every cognitive function: planning what to do, deciding which tools to call, executing routine API requests, recovering from errors. A $15/M-token model spends 80% of its tokens on mechanical tool calls that a $0.10/M-token model handles equally well. This is the organizational equivalent of having the CEO personally draft every email.
 
-Current LLM agent deployments use one model for everything: planning, reasoning, tool calling, and error recovery. This is the default because it is simple. But it is inefficient. A frontier model priced at $15 per million tokens spends most of its tokens on routine tool calls that a model at $0.10 per million tokens could handle equally well. The analogy is straightforward: no organization has the CEO write every email, yet the dominant LLM agent paradigm does exactly this.
+Human organizations solved this problem centuries ago through division of labor. Cognitive science explains why: Kahneman's dual-process theory shows that humans allocate expensive deliberative reasoning (System 2) only to planning and judgment, then switch to cheap automatic processing (System 1) for execution. Vygotsky's zone of proximal development demonstrates that structured guidance — scaffolding — enables less capable agents to perform beyond their independent ability. A detailed plan from a frontier model may be all a 9B-parameter executor needs to accomplish tasks it would fail at alone.
 
-### 1.2 Cognitive Science Foundations
+This is no longer theoretical. Anthropic's Claude Code ships an `opusplan` mode — Opus for planning, Sonnet for execution — and practitioners report 60-80% cost reduction at comparable quality. OpenAI Codex, OpenCode, Aider, and Cursor all support similar model-pair configurations. The industry is already building heterogeneous agent teams through intuition and ad-hoc testing.
 
-Three frameworks from cognitive science predict that separating planning from execution should be optimal.
+**The problem: nobody has measured any of this systematically.** No benchmark evaluates heterogeneous model teams. No framework tracks cost alongside accuracy across API and self-hosted deployments. No dataset enables domain-stratified analysis of when delegation helps and when it hurts. Every deployment decision — which model plans, which executes, when to self-host — is made by guesswork.
 
-**Dual Process Theory (Kahneman, 2011).** Human cognition operates two systems. System 2 is slow, deliberative, and resource-intensive; it handles planning and complex reasoning. System 1 is fast, automatic, and cheap; it handles routine execution. Crucially, humans do not run System 2 continuously. They plan with System 2, then switch to System 1 for execution. This is not laziness; it is optimal resource allocation. The mapping to LLMs is direct: expensive frontier models serve as System 2 (the planner), and cheap models serve as System 1 (the executor).
-
-**Zone of Proximal Development (Vygotsky, 1978).** A weaker agent can accomplish tasks beyond its solo capability when given structured guidance, which Vygotsky called scaffolding. In our framework, the plan IS the scaffolding. A 9-billion-parameter model that succeeds at 30% accuracy when working alone may achieve 70% or higher when following a detailed step-by-step plan from a frontier model. The plan does not reduce the difficulty of the task. It expands the executor's effective capability boundary, moving tasks from outside to inside the executor's zone of proximal development.
-
-**Division of Cognitive Labor (Simon, 1947; Smith, 1776).** Herbert Simon's concept of bounded rationality holds that any single agent has limited cognitive resources. Organizations exist to overcome individual cognitive bottlenecks through specialization. Adam Smith's pin factory demonstrated that 18 specialists each performing one step outperform 18 generalists each making whole pins, achieving a 240-fold improvement. In LLM terms: you should not use a $15-per-million-token model to call `read_file`, but you should use it to decide WHICH file to read.
-
-### 1.3 Industry Practice
-
-This is not hypothetical. Major AI providers are already operationalizing heterogeneous model teams in production:
-
-- **Anthropic Claude Code** offers an `opusplan` mode that uses Opus (frontier) for planning and automatically delegates execution to Sonnet (efficient). Community practitioners report 60 to 80 percent cost reduction with comparable quality. One practitioner noted: "the biggest win wasn't even cost, it was context window management. Opus burns through 80% of the window just reading files."
-- **OpenAI Codex** uses a frontier model for orchestration with smaller models for sub-tasks.
-- **Open-source agent tools** such as OpenCode, Aider, and Cursor support configurable planner and executor model pairs.
-
-Yet these systems are designed through intuition and ad-hoc testing. No systematic benchmark exists to evaluate when delegation helps, by how much, and at what cost.
-
-### 1.4 Limitations of Existing Benchmarks
-
-| Benchmark | Multi-Model Teams | Cost Tracking | Plan-Execute Separation | Cross-Deployment (API vs Local) | Domain Coverage |
+| Benchmark | Heterogeneous Teams | Cost Tracking | Plan-Execute | API vs Local | Domains |
 |---|---|---|---|---|---|
-| AgentBench | No | No | No | No | 8 environments |
-| MultiAgentBench | Yes (homogeneous) | No | No | No | 5 tasks |
-| TheAgentCompany | No | No | No | No | Simulated company |
-| tau-bench | No | No | No | No | Retail + airline |
-| MAESTRO | Yes (roles) | No | No | No | 6 categories |
-| HAL | No | No | No | No | 9 benchmarks |
-| **AgentCAP (ours)** | **Yes (heterogeneous)** | **Yes** | **Yes** | **Yes** | **5 domains** |
+| AgentBench | No | No | No | No | 8 envs |
+| MultiAgentBench | Homogeneous only | No | No | No | 5 tasks |
+| TheAgentCompany | No | No | No | No | 1 |
+| tau-bench | No | No | No | No | 2 |
+| MAESTRO | Role-based | No | No | No | 6 |
+| HAL | No | No | No | No | 9 |
+| **AgentCAP** | **Yes** | **Yes** | **Yes** | **Yes** | **5** |
 
-No existing benchmark evaluates all four dimensions that matter for practical deployment: heterogeneous model teams, cost tracking, plan-execute separation, and cross-deployment comparison.
+AgentCAP fills this gap. We evaluate 64 planner-executor combinations (8 models x 8 models, spanning API and self-hosted) across 5 domain-stratified benchmarks (coding, medicine, finance, open-domain, math), tracking cost, accuracy, and latency per task. We introduce an empirical task taxonomy that classifies tasks as plan-critical or execute-critical based on model-swap sensitivity — not human judgment. The result is the first cost-accuracy Pareto frontier for heterogeneous LLM agent teams, with actionable guidance for practitioners on which model does what, when, and at what price.
 
 ---
 
@@ -223,12 +205,32 @@ For each hybrid team that Pareto-dominates pure alternatives, compute the daily 
 
 ## 6. Timeline and Budget
 
-| Phase | Description | Duration | Estimated API Cost |
+### 6.1 API Cost Breakdown for P1
+
+Token assumptions per task: planner receives ~1.5K input and generates ~1K output (single call). Executor runs ~7 turns with growing context, totaling ~35K uncached input + ~21K cached input + ~3.5K output across all turns.
+
+| Role | Model | Estimated Cost per Task |
+|---|---|---|
+| Planner | Claude 4.6 Opus | $0.098 |
+| Planner | GPT-5.4 | $0.014 |
+| Planner | MiniMax M2.7 | $0.005 |
+| Planner | Kimi K2.5 | $0.003 |
+| Executor | Claude 4.6 Opus | $0.82 |
+| Executor | GPT-5.4 | $0.13 |
+| Executor | MiniMax M2.7 | $0.05 |
+| Executor | Kimi K2.5 | $0.04 |
+| Any role | Local models | ~$0 (GPU time only) |
+
+Claude as executor dominates cost: 8 combos with Claude executor account for $1,670 of the $2,330 total. The most expensive single combination is Claude-to-Claude at $0.92 per task ($229 for 250 tasks). The cheapest API combination is Kimi-to-Kimi at $0.04 per task ($11 for 250 tasks). All 16 local-to-local combinations cost effectively $0 in API spend.
+
+### 6.2 Schedule
+
+| Phase | Description | Duration | API Cost |
 |---|---|---|---|
-| P0 | Infrastructure: runners, backends, cost model, dataset loaders | Complete | $0 |
-| P1 | Full 64-combination matrix: 64 x 50 samples x 5 datasets = 16,000 runs | 5-7 days | ~$6,000 |
-| P2 | Analysis: Pareto frontiers, task classification, heatmaps, scaling curves | 3-4 days | $0 |
-| P3 | Paper draft: Sections 1 through 6, all figures and tables | 5-7 days | $0 |
-| P4 | Validation: top 15 combinations on full datasets | 3-5 days | ~$4,000 |
-| P5 | Camera-ready: revisions, ablation studies, appendices | 3-5 days | ~$1,000 |
-| **Total** | | **Approximately 4 weeks** | **Approximately $11,000** |
+| P0 | Infrastructure: runners, backends, cost model, datasets | Complete | $0 |
+| P1 | Full 64 matrix: 64 combos x 50 samples x 5 datasets = 16,000 runs | 5-7 days | ~$2,300 |
+| P2 | Analysis: Pareto frontiers, task classification, heatmaps | 3-4 days | $0 |
+| P3 | Paper draft: all sections, figures, tables | 5-7 days | $0 |
+| P4 | Validation: top 10 Pareto-optimal combos on full datasets (excl. Claude executor) | 3-5 days | ~$1,500 |
+| P5 | Camera-ready: revisions, ablations | 3-5 days | ~$500 |
+| **Total** | | **~4 weeks** | **~$4,300** |
