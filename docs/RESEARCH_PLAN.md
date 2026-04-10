@@ -1,26 +1,22 @@
 # AgentCAP: Cost-Accuracy Pareto Frontiers for Heterogeneous LLM Agent Teams
 
-## 1. Introduction and Motivation
+## 1. Introduction
 
-The way we deploy LLM agents is fundamentally wasteful. Today's default is to run a single frontier model for every cognitive function: planning what to do, deciding which tools to call, executing routine API requests, recovering from errors. A $15/M-token model spends 80% of its tokens on mechanical tool calls that a $0.10/M-token model handles equally well. This is the organizational equivalent of having the CEO personally draft every email.
+Recent LLM agent systems are increasingly adopting heterogeneous model configurations, where different models are assigned different cognitive roles within a single workflow. Notable examples include Anthropic's Claude Code `opusplan` mode (Opus for planning, Sonnet for execution), OpenAI Codex (frontier model for orchestration, smaller models for sub-tasks), and open-source agent frameworks such as OpenCode, Aider, and Cursor that support configurable planner-executor model pairs. Community practitioners report 60-80% cost reduction with these configurations at comparable quality levels. The underlying principle — using an expensive model for strategic planning and a cheap model for routine tool execution — mirrors the division of cognitive labor in human organizations, where planning and execution demand fundamentally different resource levels (Kahneman, 2011; Vygotsky, 1978; Simon, 1947).
 
-Human organizations solved this problem centuries ago through division of labor. Cognitive science explains why: Kahneman's dual-process theory shows that humans allocate expensive deliberative reasoning (System 2) only to planning and judgment, then switch to cheap automatic processing (System 1) for execution. Vygotsky's zone of proximal development demonstrates that structured guidance — scaffolding — enables less capable agents to perform beyond their independent ability. A detailed plan from a frontier model may be all a 9B-parameter executor needs to accomplish tasks it would fail at alone.
+Current heterogeneous agent deployments face increasing complexity, driven by two main factors: (i) the growing diversity in model capabilities and pricing, spanning from $0.80/M-token API models to self-hosted 9B-parameter models at near-zero marginal cost, creating a combinatorial space of possible team configurations; and (ii) the task-dependent nature of the planning-execution boundary — some tasks require deep reasoning in the plan (plan-critical) while others require precise multi-step tool use in execution (execute-critical), and the optimal model allocation differs accordingly.
 
-This is no longer theoretical. Anthropic's Claude Code ships an `opusplan` mode — Opus for planning, Sonnet for execution — and practitioners report 60-80% cost reduction at comparable quality. OpenAI Codex, OpenCode, Aider, and Cursor all support similar model-pair configurations. The industry is already building heterogeneous agent teams through intuition and ad-hoc testing.
+Practitioners are actively seeking methods to benchmark the cost, accuracy, and latency of heterogeneous agent teams in order to optimize their deployments. However, this benchmarking is challenging for the following reasons: (i) *No existing benchmark evaluates heterogeneous model teams.* Current agent benchmarks — AgentBench, TheAgentCompany, tau-bench, MAESTRO, HAL — evaluate a single model performing all cognitive functions, producing one accuracy point per model with no team composition analysis. (ii) *No cost-aware evaluation framework exists.* Existing benchmarks report accuracy in isolation, without tracking the dollar cost per task across API and self-hosted deployments, making cost-accuracy trade-off analysis impossible. (iii) *No benchmark separates planning from execution capability.* Without this separation, it is impossible to determine whether a model's failure stems from poor planning or poor execution, or to evaluate whether delegating one role to a cheaper model preserves overall quality.
 
-**The problem: nobody has measured any of this systematically.** No benchmark evaluates heterogeneous model teams. No framework tracks cost alongside accuracy across API and self-hosted deployments. No dataset enables domain-stratified analysis of when delegation helps and when it hurts. Every deployment decision — which model plans, which executes, when to self-host — is made by guesswork.
+To address these issues, this paper introduces AgentCAP, a benchmark designed to evaluate the cost, accuracy, and latency trade-offs of heterogeneous LLM agent teams. AgentCAP offers several key contributions:
 
-| Benchmark | Heterogeneous Teams | Cost Tracking | Plan-Execute | API vs Local | Domains |
-|---|---|---|---|---|---|
-| AgentBench | No | No | No | No | 8 envs |
-| MultiAgentBench | Homogeneous only | No | No | No | 5 tasks |
-| TheAgentCompany | No | No | No | No | 1 |
-| tau-bench | No | No | No | No | 2 |
-| MAESTRO | Role-based | No | No | No | 6 |
-| HAL | No | No | No | No | 9 |
-| **AgentCAP** | **Yes** | **Yes** | **Yes** | **Yes** | **5** |
+(1) **A cost-accuracy Pareto framework for model teams.** We evaluate 64 planner-executor combinations (8 models x 8 models, spanning 4 API and 4 self-hosted models) across 5 domain-stratified benchmarks (coding, medicine, finance, open-domain, math), tracking per-task cost, accuracy, and latency. This produces the first cost-accuracy Pareto frontier for heterogeneous agent teams, enabling direct comparison of pure-API, pure-local, and hybrid deployment regimes.
 
-AgentCAP fills this gap. We evaluate 64 planner-executor combinations (8 models x 8 models, spanning API and self-hosted) across 5 domain-stratified benchmarks (coding, medicine, finance, open-domain, math), tracking cost, accuracy, and latency per task. We introduce an empirical task taxonomy that classifies tasks as plan-critical or execute-critical based on model-swap sensitivity — not human judgment. The result is the first cost-accuracy Pareto frontier for heterogeneous LLM agent teams, with actionable guidance for practitioners on which model does what, when, and at what price.
+(2) **An empirical task taxonomy based on model-swap sensitivity.** Rather than relying on human annotation, we classify agentic tasks as plan-critical or execute-critical by measuring accuracy changes when swapping strong and weak models between planner and executor roles. This model-grounded taxonomy is reproducible, empirically justified, and granular at the per-task level.
+
+(3) **A unified evaluation across API and self-hosted deployments.** AgentCAP includes a cost model that normalizes API per-token pricing against self-hosted GPU amortization costs, enabling apples-to-apples cost comparison. We provide break-even analysis showing at what operational scale hybrid deployments (API planner + self-hosted executor) dominate pure alternatives.
+
+(4) **Domain-stratified analysis across 5 benchmarks.** By evaluating identical model teams on coding (SWE-bench Pro, 731 tasks), medicine (MedAgentBench, 300 tasks), finance (MCP-Atlas-Finance, 130 tasks), open-domain (MCP-Atlas, 500 tasks), and math (IMO-AnswerBench), we isolate how domain structure modulates the delegation benefit and reshapes the optimal team composition.
 
 ---
 
