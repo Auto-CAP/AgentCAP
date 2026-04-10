@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import importlib
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -843,6 +844,79 @@ async def run_experiment(
 def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
     name = dataset_name.lower().replace("-", "_").replace(" ", "_")
 
+    if name in ("tau2_banking", "tau2_bench_banking", "tau2"):
+        tau2_root = Path(__file__).parent.parent.parent / "third_party" / "tau2-bench"
+        tau2_src = tau2_root / "src"
+        if not tau2_src.exists():
+            raise FileNotFoundError(
+                f"tau2-bench source not found at {tau2_src}. "
+                "Clone https://github.com/sierra-research/tau2-bench into third_party/tau2-bench"
+            )
+
+        import sys
+
+        tau2_src_str = str(tau2_src.resolve())
+        if tau2_src_str not in sys.path:
+            sys.path.insert(0, tau2_src_str)
+
+        tasks_dir = (
+            tau2_root / "data" / "tau2" / "domains" / "banking_knowledge" / "tasks"
+        )
+        if not tasks_dir.exists():
+            raise FileNotFoundError(
+                f"tau2 banking tasks directory not found: {tasks_dir}"
+            )
+
+        tasks: List[UnifiedTask] = []
+        for task_file in sorted(tasks_dir.glob("task_*.json")):
+            raw = json.loads(task_file.read_text(encoding="utf-8"))
+            task_id = str(raw.get("id", task_file.stem))
+
+            description = raw.get("description") or {}
+            user_scenario = raw.get("user_scenario") or {}
+            instructions = str(user_scenario.get("instructions", ""))
+            persona = str(user_scenario.get("persona") or "")
+            prompt = (
+                "You are speaking to a banking customer. Continue the conversation and "
+                "resolve their request using tools.\n\n"
+                f"Customer persona:\n{persona}\n\n"
+                f"Customer scenario instructions:\n{instructions}"
+            )
+
+            task_name = str(description.get("purpose") or task_id)
+            evaluation_criteria = raw.get("evaluation_criteria") or {}
+            reward_basis = evaluation_criteria.get("reward_basis") or []
+            eval_cfg = {
+                "type": "tau2",
+                "domain": "banking_knowledge",
+                "retrieval_variant": "bm25",
+                "tau2_task": raw,
+                "required_documents": raw.get("required_documents") or [],
+                "reward_basis": list(reward_basis),
+            }
+
+            tasks.append(
+                UnifiedTask(
+                    task_id=task_id,
+                    task_name=str(task_name),
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a banking customer support agent. Use tools to "
+                                "assist the customer safely and accurately."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    eval_config=eval_cfg,
+                )
+            )
+
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
     if name in (
         "mcp_atlas",
         "mcpatlas",
@@ -900,6 +974,15 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
             task_id = str(ex.get("TASK", ""))
             if domain_task_ids is not None and task_id not in domain_task_ids:
                 continue
+            claims = ex.get("GTFA_CLAIMS", [])
+            if isinstance(claims, str):
+                try:
+                    claims = json.loads(claims)
+                except (json.JSONDecodeError, ValueError):
+                    claims = [claims] if claims.strip() else []
+            if not isinstance(claims, list):
+                claims = [str(claims)] if str(claims).strip() else []
+            claims = [str(c).strip() for c in claims if str(c).strip()]
             tasks.append(
                 UnifiedTask(
                     task_id=task_id,
@@ -911,6 +994,7 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         },
                         {"role": "user", "content": ex.get("PROMPT", "")},
                     ],
+                    eval_config={"type": "gtfa", "gtfa_claims": claims},
                 )
             )
         if limit > 0:
@@ -945,12 +1029,14 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         {"role": "user", "content": prompt},
                     ],
                     eval_config={
+                        "type": "swebench",
                         "instance_id": instance_id,
                         "repo": repo,
                         "base_commit": ex.get("base_commit", ""),
                         "dockerhub_tag": ex.get("dockerhub_tag", ""),
                         "test_patch": ex.get("test_patch", ""),
                         "fail_to_pass": ex.get("fail_to_pass", ""),
+                        "FAIL_TO_PASS": ex.get("fail_to_pass", ""),
                         "patch": ex.get("patch", ""),
                     },
                 )
@@ -1006,7 +1092,7 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
 
     raise ValueError(
         "Unknown dataset: "
-        f"{dataset_name}. Supported: mcp-atlas, swe-bench-pro, medagentbench"
+        f"{dataset_name}. Supported: mcp-atlas, swe-bench-pro, medagentbench, tau2-banking"
     )
 
 

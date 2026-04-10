@@ -1,3 +1,6 @@
+# Experiment guide with API keys — never commit
+RUN_EXPERIMENTS.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
