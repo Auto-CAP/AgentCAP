@@ -291,7 +291,7 @@ async def run_single_example(
         if "role" not in assistant:
             assistant["role"] = "assistant"
         tool_calls = assistant.get("tool_calls") or []
-        print(f'[TOOL CALLS (unified_runner.py line 294)]: {tool_calls}')
+        # print(f'[TOOL CALLS (unified_runner.py line 294)]: {tool_calls}')
 
         if task_dir is not None:
             response_data = {

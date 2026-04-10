@@ -604,6 +604,7 @@ async def async_main(args: argparse.Namespace) -> List[Dict[str, Any]]:
             )
 
             result = await apply_gemini_judgment(result, gemini_judge, max_retries=5) # 5 max retries, unless move off free API key
+            print(f"[GEMINI RESPONSE (line 607 run_imo_answerbench2)]: {result["gemini_judge_response"]}")
 
             results.append(result)
             print_task_result(index, len(tasks), result)
