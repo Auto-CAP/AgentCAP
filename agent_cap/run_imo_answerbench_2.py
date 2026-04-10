@@ -27,16 +27,15 @@ from agent_cap.runner.unified_runner import UnifiedTask, run_single_example
 from openai_harmony import HarmonyEncodingName, load_harmony_encoding
 
 
-SYSTEM_PROMPT = (
-"""You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
+SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
 
-# Output Format:
-### Summary
-  - Clearly state the final answer with a short summary.  Place your final answer inside \boxed{}, e.g., \boxed{42}.
-  - You must always provide a summary of the solution, in addition to the final answer.
-
+# Output Format
+- Provide a brief summary of the solution.
+- Then state the final mathematical answer clearly.
+- Put the final answer inside \\boxed{...}.
+- The final answer may be an integer, fraction, expression, tuple, sequence, set, or other mathematical object, depending on the problem.
+- Do not put anything except the final answer inside the final \\boxed{...}.
 """
-    )
 
 
 @dataclass
@@ -604,7 +603,7 @@ async def async_main(args: argparse.Namespace) -> List[Dict[str, Any]]:
             )
 
             result = await apply_gemini_judgment(result, gemini_judge, max_retries=5) # 5 max retries, unless move off free API key
-            print(f"[GEMINI RESPONSE (line 607 run_imo_answerbench2)]: {result["gemini_judge_response"]}")
+            print(f'[GEMINI RESPONSE (line 606 run_imo_answerbench2)]: {result["gemini_judge_response"]}')
 
             results.append(result)
             print_task_result(index, len(tasks), result)
