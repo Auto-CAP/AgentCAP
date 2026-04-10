@@ -262,6 +262,7 @@ async def chat_completion_streaming(
     collected_content = ""
     collected_reasoning_content = ""
     collected_tool_calls: Dict[int, Dict[str, Any]] = {}
+    tool_call_id_to_index: Dict[str, int] = {}
     last_tool_call_index: Optional[int] = None
     finish_reason = None
     usage: Dict[str, Any] = {}
@@ -325,14 +326,19 @@ async def chat_completion_streaming(
                     for tc_delta in tool_call_deltas:
                         raw_idx = tc_delta.get("index")
                         try:
-                            idx = int(raw_idx if raw_idx is not None else 0)
+                            fallback_idx = int(raw_idx if raw_idx is not None else 0)
                         except (TypeError, ValueError):
-                            idx = 0
+                            fallback_idx = 0
 
                         fn = tc_delta.get("function") or {}
-                        tc_id = tc_delta.get("id", "")
-                        fn_name = fn.get("name", "")
-                        fn_arguments = fn.get("arguments", "")
+                        tc_id = str(tc_delta.get("id", "") or "")
+                        fn_name = str(fn.get("name", "") or "")
+                        fn_arguments = str(fn.get("arguments", "") or "")
+
+                        if tc_id and tc_id in tool_call_id_to_index:
+                            idx = tool_call_id_to_index[tc_id]
+                        else:
+                            idx = fallback_idx
 
                         is_continuation_fragment = (
                             not tc_id
@@ -350,11 +356,23 @@ async def chat_completion_streaming(
                                 "type": "function",
                                 "function": {"name": "", "arguments": ""},
                             }
+
                         if tc_id:
+                            existing_id = str(collected_tool_calls[idx].get("id", "") or "")
+                            if existing_id and existing_id != tc_id:
+                                remapped_idx = tool_call_id_to_index.get(tc_id)
+                                if remapped_idx is None:
+                                    remapped_idx = max(collected_tool_calls.keys(), default=-1) + 1
+                                    collected_tool_calls[remapped_idx] = {
+                                        "id": tc_id,
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""},
+                                    }
+                                idx = remapped_idx
                             collected_tool_calls[idx]["id"] = tc_id
+                            tool_call_id_to_index[tc_id] = idx
+
                         if fn_name:
-                            # Providers may resend the full function name on continuation
-                            # chunks; keep the latest non-empty name rather than duplicating.
                             collected_tool_calls[idx]["function"]["name"] = fn_name
                         if fn_arguments:
                             collected_tool_calls[idx]["function"]["arguments"] += fn_arguments
