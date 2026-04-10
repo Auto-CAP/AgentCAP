@@ -32,7 +32,7 @@ SYSTEM_PROMPT = (
 
 # Output Format:
 ### Summary
-  - Clearly state the final answer with a short summary. The final answer must be a non-negative integer between 0 and 99999. Place your final numerical answer inside \boxed{}, e.g., \boxed{42}.
+  - Clearly state the final answer with a short summary.  Place your final answer inside \boxed{}, e.g., \boxed{42}.
   - You must always provide a summary of the solution, in addition to the final answer.
 
 """
