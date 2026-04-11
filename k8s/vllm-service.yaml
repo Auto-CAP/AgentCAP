@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: vllm-gptoss-server-
+  namespace: eidf230ns
+spec:
+  # Keep running until we manually delete
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: vllm-gptoss
+        kueue.x-k8s.io/queue-name: eidf230ns-user-queue
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+        nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+      securityContext:
+        fsGroup: 2000
+      volumes:
+        - name: llm-cache
+          persistentVolumeClaim:
+            claimName: llm-cache-pvc
+      containers:
+        - name: vllm
+          image: ghcr.io/pytorch/pytorch:2.10.0-cuda12.9-cudnn9-devel
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              cd /workspace
+              . /workspace/venv_smoke/bin/activate
+
+              echo "=== Starting vLLM server ==="
+              exec vllm serve \
+                  --model /workspace/models/unsloth/gpt-oss-120b \
+                  --served-model-name openai/gpt-oss-120b \
+                  --port 30002 \
+                  --gpu-memory-utilization 0.92 \
+                  --kv-cache-dtype fp8_e4m3 \
+                  --max-model-len 131072 \
+                  --tensor-parallel-size 2 \
+                  --tool-call-parser openai
+          ports:
+            - containerPort: 30002
+          env:
+            - name: HF_HOME
+              value: /workspace/hf_cache
+            - name: HUGGINGFACE_HUB_CACHE
+              value: /workspace/hf_cache/hub
+          resources:
+            requests:
+              cpu: "4"
+              memory: 128Gi
+              nvidia.com/gpu: "2"
+            limits:
+              cpu: "4"
+              memory: 128Gi
+              nvidia.com/gpu: "2"
+          volumeMounts:
+            - name: llm-cache
+              mountPath: /workspace
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-gptoss
+  namespace: eidf230ns
+spec:
+  selector:
+    app: vllm-gptoss
+  ports:
+    - port: 30002
+      targetPort: 30002
+  type: ClusterIP

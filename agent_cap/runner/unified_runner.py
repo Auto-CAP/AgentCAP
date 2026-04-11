@@ -764,8 +764,13 @@ async def run_experiment(
                             for t in task.enabled_tools
                         )
                         tools = [t for t in all_tools if t.get("function", {}).get("name", "") in allowed]
+                    elif backend_name != "mcp":
+                        # SWE-bench: tools come from backend.list_tools() per task (line above)
+                        pass  # keep tools from backend.list_tools()
                     else:
                         tools = all_tools
+
+                    print(f"[DEBUG] tools count: {len(tools)}, names: {[t.get('function',{}).get('name','?') for t in tools[:5]]}", flush=True)
 
                     openrouter_provider = (
                         config.openrouter_provider or config.openrouter_provider_pin
@@ -787,7 +792,7 @@ async def run_experiment(
                             request_details_file=req_f,
                             use_streaming=config.use_streaming,
                             traj_dir=traj_dir,
-                            parallel_tool_calls=True,
+                            parallel_tool_calls=(backend_name == "mcp"),
                         )
                     finally:
                         if backend_name != "mcp":
@@ -1072,6 +1077,12 @@ Examples:
         help="Limit number of tasks (default: all)",
     )
     parser.add_argument(
+        "--task-offset",
+        type=int,
+        default=0,
+        help="Skip first N tasks (for batched execution)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
@@ -1159,7 +1170,14 @@ Examples:
     if not config.dataset:
         parser.error("--dataset is required (or set dataset in config file)")
 
-    tasks = _load_dataset_tasks(config.dataset, resolve(args.num_tasks, "num_tasks", 0))
+    task_offset = args.task_offset or 0
+    num_tasks = resolve(args.num_tasks, "num_tasks", 0)
+    # Load all tasks, then slice by offset+limit
+    tasks = _load_dataset_tasks(config.dataset, 0)
+    if task_offset > 0:
+        tasks = tasks[task_offset:]
+    if num_tasks > 0:
+        tasks = tasks[:num_tasks]
 
     import asyncio
 
