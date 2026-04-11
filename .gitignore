@@ -1,6 +1,9 @@
 # Experiment guides with API keys — never commit
 RUN_EXPERIMENTS.md
 docs/RUN_IMO_BENCH.md
+docs/RUN_ALL_DATASETS.md
+scripts/run_api_matrix.sh
+docs/introduction.tex
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
