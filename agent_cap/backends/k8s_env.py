@@ -29,6 +29,8 @@ class K8sWorkspace:
         self.fail_to_pass = eval_config.get(
             "FAIL_TO_PASS", eval_config.get("fail_to_pass", "")
         )
+        self.before_repo_set_cmd = eval_config.get("before_repo_set_cmd", "")
+        self.selected_test_files = eval_config.get("selected_test_files_to_run", "")
         self.workdir = "/app"
         self.ready = False
         self.container_id = None
@@ -66,7 +68,12 @@ class K8sWorkspace:
         return True
 
     def get_git_diff(self) -> str:
+        # Same as DockerWorkspace: stage new files first, then diff
+        self._exec("git add -A", timeout=10)
         proc = self._exec("git diff HEAD", timeout=10)
+        if proc and proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+        proc = self._exec("git diff --cached", timeout=10)
         if proc and proc.returncode == 0 and proc.stdout.strip():
             return proc.stdout.strip()
         proc = self._exec("git diff", timeout=10)
@@ -85,24 +92,77 @@ class K8sWorkspace:
         except json.JSONDecodeError:
             tests = [self.fail_to_pass]
 
-        # Run build.sh if present (installs deps, starts services like Redis)
-        build_proc = self._exec(
-            "test -f /build.sh && bash /build.sh 2>&1 || echo 'no build.sh'",
-            timeout=120,
+        # Use official run_script.sh + parser.py (same as DockerWorkspace)
+        script_url = (
+            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
+            f"run_scripts/{self.instance_id}/run_script.sh"
         )
-        if build_proc:
-            print(f"[run_tests] build.sh: rc={build_proc.returncode}", flush=True)
+        parser_url = (
+            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
+            f"run_scripts/{self.instance_id}/parser.py"
+        )
 
-        # Run tests
-        proc = self._exec("npm test 2>&1", timeout=timeout)
-        output = (proc.stdout + proc.stderr)[-4000:] if proc else ""
-        rc = proc.returncode if proc else 1
+        self._exec(
+            f"curl -sL '{script_url}' -o /run_script.sh && chmod +x /run_script.sh",
+            timeout=30,
+        )
+        self._exec(f"curl -sL '{parser_url}' -o /parser.py", timeout=30)
+
+        # Official evaluation flow (matches swe_bench_pro_eval.py exactly):
+        # 1. Download run_script.sh and parser.py for this instance
+        # 2. Run tests with selected_test_files, stdout/stderr to separate files
+        # 3. Run parser.py <stdout> <stderr> <output.json>
+        # 4. Read output.json to check results
+
+        # Use selected_test_files_to_run (official) instead of fail_to_pass
+        try:
+            test_files = json.loads(self.selected_test_files) if self.selected_test_files else []
+        except (json.JSONDecodeError, TypeError):
+            test_files = []
+        test_files_str = " ".join(test_files) if test_files else ",".join(
+            t.split(" | ")[0].strip() for t in tests
+        )
+
+        self._exec(
+            f"bash /run_script.sh {test_files_str} "
+            f"> /workspace/stdout.log 2> /workspace/stderr.log",
+            timeout=timeout,
+        )
+
+        self._exec(
+            "python3 /parser.py /workspace/stdout.log /workspace/stderr.log /workspace/output.json",
+            timeout=30,
+        )
+
+        # Read output.json and check fail_to_pass tests
+        result_proc = self._exec("cat /workspace/output.json", timeout=10)
+        output_json = result_proc.stdout.strip() if result_proc and result_proc.returncode == 0 else ""
+
+        ok = False
+        details = ""
+        try:
+            parsed = json.loads(output_json) if output_json else {}
+            test_results = parsed.get("tests", [])
+            # Check if ALL fail_to_pass tests now pass
+            fail_to_pass_names = set()
+            for t in tests:
+                # fail_to_pass format: "file | test_name" or just "test_name"
+                fail_to_pass_names.add(t.strip())
+            passed_names = {t["name"] for t in test_results if t.get("status") == "PASSED"}
+            # A test passes if its name matches any fail_to_pass entry
+            ok = all(
+                any(fp in pn for pn in passed_names)
+                for fp in fail_to_pass_names
+            ) if fail_to_pass_names else False
+            details = json.dumps(test_results[:10])
+        except json.JSONDecodeError:
+            details = output_json[:500]
 
         return {
-            "passed": rc == 0,
-            "exit_code": rc,
+            "passed": ok,
+            "passed_count": 1 if ok else 0,
             "total": len(tests),
-            "test_output": output[-1000:],
+            "details": output[-1000:],
         }
 
     def cleanup(self) -> None:

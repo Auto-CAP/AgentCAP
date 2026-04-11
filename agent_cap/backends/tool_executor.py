@@ -208,12 +208,20 @@ class ToolExecutor:
     def _write_file(self, args: Dict[str, Any]) -> str:
         path = args["path"]
         content = args["content"]
-        escaped = content.replace("\\", "\\\\").replace("'", "'\\''")
+        import base64
+        b64 = base64.b64encode(content.encode()).decode()
         proc = self._exec(
-            f"mkdir -p $(dirname {path!r}) && printf '%s' '{escaped}' > {path!r}"
+            f"mkdir -p $(dirname {path!r}) && "
+            f"python3 -c \"import base64,sys; sys.stdout.buffer.write(base64.b64decode('{b64}'))\" > {path!r}"
         )
         if proc.returncode != 0:
-            return f"Write failed: {proc.stderr}"
+            # Fallback: try printf approach for envs without python3
+            escaped = content.replace("\\", "\\\\").replace("'", "'\\''")
+            proc = self._exec(
+                f"mkdir -p $(dirname {path!r}) && printf '%s' '{escaped}' > {path!r}"
+            )
+            if proc.returncode != 0:
+                return f"Write failed: {proc.stderr}"
         return f"Wrote {len(content)} chars to {path}"
 
     def _run_shell(self, args: Dict[str, Any]) -> str:

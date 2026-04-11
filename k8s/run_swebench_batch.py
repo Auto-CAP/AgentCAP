@@ -34,7 +34,7 @@ class H(http.server.BaseHTTPRequestHandler):
         cmd, timeout = body.get("cmd","echo noop"), body.get("timeout",30)
         try:
             p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, cwd="/app")
-            r = {"returncode":p.returncode,"stdout":p.stdout[-8000:],"stderr":p.stderr[-4000:]}
+            r = {"returncode":p.returncode,"stdout":p.stdout,"stderr":p.stderr}
         except subprocess.TimeoutExpired:
             r = {"returncode":124,"stdout":"","stderr":"timeout"}
         except Exception as e:
@@ -58,6 +58,52 @@ def kubectl(*args, check=True):
     if check and r.returncode != 0:
         log(f"kubectl error: {r.stderr[:200]}")
     return r
+
+
+class PortForwardManager:
+    """Auto-reconnecting port-forward for vLLM."""
+
+    def __init__(self, job_name, remote_port=30002, local_port=30002, namespace="eidf230ns"):
+        self.job_name = job_name
+        self.remote_port = remote_port
+        self.local_port = local_port
+        self.ns = namespace
+        self._proc = None
+        self._lock = Lock()
+
+    def _start(self):
+        if self._proc and self._proc.poll() is None:
+            return  # still alive
+        log(f"[port-forward] (re)starting localhost:{self.local_port} -> {self.job_name}:{self.remote_port}")
+        self._proc = subprocess.Popen(
+            ["kubectl", "port-forward", f"job/{self.job_name}",
+             f"{self.local_port}:{self.remote_port}", "-n", self.ns],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(2)
+
+    def ensure_alive(self):
+        """Check and restart port-forward if dead. Call before each task."""
+        with self._lock:
+            if self._proc is None or self._proc.poll() is not None:
+                self._start()
+                # verify
+                for _ in range(5):
+                    try:
+                        urllib.request.urlopen(
+                            f"http://localhost:{self.local_port}/v1/models", timeout=5)
+                        return True
+                    except Exception:
+                        time.sleep(2)
+                        self._start()
+                log("[port-forward] FAILED to reconnect!")
+                return False
+        return True
+
+    def stop(self):
+        if self._proc:
+            self._proc.kill()
+            self._proc.wait()
 
 
 def create_sidecar(task_idx, dockerhub_tag):
@@ -164,9 +210,13 @@ def delete_sidecar(job_name, pf_proc=None):
                 "--wait=false", "--ignore-not-found=true", check=False)
 
 
-def run_one_task(task_idx, instance_id, dockerhub_tag, vllm_url, output_dir):
+def run_one_task(task_idx, instance_id, dockerhub_tag, vllm_url, output_dir, pf_mgr=None):
     """Run a single task end-to-end. Returns result dict."""
     log(f"[task {task_idx}] START {instance_id}")
+
+    # Ensure vLLM port-forward is alive before starting
+    if pf_mgr and not pf_mgr.ensure_alive():
+        return {"index": task_idx, "instance_id": instance_id, "status": "vllm_unreachable"}
 
     job_name, local_port, pf_proc = create_sidecar(task_idx, dockerhub_tag)
     if not local_port:
@@ -176,6 +226,7 @@ def run_one_task(task_idx, instance_id, dockerhub_tag, vllm_url, output_dir):
     try:
         env = os.environ.copy()
         env["SWEBENCH_EXEC_URL"] = f"http://localhost:{local_port}/exec"
+        repo_root = Path(__file__).resolve().parent.parent
         cmd = [
             sys.executable, "-m", "agent_cap.runner.unified_runner",
             "--model-name", "openai/gpt-oss-120b",
@@ -188,7 +239,7 @@ def run_one_task(task_idx, instance_id, dockerhub_tag, vllm_url, output_dir):
             "--task-offset", str(task_idx),
             "--output-dir", str(output_dir / f"task_{task_idx:03d}"),
         ]
-        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=1800)
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=1800, cwd=str(repo_root))
         log(f"[task {task_idx}] DONE rc={r.returncode}")
         return {"index": task_idx, "instance_id": instance_id,
                 "status": "ok" if r.returncode == 0 else f"exit_{r.returncode}"}
@@ -202,9 +253,12 @@ def run_one_task(task_idx, instance_id, dockerhub_tag, vllm_url, output_dir):
         delete_sidecar(job_name, pf_proc)
 
 
-def wait_for_vllm(url, timeout=900):
+def wait_for_vllm(url, timeout=900, pf_mgr=None):
     log(f"Waiting for vLLM at {url} ...")
     for i in range(timeout // 5):
+        # Re-establish port-forward periodically
+        if pf_mgr and i % 12 == 0:
+            pf_mgr.ensure_alive()
         try:
             urllib.request.urlopen(f"{url}/models", timeout=5)
             log("vLLM ready!")
@@ -220,6 +274,7 @@ def wait_for_vllm(url, timeout=900):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vllm-url", default="http://localhost:30002/v1")
+    parser.add_argument("--vllm-job", type=str, required=True, help="vLLM K8s job name for port-forward")
     parser.add_argument("--num-tasks", type=int, default=100)
     parser.add_argument("--task-offset", type=int, default=0)
     parser.add_argument("--output-dir", type=str, default="results/swebench_100")
@@ -232,28 +287,36 @@ def main():
     log("Loading SWE-bench Pro dataset...")
     ds = load_dataset("ScaleAI/SWE-bench_Pro", split="test")
 
-    if not wait_for_vllm(args.vllm_url):
+    # Start and manage vLLM port-forward
+    pf_mgr = PortForwardManager(args.vllm_job)
+    pf_mgr.ensure_alive()
+
+    if not wait_for_vllm(args.vllm_url, pf_mgr=pf_mgr):
+        pf_mgr.stop()
         sys.exit(1)
 
     task_range = range(args.task_offset, min(args.task_offset + args.num_tasks, len(ds)))
     log(f"Running {len(task_range)} tasks with concurrency={args.concurrency}")
 
     results = []
-    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        futures = {}
-        for i in task_range:
-            ex = ds[i]
-            f = pool.submit(
-                run_one_task, i, ex["instance_id"], ex["dockerhub_tag"],
-                args.vllm_url, output_dir,
-            )
-            futures[f] = i
+    try:
+        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            futures = {}
+            for i in task_range:
+                ex = ds[i]
+                f = pool.submit(
+                    run_one_task, i, ex["instance_id"], ex["dockerhub_tag"],
+                    args.vllm_url, output_dir, pf_mgr,
+                )
+                futures[f] = i
 
-        for f in as_completed(futures):
-            result = f.result()
-            results.append(result)
-            done = len(results)
-            log(f"[progress] {done}/{len(task_range)} done — {result['instance_id']}: {result['status']}")
+            for f in as_completed(futures):
+                result = f.result()
+                results.append(result)
+                done = len(results)
+                log(f"[progress] {done}/{len(task_range)} done — {result['instance_id']}: {result['status']}")
+    finally:
+        pf_mgr.stop()
 
     results.sort(key=lambda x: x["index"])
     with open(output_dir / "batch_summary.json", "w") as fh:
