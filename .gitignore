@@ -1,5 +1,6 @@
-# Experiment guide with API keys — never commit
+# Experiment guides with API keys — never commit
 RUN_EXPERIMENTS.md
+docs/RUN_IMO_BENCH.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

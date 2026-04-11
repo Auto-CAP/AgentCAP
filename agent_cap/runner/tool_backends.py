@@ -1,5 +1,7 @@
 import abc
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 
@@ -141,490 +143,7 @@ class SWEBenchToolBackend(ToolBackend):
 
 
 class MedAgentBenchToolBackend(ToolBackend):
-    """Tool backend for MedAgentBench FHIR tools."""
-
-    FHIR_TOOLS: List[Dict[str, Any]] = [
-        {
-            "type": "function",
-            "function": {
-                "name": "patient_search",
-                "description": (
-                    "Patient search across demographics and identifiers in the FHIR server."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "address": {
-                            "type": "string",
-                            "description": "The patient's street address.",
-                        },
-                        "address-city": {
-                            "type": "string",
-                            "description": "The city for patient's home address.",
-                        },
-                        "address-postalcode": {
-                            "type": "string",
-                            "description": "The postal code for patient's home address.",
-                        },
-                        "address-state": {
-                            "type": "string",
-                            "description": "The state for the patient's home address.",
-                        },
-                        "birthdate": {
-                            "type": "string",
-                            "description": "The patient's date of birth in the format YYYY-MM-DD.",
-                        },
-                        "family": {
-                            "type": "string",
-                            "description": "The patient's family (last) name.",
-                        },
-                        "gender": {
-                            "type": "string",
-                            "description": "The patient's legal sex. Starting in the August 2021 version of Epic, the legal-sex parameter is preferred.",
-                        },
-                        "given": {
-                            "type": "string",
-                            "description": "The patient's given name. May include first and middle names.",
-                        },
-                        "identifier": {
-                            "type": "string",
-                            "description": "The patient's identifier.",
-                        },
-                        "legal-sex": {
-                            "type": "string",
-                            "description": "The patient’s legal sex. Takes precedence over the gender search parameter. Available starting in the August 2021 version of Epic.",
-                        },
-                        "name": {
-                            "type": "string",
-                            "description": "Any part of the patient's name. When discrete name parameters are used, such as family or given, this parameter is ignored.",
-                        },
-                        "telecom": {
-                            "type": "string",
-                            "description": "The patient's phone number or email.",
-                        },
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "condition_search",
-                "description": "Search patient conditions/problems from the FHIR server.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "description": 'Always "problem-list-item" for this API.',
-                        },
-                        "patient": {
-                            "type": "string",
-                            "description": "Reference to a patient resource the condition is for.",
-                        },
-                    },
-                    "required": ["patient"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "lab_search",
-                "description": "Search lab results from the FHIR Observation resource (uses category=laboratory).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "description": "The observation identifier (base name).",
-                        },
-                        "date": {
-                            "type": "string",
-                            "description": "Date when the specimen was obtained.",
-                        },
-                        "patient": {
-                            "type": "string",
-                            "description": "Reference to a patient resource the condition is for.",
-                        },
-                        "category": {
-                            "type": "string",
-                            "description": 'Always "laboratory" for lab searches.',
-                        },
-                    },
-                    "required": ["code", "patient"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "vital_search",
-                "description": "Search vital signs from the FHIR Observation resource (uses category=vital-signs).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "description": 'Use "vital-signs" to search for vitals observations.',
-                        },
-                        "date": {
-                            "type": "string",
-                            "description": "The date range for when the observation was taken.",
-                        },
-                        "patient": {
-                            "type": "string",
-                            "description": "Reference to a patient resource the condition is for.",
-                        },
-                    },
-                    "required": ["category", "patient"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "vital_create",
-                "description": "Create a vital-sign observation in the FHIR server.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "resourceType": {
-                            "type": "string",
-                            "description": 'Use "Observation" for vitals observations.',
-                        },
-                        "category": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "coding": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "system": {
-                                                    "type": "string",
-                                                    "description": 'Use "http://hl7.org/fhir/observation-category" ',
-                                                },
-                                                "code": {
-                                                    "type": "string",
-                                                    "description": 'Use "vital-signs" ',
-                                                },
-                                                "display": {
-                                                    "type": "string",
-                                                    "description": 'Use "Vital Signs" ',
-                                                },
-                                            },
-                                        },
-                                    }
-                                },
-                            },
-                        },
-                        "code": {
-                            "type": "object",
-                            "properties": {
-                                "text": {
-                                    "type": "string",
-                                    "description": "The flowsheet ID, encoded flowsheet ID, or LOINC codes to flowsheet mapping. What is being measured.",
-                                }
-                            },
-                        },
-                        "effectiveDateTime": {
-                            "type": "string",
-                            "description": "The date and time the observation was taken, in ISO format.",
-                        },
-                        "status": {
-                            "type": "string",
-                            "description": 'The status of the observation. Only a value of "final" is supported. We do not support filing data that isn\'t finalized.',
-                        },
-                        "valueString": {
-                            "type": "string",
-                            "description": "Measurement value",
-                        },
-                        "subject": {
-                            "type": "object",
-                            "properties": {
-                                "reference": {
-                                    "type": "string",
-                                    "description": "The patient FHIR ID for whom the observation is about.",
-                                }
-                            },
-                        },
-                    },
-                    "required": [
-                        "resourceType",
-                        "category",
-                        "code",
-                        "effectiveDateTime",
-                        "status",
-                        "valueString",
-                        "subject",
-                    ],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "medication_request_search",
-                "description": "Search medication requests/orders for a patient.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "description": "The category of medication orders to search for. By default all categories are searched.\n\nSupported categories:\nInpatient\nOutpatient (those administered in the clinic - CAMS)\nCommunity (prescriptions)\nDischarge",
-                        },
-                        "date": {
-                            "type": "string",
-                            "description": "The medication administration date. This parameter corresponds to the dosageInstruction.timing.repeat.boundsPeriod element. Medication orders that do not have start and end dates within the search parameter dates are filtered. If the environment supports multiple time zones, the search dates are adjusted one day in both directions, so more medications might be returned than expected. Use caution when filtering a medication list by date as it is possible to filter out important active medications. Starting in the November 2022 version of Epic, this parameter is respected. In May 2022 and earlier versions of Epic, this parameter is allowed but is ignored and no date filtering is applied.",
-                        },
-                        "patient": {
-                            "type": "string",
-                            "description": "The FHIR patient ID.",
-                        },
-                    },
-                    "required": ["patient"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "medication_request_create",
-                "description": "Create a medication request/order in the FHIR server.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "resourceType": {
-                            "type": "string",
-                            "description": 'Use "MedicationRequest" for medication requests.',
-                        },
-                        "medicationCodeableConcept": {
-                            "type": "object",
-                            "properties": {
-                                "coding": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "system": {
-                                                "type": "string",
-                                                "description": 'Coding system such as "http://hl7.org/fhir/sid/ndc" ',
-                                            },
-                                            "code": {
-                                                "type": "string",
-                                                "description": "The actual code",
-                                            },
-                                            "display": {
-                                                "type": "string",
-                                                "description": "Display name",
-                                            },
-                                        },
-                                    },
-                                },
-                                "text": {
-                                    "type": "string",
-                                    "description": "The order display name of the medication, otherwise the record name.",
-                                },
-                            },
-                        },
-                        "authoredOn": {
-                            "type": "string",
-                            "description": "The date the prescription was written.",
-                        },
-                        "dosageInstruction": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "route": {
-                                        "type": "object",
-                                        "properties": {
-                                            "text": {
-                                                "type": "string",
-                                                "description": "The medication route.",
-                                            }
-                                        },
-                                    },
-                                    "doseAndRate": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "doseQuantity": {
-                                                    "type": "object",
-                                                    "properties": {
-                                                        "value": {"type": "number"},
-                                                        "unit": {
-                                                            "type": "string",
-                                                            "description": 'unit for the dose such as "g" ',
-                                                        },
-                                                    },
-                                                },
-                                                "rateQuantity": {
-                                                    "type": "object",
-                                                    "properties": {
-                                                        "value": {"type": "number"},
-                                                        "unit": {
-                                                            "type": "string",
-                                                            "description": 'unit for the rate such as "h" ',
-                                                        },
-                                                    },
-                                                },
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                        "status": {
-                            "type": "string",
-                            "description": 'The status of the medication request. Use "active" ',
-                        },
-                        "intent": {
-                            "type": "string",
-                            "description": 'Use "order" ',
-                        },
-                        "subject": {
-                            "type": "object",
-                            "properties": {
-                                "reference": {
-                                    "type": "string",
-                                    "description": "The patient FHIR ID for who the medication request is for.",
-                                }
-                            },
-                        },
-                    },
-                    "required": [
-                        "resourceType",
-                        "medicationCodeableConcept",
-                        "authoredOn",
-                        "dosageInstruction",
-                        "status",
-                        "intent",
-                        "subject",
-                    ],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "procedure_search",
-                "description": "Search completed procedures for a patient.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "description": "External CPT codes associated with the procedure.",
-                        },
-                        "date": {
-                            "type": "string",
-                            "description": "Date or period that the procedure was performed, using the FHIR date parameter format.",
-                        },
-                        "patient": {
-                            "type": "string",
-                            "description": "Reference to a patient resource the condition is for.",
-                        },
-                    },
-                    "required": ["date", "patient"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "service_request_create",
-                "description": "Create a service request/order in the FHIR server.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "resourceType": {
-                            "type": "string",
-                            "description": 'Use "ServiceRequest" for service requests.',
-                        },
-                        "code": {
-                            "type": "object",
-                            "description": "The standard terminology codes mapped to the procedure, which can include LOINC, SNOMED, CPT, CBV, THL, or Kuntalitto codes.",
-                            "properties": {
-                                "coding": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "system": {
-                                                "type": "string",
-                                                "description": 'Coding system such as "http://loinc.org" ',
-                                            },
-                                            "code": {
-                                                "type": "string",
-                                                "description": "The actual code",
-                                            },
-                                            "display": {
-                                                "type": "string",
-                                                "description": "Display name",
-                                            },
-                                        },
-                                    },
-                                }
-                            },
-                        },
-                        "authoredOn": {
-                            "type": "string",
-                            "description": "The order instant. This is the date and time of when an order is signed or signed and held.",
-                        },
-                        "status": {
-                            "type": "string",
-                            "description": 'The status of the service request. Use "active" ',
-                        },
-                        "intent": {
-                            "type": "string",
-                            "description": 'Use "order" ',
-                        },
-                        "priority": {
-                            "type": "string",
-                            "description": 'Use "stat" ',
-                        },
-                        "subject": {
-                            "type": "object",
-                            "properties": {
-                                "reference": {
-                                    "type": "string",
-                                    "description": "The patient FHIR ID for who the service request is for.",
-                                }
-                            },
-                        },
-                        "note": {
-                            "type": "object",
-                            "properties": {
-                                "text": {
-                                    "type": "string",
-                                    "description": "Free text comment here",
-                                }
-                            },
-                        },
-                        "occurrenceDateTime": {
-                            "type": "string",
-                            "description": "The date and time for the service request to be conducted, in ISO format.",
-                        },
-                    },
-                    "required": [
-                        "resourceType",
-                        "code",
-                        "authoredOn",
-                        "status",
-                        "intent",
-                        "priority",
-                        "subject",
-                    ],
-                },
-            },
-        },
-    ]
+    """Text-protocol backend for MedAgentBench (GET/POST/FINISH)."""
 
     def __init__(
         self,
@@ -636,7 +155,16 @@ class MedAgentBenchToolBackend(ToolBackend):
         self._external_url = fhir_base_url.rstrip("/") if fhir_base_url else None
         self._data_dir = data_dir
         self._fhir_base = ""
+        self.max_round = 5
         self._mock_server: Optional["FHIRMockServer"] = None
+
+    @property
+    def prompt_api_base(self) -> str:
+        return self._fhir_base
+
+    @property
+    def fhir_api_base(self) -> str:
+        return self._fhir_base.rstrip("/") + "/"
 
     async def setup(self, task_config: Dict[str, Any]) -> bool:
         del task_config
@@ -659,82 +187,125 @@ class MedAgentBenchToolBackend(ToolBackend):
             return False
 
     async def list_tools(self) -> List[Dict[str, Any]]:
-        return self.FHIR_TOOLS
+        # Official MedAgentBench is text protocol, not function calling.
+        return []
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
-        endpoint, method = self._resolve_endpoint(name)
-        request_args = dict(arguments or {})
-        if name == "lab_search":
-            request_args["category"] = "laboratory"
-        elif name == "vital_search":
-            request_args["category"] = "vital-signs"
+        del name, arguments
+        raise RuntimeError(
+            "MedAgentBench backend does not expose function-calling tools; "
+            "use parse_and_execute() with text actions."
+        )
 
-        if method == "GET":
-            async with self._session.get(endpoint, params=request_args) as resp:
-                if resp.status >= 400:
+    async def parse_and_execute(self, model_output: str) -> tuple[str, bool]:
+        """Parse model text output, execute FHIR request, return (response, is_finished)."""
+        text = (
+            (model_output or "")
+            .strip()
+            .replace("```tool_code", "")
+            .replace("```", "")
+            .strip()
+        )
+
+        if text.startswith("GET"):
+            try:
+                url = text[3:].strip()
+                if "_format=json" not in url:
+                    sep = "&" if "?" in url else "?"
+                    url = f"{url}{sep}_format=json"
+                url = self._normalize_request_url(url)
+                async with self._session.get(url) as resp:
                     body = await resp.text()
-                    return {
-                        "status": "error",
-                        "status_code": resp.status,
-                        "detail": body[:500],
-                    }
-                data = await resp.json(content_type=None)
-                return self._format_fhir_response(data)
-        if method == "POST":
-            payload = request_args.get("payload", request_args)
-            async with self._session.post(endpoint, json=payload) as resp:
-                if resp.status in (200, 201):
-                    return {"status": "success", "status_code": resp.status}
-                body = await resp.text()
-                return {
-                    "status": "error",
-                    "status_code": resp.status,
-                    "detail": body[:500],
-                }
-        raise RuntimeError(f"Unsupported HTTP method for {name}: {method}")
+                    if resp.status >= 400:
+                        return (
+                            f"Error in sending the GET request: HTTP {resp.status} {body}",
+                            False,
+                        )
+
+                    try:
+                        parsed = json.loads(body)
+                        payload_text = json.dumps(parsed, ensure_ascii=False)
+                    except Exception:
+                        payload_text = body
+                return (
+                    "Here is the response from the GET request:\n"
+                    f"{payload_text}. Please call FINISH if you have got answers "
+                    "for all the questions and finished all the requested tasks",
+                    False,
+                )
+            except Exception as exc:
+                return f"Error in sending the GET request: {exc}", False
+
+        if text.startswith("POST"):
+            lines = text.splitlines()
+            if len(lines) < 2:
+                return "Invalid POST request", False
+            try:
+                url = self._normalize_request_url(lines[0][4:].strip())
+                payload = json.loads("\n".join(lines[1:]))
+            except Exception:
+                return "Invalid POST request", False
+
+            try:
+                async with self._session.post(url, json=payload) as resp:
+                    if resp.status in (200, 201):
+                        return (
+                            "POST request accepted and executed successfully. "
+                            "Please call FINISH if you have got answers for all "
+                            "the questions and finished all the requested tasks",
+                            False,
+                        )
+                    body = await resp.text()
+                    return (
+                        f"Error in sending the POST request: HTTP {resp.status} {body}",
+                        False,
+                    )
+            except Exception as exc:
+                return f"Error in sending the POST request: {exc}", False
+
+        if text.startswith("FINISH("):
+            if text.endswith(")"):
+                return text[len("FINISH(") : -1], True
+            return text[len("FINISH(") :], True
+
+        return "Invalid action", True
 
     async def teardown(self) -> None:
         if self._mock_server is not None:
             await self._mock_server.stop()
             self._mock_server = None
 
-    def _resolve_endpoint(self, name: str) -> tuple[str, str]:
-        """Map tool name to FHIR endpoint + HTTP method."""
-        mapping = {
-            "patient_search": (f"{self._fhir_base}/Patient", "GET"),
-            "condition_search": (f"{self._fhir_base}/Condition", "GET"),
-            "lab_search": (f"{self._fhir_base}/Observation", "GET"),
-            "vital_search": (f"{self._fhir_base}/Observation", "GET"),
-            "vital_create": (f"{self._fhir_base}/Observation", "POST"),
-            "medication_request_search": (
-                f"{self._fhir_base}/MedicationRequest",
-                "GET",
-            ),
-            "medication_request_create": (
-                f"{self._fhir_base}/MedicationRequest",
-                "POST",
-            ),
-            "procedure_search": (f"{self._fhir_base}/Procedure", "GET"),
-            "service_request_create": (f"{self._fhir_base}/ServiceRequest", "POST"),
-        }
-        if name not in mapping:
-            raise ValueError(f"Unknown FHIR tool: {name}")
-        return mapping[name]
+    def _normalize_request_url(self, url: str) -> str:
+        normalized = (url or "").strip()
+        if not normalized:
+            return normalized
 
-    @staticmethod
-    def _format_fhir_response(data: Any) -> str:
-        """Format FHIR Bundle response for LLM consumption."""
-        import json
+        if "{api_base}" in normalized:
+            normalized = normalized.replace("{api_base}", self._fhir_base)
 
-        if isinstance(data, dict) and data.get("resourceType") == "Bundle":
-            entries = data.get("entry", [])
-            total = data.get("total", len(entries))
-            results = []
-            for entry in entries[:10]:
-                if isinstance(entry, dict):
-                    resource = entry.get("resource", {})
-                    results.append(resource)
-            return json.dumps(
-                {"total": total, "results": results}, indent=2, default=str
-            )
-        return json.dumps(data, indent=2, default=str)
+        if normalized.startswith("/"):
+            if normalized.startswith("/fhir/"):
+                normalized = f"{self._fhir_base}{normalized[5:]}"
+            else:
+                normalized = f"{self._fhir_base}/{normalized.lstrip('/')}"
+
+        if normalized.startswith(("http://", "https://")):
+            source = urlparse(normalized)
+            target = urlparse(self._fhir_base)
+            if source.netloc != target.netloc and "/fhir" in source.path:
+                idx = source.path.find("/fhir")
+                tail = source.path[idx + len("/fhir") :]
+                remapped_path = f"{target.path.rstrip('/')}{tail}"
+                normalized = urlunparse(
+                    (
+                        target.scheme,
+                        target.netloc,
+                        remapped_path,
+                        source.params,
+                        source.query,
+                        source.fragment,
+                    )
+                )
+            return normalized
+
+        return f"{self._fhir_base}/{normalized.lstrip('/')}"

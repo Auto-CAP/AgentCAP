@@ -905,6 +905,55 @@ async def run_experiment(
 def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
     name = dataset_name.lower().replace("-", "_").replace(" ", "_")
 
+    if name in ("imo_answerbench", "imoanswerbench"):
+        from datasets import load_dataset as hf_load
+
+        ds = hf_load("Hwilner/imo-answerbench", split="train")
+        tasks: List[UnifiedTask] = []
+        for i, ex in enumerate(ds):
+            if not isinstance(ex, dict):
+                continue
+
+            problem_id = ex.get("Problem ID", f"imo-{i}")
+            problem = str(ex.get("Problem", "")).strip()
+            if not problem:
+                continue
+
+            short_answer = str(ex.get("Short Answer", "")).strip()
+            category = str(ex.get("Category", "math"))
+
+            prompt = (
+                f"{problem}\n\n"
+                r"Solve this step by step. Place your final numerical answer inside \boxed{}"
+            )
+
+            tasks.append(
+                UnifiedTask(
+                    task_id=str(problem_id),
+                    task_name=problem[:80],
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an expert mathematical problem solver with "
+                                "access to a Python execution tool. Use it for calculations "
+                                "when useful. Put your final answer in \\boxed{}."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    eval_config={
+                        "type": "math_verify",
+                        "expected": short_answer,
+                        "category": category,
+                    },
+                )
+            )
+
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
     if name in ("tau2_banking", "tau2_bench_banking", "tau2"):
         tau2_root = Path(__file__).parent.parent.parent / "third_party" / "tau2-bench"
         tau2_src = tau2_root / "src"
@@ -1083,7 +1132,12 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                 try:
                     claims = json.loads(claims)
                 except (json.JSONDecodeError, ValueError):
-                    claims = [claims] if claims.strip() else []
+                    try:
+                        import ast
+
+                        claims = ast.literal_eval(claims)
+                    except (ValueError, SyntaxError):
+                        claims = [claims] if claims.strip() else []
             if not isinstance(claims, list):
                 claims = [str(claims)] if str(claims).strip() else []
             claims = [str(c).strip() for c in claims if str(c).strip()]
@@ -1157,37 +1211,74 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
             / "MedAgentBench"
             / "data"
             / "medagentbench"
-            / "test_data_v2.json"
+            / "test_data_v1.json"
         )
-        if not data_path.exists():
+        funcs_path = (
+            Path(__file__).parent.parent.parent
+            / "third_party"
+            / "MedAgentBench"
+            / "data"
+            / "medagentbench"
+            / "funcs_v1.json"
+        )
+        if not data_path.exists() or not funcs_path.exists():
             raise FileNotFoundError(
-                f"MedAgentBench data not found at {data_path}. "
+                "MedAgentBench files not found at "
+                f"{data_path} and/or {funcs_path}. "
                 "Clone https://github.com/stanfordmlgroup/MedAgentBench into third_party/"
             )
+
+        MedAgentBench_prompt = """You are an expert in using FHIR functions to assist medical professionals. You are given a question and a set of possible functions. Based on the question, you will need to make one or more function/tool calls to achieve the purpose.
+
+1. If you decide to invoke a GET function, you MUST put it in the format of
+GET url?param_name1=param_value1&param_name2=param_value2...
+
+2. If you decide to invoke a POST function, you MUST put it in the format of
+POST url
+[your payload data in JSON format]
+
+3. If you have got answers for all the questions and finished all the requested tasks, you MUST call to finish the conversation in the format of (make sure the list is JSON loadable.)
+FINISH([answer1, answer2, ...])
+
+Your response must be in the format of one of the three cases, and you can call only one function each time. You SHOULD NOT include any other text in the response.
+
+Here is a list of functions in JSON format that you can invoke. Note that you should use {api_base} as the api_base.
+{functions}
+
+Context: {context}
+Question: {question}"""
+
         with data_path.open("r", encoding="utf-8") as f:
             raw = json.load(f)
+        with funcs_path.open("r", encoding="utf-8") as f:
+            funcs = json.load(f)
+
+        functions_json = json.dumps(funcs)
         tasks = []
-        for item in raw:
+        for idx, item in enumerate(raw):
             if not isinstance(item, dict):
                 continue
             task_id = str(item.get("id", ""))
             instruction = str(item.get("instruction", ""))
+            context = str(item.get("context", ""))
+            prompt_with_placeholder = MedAgentBench_prompt.format(
+                api_base="{api_base}",
+                functions=functions_json,
+                context=context,
+                question=instruction,
+            )
             tasks.append(
                 UnifiedTask(
                     task_id=task_id,
                     task_name=f"medagentbench_{task_id}",
                     messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a medical AI assistant with access to a FHIR-compliant EHR system. Use the available tools to query patient records, create observations, and manage medication/procedure orders. When you have found the answer, provide it clearly.",
-                        },
-                        {"role": "user", "content": instruction},
+                        {"role": "user", "content": prompt_with_placeholder},
                     ],
                     eval_config={
                         "type": "medagentbench",
-                        "expected_answer": item.get("sol", []),
-                        "eval_mrn": item.get("eval_MRN", ""),
-                        "context": item.get("context", ""),
+                        "task_data": item,
+                        "task_index": idx,
+                        "prompt_with_placeholder": prompt_with_placeholder,
                     },
                 )
             )
@@ -1197,7 +1288,7 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
 
     raise ValueError(
         "Unknown dataset: "
-        f"{dataset_name}. Supported: mcp-atlas, swe-bench-pro, medagentbench, tau2-banking"
+        f"{dataset_name}. Supported: imo-answerbench, mcp-atlas, swe-bench-pro, medagentbench, tau2-banking"
     )
 
 

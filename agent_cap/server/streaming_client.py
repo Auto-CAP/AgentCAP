@@ -9,6 +9,7 @@ arrives from the TCP stream.
 
 import asyncio
 import json
+import logging
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,19 +17,20 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import aiohttp
 from openai_harmony import (
-    HarmonyEncodingName, 
-    load_harmony_encoding, 
-    SystemContent, 
-    ReasoningEffort, 
-    ToolNamespaceConfig, 
-    Author, 
-    Message, 
-    Role, 
-    TextContent, 
-    Conversation
+    HarmonyEncodingName,
+    load_harmony_encoding,
+    SystemContent,
+    ReasoningEffort,
+    ToolNamespaceConfig,
+    Author,
+    Message,
+    Role,
+    TextContent,
+    Conversation,
 )
 
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -192,129 +194,171 @@ class StreamingChatClient:
         input_tokens = 0
         output_tokens = 0
         total_tokens = 0
+        st = time.perf_counter()
         resp_model = model
         ttft = 0.0
         most_recent_timestamp = 0.0
 
-        st = time.perf_counter()
+        max_retries = 3
+        retryable_codes = {429, 502, 503}
 
-        try:
-            async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-                async with session.post(
-                    url,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                ) as response:
-                    if response.status != 200:
-                        error_body = await response.text()
-                        return StreamingChatResponse(
-                            content="",
-                            input_tokens=0,
-                            output_tokens=0,
-                            total_tokens=0,
-                            latency_ms=(time.perf_counter() - st) * 1000,
-                            ttft_ms=0.0,
-                            tpot_ms_avg=0.0,
-                            tpot_ms_p99=0.0,
-                            model=model,
-                            error=f"HTTP {response.status}: {error_body[:500]}",
-                        )
+        for attempt in range(max_retries + 1):
+            st = time.perf_counter()
 
-                    done = False
-                    async for chunk_bytes in response.content:
-                        if done:
-                            break
-                        for raw_line in chunk_bytes.decode("utf-8").split("\n"):
-                            raw_line = raw_line.strip()
-                            if not raw_line or raw_line.startswith(":"):
-                                continue
-                            raw_line = raw_line.removeprefix("data: ").removeprefix(
-                                "data:"
-                            )
-                            if raw_line == "[DONE]":
-                                done = True
-                                break
-                            try:
-                                data = json.loads(raw_line)
-                            except json.JSONDecodeError:
-                                continue
-
-                            timestamp = time.perf_counter()
-                            raw_chunks.append(data)
-                            resp_model = data.get("model", resp_model)
-
-                            usage = data.get("usage")
-                            if usage:
-                                input_tokens = int(usage.get("prompt_tokens", 0))
-                                output_tokens = int(usage.get("completion_tokens", 0))
-                                total_tokens = int(
-                                    usage.get(
-                                        "total_tokens", input_tokens + output_tokens
-                                    )
+            try:
+                async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+                    async with session.post(
+                        url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                    ) as response:
+                        if response.status != 200:
+                            error_body = await response.text()
+                            if (
+                                response.status in retryable_codes
+                                and attempt < max_retries
+                            ):
+                                wait = 5 * (3**attempt)
+                                logger.warning(
+                                    f"HTTP {response.status}, retry {attempt + 1}/{max_retries} in {wait}s"
                                 )
-                                most_recent_timestamp = timestamp
+                                await asyncio.sleep(wait)
                                 continue
+                            return StreamingChatResponse(
+                                content="",
+                                input_tokens=0,
+                                output_tokens=0,
+                                total_tokens=0,
+                                latency_ms=(time.perf_counter() - st) * 1000,
+                                ttft_ms=0.0,
+                                tpot_ms_avg=0.0,
+                                tpot_ms_p99=0.0,
+                                model=model,
+                                error=f"HTTP {response.status}: {error_body[:500]}",
+                            )
 
-                            choices = data.get("choices", [])
-                            if not choices:
+                        done = False
+                        async for chunk_bytes in response.content:
+                            if done:
+                                break
+                            for raw_line in chunk_bytes.decode("utf-8").split("\n"):
+                                raw_line = raw_line.strip()
+                                if not raw_line or raw_line.startswith(":"):
+                                    continue
+                                raw_line = raw_line.removeprefix("data: ").removeprefix(
+                                    "data:"
+                                )
+                                if raw_line == "[DONE]":
+                                    done = True
+                                    break
+                                try:
+                                    data = json.loads(raw_line)
+                                except json.JSONDecodeError:
+                                    continue
+
+                                timestamp = time.perf_counter()
+                                raw_chunks.append(data)
+                                resp_model = data.get("model", resp_model)
+
+                                usage = data.get("usage")
+                                if usage:
+                                    input_tokens = int(usage.get("prompt_tokens", 0))
+                                    output_tokens = int(
+                                        usage.get("completion_tokens", 0)
+                                    )
+                                    total_tokens = int(
+                                        usage.get(
+                                            "total_tokens", input_tokens + output_tokens
+                                        )
+                                    )
+                                    most_recent_timestamp = timestamp
+                                    continue
+
+                                choices = data.get("choices", [])
+                                if not choices:
+                                    most_recent_timestamp = timestamp
+                                    continue
+
+                                delta = choices[0].get("delta", {})
+                                has_output = False
+
+                                content_piece = delta.get("content")
+                                if content_piece:
+                                    content_parts.append(content_piece)
+                                    has_output = True
+
+                                if delta.get("reasoning_content") or delta.get(
+                                    "reasoning"
+                                ):
+                                    has_output = True
+
+                                tc_deltas = delta.get("tool_calls")
+                                if tc_deltas:
+                                    for tc in tc_deltas:
+                                        idx = tc.get("index", 0)
+                                        if idx not in tool_call_fragments:
+                                            tool_call_fragments[idx] = {
+                                                "name": "",
+                                                "arguments": "",
+                                            }
+                                        fn = tc.get("function", {})
+                                        if fn.get("name"):
+                                            tool_call_fragments[idx]["name"] = fn[
+                                                "name"
+                                            ]
+                                            has_output = True
+                                        if fn.get("arguments"):
+                                            tool_call_fragments[idx]["arguments"] += fn[
+                                                "arguments"
+                                            ]
+                                            has_output = True
+
+                                if ttft == 0.0:
+                                    if has_output:
+                                        ttft = timestamp - st
+                                else:
+                                    itl.append(timestamp - most_recent_timestamp)
+
                                 most_recent_timestamp = timestamp
-                                continue
+                break
 
-                            delta = choices[0].get("delta", {})
-                            has_output = False
-
-                            content_piece = delta.get("content")
-                            if content_piece:
-                                content_parts.append(content_piece)
-                                has_output = True
-
-                            if delta.get("reasoning_content") or delta.get("reasoning"):
-                                has_output = True
-
-                            tc_deltas = delta.get("tool_calls")
-                            if tc_deltas:
-                                for tc in tc_deltas:
-                                    idx = tc.get("index", 0)
-                                    if idx not in tool_call_fragments:
-                                        tool_call_fragments[idx] = {
-                                            "name": "",
-                                            "arguments": "",
-                                        }
-                                    fn = tc.get("function", {})
-                                    if fn.get("name"):
-                                        tool_call_fragments[idx]["name"] = fn["name"]
-                                        has_output = True
-                                    if fn.get("arguments"):
-                                        tool_call_fragments[idx]["arguments"] += fn[
-                                            "arguments"
-                                        ]
-                                        has_output = True
-
-                            if ttft == 0.0:
-                                if has_output:
-                                    ttft = timestamp - st
-                            else:
-                                itl.append(timestamp - most_recent_timestamp)
-
-                            most_recent_timestamp = timestamp
-
-        except Exception as exc:
-            t_end = time.perf_counter()
-            return StreamingChatResponse(
-                content="".join(content_parts),
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                latency_ms=(t_end - st) * 1000,
-                ttft_ms=ttft * 1000,
-                tpot_ms_avg=0.0,
-                tpot_ms_p99=0.0,
-                model=resp_model,
-                tool_call_count=len(tool_call_fragments),
-                itl=[x * 1000 for x in itl],
-                raw_chunks=raw_chunks,
-                error=str(exc),
-            )
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                if attempt < max_retries:
+                    wait = 5 * (3**attempt)
+                    logger.warning(
+                        f"Connection error: {exc}, retry {attempt + 1}/{max_retries} in {wait}s"
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                return StreamingChatResponse(
+                    content="",
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                    latency_ms=(time.perf_counter() - st) * 1000,
+                    ttft_ms=0.0,
+                    tpot_ms_avg=0.0,
+                    tpot_ms_p99=0.0,
+                    model=model,
+                    error=f"Connection failed after {max_retries} retries: {exc}",
+                )
+            except Exception as exc:
+                t_end = time.perf_counter()
+                return StreamingChatResponse(
+                    content="".join(content_parts),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    latency_ms=(t_end - st) * 1000,
+                    ttft_ms=ttft * 1000,
+                    tpot_ms_avg=0.0,
+                    tpot_ms_p99=0.0,
+                    model=resp_model,
+                    tool_call_count=len(tool_call_fragments),
+                    itl=[x * 1000 for x in itl],
+                    raw_chunks=raw_chunks,
+                    error=str(exc),
+                )
 
         latency = (
             most_recent_timestamp - st
@@ -403,8 +447,7 @@ class StreamingChatClient:
                     )
 
         return [r for r in results if r is not None]
-    
-    
+
     def completion_from_prompt_ids(
         self,
         prompt_token_ids: List[int],
@@ -422,7 +465,7 @@ class StreamingChatClient:
             asyncio.set_event_loop(loop)
             try:
                 return loop.run_until_complete(
-                    self._async_completion_from_prompt_ids(
+                    self._async_completion_from_prompt_ids(  # pyright: ignore[reportAttributeAccessIssue]
                         prompt_token_ids=prompt_token_ids,
                         model=model,
                         temperature=temperature,
