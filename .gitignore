@@ -5,6 +5,13 @@ docs/RUN_ALL_DATASETS.md
 scripts/run_api_matrix.sh
 docs/introduction.tex
 
+# Local scripts — keep but don't commit
+agent_cap/run_imo_answerbench.py
+agent_cap/run_imo_answerbench_2.py
+agent_cap/requirements_imoanswerbench.txt
+docs/generate_presentation.py
+docs/progress_update.html
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
