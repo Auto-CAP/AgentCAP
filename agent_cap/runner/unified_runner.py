@@ -627,8 +627,8 @@ async def run_experiment(
     traj_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = out_dir / f"metadata_{suffix}.json"
     metrics_path = out_dir / f"metrics_{suffix}.json"
-    detailed_results_path = out_dir / f"detailed_results_{suffix}.jsonl"
-    output_data_path = out_dir / f"output_data_{suffix}.jsonl"
+    detailed_results_path = out_dir / f"detailed-results_{suffix}.jsonl"
+    output_data_path = out_dir / f"output-data_{suffix}.jsonl"
 
     normalized_tasks: List[UnifiedTask] = [
         task if isinstance(task, UnifiedTask) else UnifiedTask.from_dict(task)
@@ -1538,8 +1538,8 @@ Examples:
     print(f"\nDone. Output directory: {result.output_dir}")
     print(f"  metadata:         metadata_{result.suffix}.json")
     print(f"  metrics:          metrics_{result.suffix}.json")
-    print(f"  detailed_results: detailed_results_{result.suffix}.jsonl")
-    print(f"  output_data:      output_data_{result.suffix}.jsonl")
+    print(f"  detailed_results: detailed-results_{result.suffix}.jsonl")
+    print(f"  output_data:      output-data_{result.suffix}.jsonl")
 
 
 __all__ = [

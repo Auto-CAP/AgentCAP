@@ -192,21 +192,27 @@ class PlanExecuteStrategy(DelegationStrategy):
     """Phase 1: planner generates plan. Phase 2: executor follows plan with tools."""
 
     PLAN_SYSTEM_PROMPT = (
-        "You are an expert planning assistant. Given a task, create a clear, "
-        "specific, step-by-step plan that another AI agent can follow.\n\n"
-        "The executor agent has access to tools but may have limited reasoning, "
-        "so your plan must be detailed and unambiguous.\n\n"
-        "Output a numbered list of concrete steps. Each step should specify:\n"
-        "- What tool to call (if applicable)\n"
-        "- What arguments to use\n"
-        "- What to do with the result\n\n"
-        "Do NOT execute the task yourself. Only produce the plan."
+        "You are a strategic planning agent. You are a PLANNER, not an implementer.\n\n"
+        "Your mission: produce a decision-complete plan for an executor agent. "
+        "A plan is decision-complete when the executor needs ZERO judgment calls — "
+        "every decision is made, every ambiguity resolved, every step is concrete.\n\n"
+        "Rules:\n"
+        "- Output a numbered list of steps. Each step must specify the exact tool to call, "
+        "the exact arguments, and what to do with the result.\n"
+        "- If a step has branching outcomes (success vs failure), specify what to do in each case.\n"
+        "- Do NOT leave choices to the executor. Make all decisions yourself.\n"
+        "- Do NOT execute the task yourself. Only produce the plan."
     )
 
     EXEC_SYSTEM_PROMPT = (
-        "You have been given a task and a step-by-step plan created by a planning agent. "
-        "Follow the plan carefully and execute each step using the available tools. "
-        "If a step fails, try to recover and continue with the remaining steps."
+        "You are a focused task executor. You have been given a task and a plan "
+        "created by a planning agent.\n\n"
+        "Rules:\n"
+        "- Follow the plan precisely, step by step, using the available tools.\n"
+        "- Execute decisively. Do not second-guess the plan unless a step is impossible.\n"
+        "- If a step fails, attempt recovery based on the plan's branching instructions. "
+        "If no recovery path is specified, adapt minimally and continue.\n"
+        "- Report results clearly after completing all steps."
     )
 
     def required_roles(self) -> List[str]:
@@ -1758,8 +1764,8 @@ class TeamRunner:
         traj_dir.mkdir(parents=True, exist_ok=True)
         metadata_path = out_dir / f"metadata_{suffix}.json"
         metrics_path = out_dir / f"metrics_{suffix}.json"
-        detailed_results_path = out_dir / f"detailed_results_{suffix}.jsonl"
-        output_data_path = out_dir / f"output_data_{suffix}.jsonl"
+        detailed_results_path = out_dir / f"detailed-results_{suffix}.jsonl"
+        output_data_path = out_dir / f"output-data_{suffix}.jsonl"
 
         metadata = self._metadata(normalized_tasks, timestamp)
         metadata_path.write_text(
@@ -2401,8 +2407,8 @@ Examples:
     print(f"\nDone. Output directory: {result.output_dir}")
     print(f"  metadata:         metadata_{result.suffix}.json")
     print(f"  metrics:          metrics_{result.suffix}.json")
-    print(f"  detailed_results: detailed_results_{result.suffix}.jsonl")
-    print(f"  output_data:      output_data_{result.suffix}.jsonl")
+    print(f"  detailed_results: detailed-results_{result.suffix}.jsonl")
+    print(f"  output_data:      output-data_{result.suffix}.jsonl")
 
 
 __all__ = [
