@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import subprocess
+import importlib
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +25,7 @@ from agent_cap.runner.llm_client import (
     _SCHEMA_PATCHES,
 )
 from agent_cap.runner.tool_backends import (
+    MedAgentBenchToolBackend,
     MCPToolBackend,
     SWEBenchToolBackend,
     ToolBackend,
@@ -379,13 +381,16 @@ async def run_single_example(
             tool_start = time.perf_counter()
             is_error = False
             error_msg = None
+            tool_result: Any = [{"type": "text", "text": "ERROR: unknown tool failure"}]
             for _retry in range(3):
                 try:
                     tool_result = await backend.call_tool(name, cleaned_args)
                     break
                 except Exception as exc:
-                    if _retry < 2 and ("Cannot connect" in str(exc) or "500" in str(exc)):
-                        await asyncio.sleep(2 ** _retry)
+                    if _retry < 2 and (
+                        "Cannot connect" in str(exc) or "500" in str(exc)
+                    ):
+                        await asyncio.sleep(2**_retry)
                         continue
                     is_error = True
                     error_msg = str(exc)
@@ -689,9 +694,20 @@ async def run_experiment(
                 backend = SWEBenchToolBackend(runtime="modal")
             elif backend_name in ("swebench-k8s", "swe-bench-k8s"):
                 backend = SWEBenchToolBackend(runtime="k8s")
+            elif backend_name in ("medagentbench", "med-agent-bench"):
+                fhir_url = (
+                    config.mcp_server_url
+                    if config.mcp_server_url and "fhir" in config.mcp_server_url
+                    else None
+                )
+                backend = MedAgentBenchToolBackend(
+                    session=session,
+                    fhir_base_url=fhir_url,
+                )
             else:
                 raise ValueError(
-                    f"Unknown backend: {config.backend}. Supported: mcp, swebench-docker, swebench-modal"
+                    "Unknown backend: "
+                    f"{config.backend}. Supported: mcp, swebench-docker, swebench-modal, swebench-k8s, medagentbench"
                 )
 
             if backend_name == "mcp":
@@ -765,7 +781,7 @@ async def run_experiment(
                         )
                         tools = [t for t in all_tools if t.get("function", {}).get("name", "") in allowed]
                     elif backend_name != "mcp":
-                        # SWE-bench: tools come from backend.list_tools() per task (line above)
+                        # SWE-bench: tools come from backend.list_tools() per task
                         pass  # keep tools from backend.list_tools()
                     else:
                         tools = all_tools
@@ -805,15 +821,22 @@ async def run_experiment(
                                     (task_dir / "patch.diff").write_text(
                                         patch, encoding="utf-8"
                                     )
-                                    print(f"[task {i}] patch saved ({len(patch)} chars)", flush=True)
+                                    print(
+                                        f"[task {i}] patch saved ({len(patch)} chars)",
+                                        flush=True,
+                                    )
                                 else:
                                     print(f"[task {i}] no patch generated", flush=True)
                                 # Run tests and save results
                                 print(f"[task {i}] running tests...", flush=True)
                                 test_result = backend.run_tests(timeout=300)
-                                print(f"[task {i}] test_result: {test_result}", flush=True)
+                                print(
+                                    f"[task {i}] test_result: {test_result}", flush=True
+                                )
                                 (task_dir / "test_result.json").write_text(
-                                    json.dumps(test_result, ensure_ascii=False, indent=2),
+                                    json.dumps(
+                                        test_result, ensure_ascii=False, indent=2
+                                    ),
                                     encoding="utf-8",
                                 )
                                 print(
@@ -822,8 +845,13 @@ async def run_experiment(
                                     flush=True,
                                 )
                             except Exception as exc:
-                                print(f"[task {i}] post-loop error: {type(exc).__name__}: {exc}", flush=True)
-                                import traceback; traceback.print_exc()
+                                print(
+                                    f"[task {i}] post-loop error: {type(exc).__name__}: {exc}",
+                                    flush=True,
+                                )
+                                import traceback
+
+                                traceback.print_exc()
                             await backend.teardown()
 
                     output_data = {
@@ -878,19 +906,162 @@ async def run_experiment(
 def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
     name = dataset_name.lower().replace("-", "_").replace(" ", "_")
 
-    if name in ("mcp_atlas", "mcpatlas"):
+    if name in ("imo_answerbench", "imoanswerbench"):
+        from datasets import load_dataset as hf_load
+
+        ds = hf_load("Hwilner/imo-answerbench", split="train")
+        tasks: List[UnifiedTask] = []
+        for i, ex in enumerate(ds):
+            if not isinstance(ex, dict):
+                continue
+
+            problem_id = ex.get("Problem ID", f"imo-{i}")
+            problem = str(ex.get("Problem", "")).strip()
+            if not problem:
+                continue
+
+            short_answer = str(ex.get("Short Answer", "")).strip()
+            category = str(ex.get("Category", "math"))
+
+            prompt = (
+                f"{problem}\n\n"
+                r"Solve this step by step. Place your final numerical answer inside \boxed{}"
+            )
+
+            tasks.append(
+                UnifiedTask(
+                    task_id=str(problem_id),
+                    task_name=problem[:80],
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an expert mathematical problem solver with "
+                                "access to a Python execution tool. Use it for calculations "
+                                "when useful. Put your final answer in \\boxed{}."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    eval_config={
+                        "type": "math_verify",
+                        "expected": short_answer,
+                        "category": category,
+                    },
+                )
+            )
+
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
+    if name in ("tau2_banking", "tau2_bench_banking", "tau2"):
+        tau2_root = Path(__file__).parent.parent.parent / "third_party" / "tau2-bench"
+        tau2_src = tau2_root / "src"
+        if not tau2_src.exists():
+            raise FileNotFoundError(
+                f"tau2-bench source not found at {tau2_src}. "
+                "Clone https://github.com/sierra-research/tau2-bench into third_party/tau2-bench"
+            )
+
+        import sys
+
+        tau2_src_str = str(tau2_src.resolve())
+        if tau2_src_str not in sys.path:
+            sys.path.insert(0, tau2_src_str)
+
+        tasks_dir = (
+            tau2_root / "data" / "tau2" / "domains" / "banking_knowledge" / "tasks"
+        )
+        if not tasks_dir.exists():
+            raise FileNotFoundError(
+                f"tau2 banking tasks directory not found: {tasks_dir}"
+            )
+
+        tasks: List[UnifiedTask] = []
+        for task_file in sorted(tasks_dir.glob("task_*.json")):
+            raw = json.loads(task_file.read_text(encoding="utf-8"))
+            task_id = str(raw.get("id", task_file.stem))
+
+            description = raw.get("description") or {}
+            user_scenario = raw.get("user_scenario") or {}
+            instructions = str(user_scenario.get("instructions", ""))
+            persona = str(user_scenario.get("persona") or "")
+            prompt = (
+                "You are speaking to a banking customer. Continue the conversation and "
+                "resolve their request using tools.\n\n"
+                f"Customer persona:\n{persona}\n\n"
+                f"Customer scenario instructions:\n{instructions}"
+            )
+
+            task_name = str(description.get("purpose") or task_id)
+            evaluation_criteria = raw.get("evaluation_criteria") or {}
+            reward_basis = evaluation_criteria.get("reward_basis") or []
+            eval_cfg = {
+                "type": "tau2",
+                "domain": "banking_knowledge",
+                "retrieval_variant": "bm25",
+                "tau2_task": raw,
+                "required_documents": raw.get("required_documents") or [],
+                "reward_basis": list(reward_basis),
+            }
+
+            tasks.append(
+                UnifiedTask(
+                    task_id=task_id,
+                    task_name=str(task_name),
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a banking customer support agent. Use tools to "
+                                "assist the customer safely and accurately."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    eval_config=eval_cfg,
+                )
+            )
+
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
+    if name in (
+        "mcp_atlas",
+        "mcpatlas",
+        "mcp_atlas_finance",
+        "mcp_atlas_general",
+    ):
         from datasets import load_dataset as hf_load
 
         ds = hf_load("ScaleAI/mcp-atlas", split="train")
 
         # Servers available without paid API keys
         _FREE_SERVERS = {
-            "arxiv", "brave-search", "calculator", "cli-mcp-server",
-            "clinicaltrialsgov-mcp-server", "context7", "ddg-search",
-            "desktop-commander", "fetch", "filesystem", "git", "github",
-            "mcp-code-executor", "mcp-server-code-runner", "memory",
-            "met-museum", "open-library", "osm-mcp-server", "pubmed",
-            "weather", "whois", "wikipedia",
+            "arxiv",
+            "brave-search",
+            "calculator",
+            "cli-mcp-server",
+            "clinicaltrialsgov-mcp-server",
+            "context7",
+            "ddg-search",
+            "desktop-commander",
+            "fetch",
+            "filesystem",
+            "git",
+            "github",
+            "mcp-code-executor",
+            "mcp-server-code-runner",
+            "memory",
+            "met-museum",
+            "open-library",
+            "osm-mcp-server",
+            "pubmed",
+            "weather",
+            "whois",
+            "wikipedia",
         }
 
         def _get_server(tool_name: str) -> str:
@@ -899,21 +1070,81 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                     return s
             return tool_name.split("_")[0]
 
+        subset_filter: Optional[str] = None
+        if "finance" in name:
+            subset_filter = "finance"
+        elif "general" in name:
+            subset_filter = "general"
+
+        domain_task_ids: Optional[set[str]] = None
+        if subset_filter:
+            classifications_path = (
+                Path(__file__).parent.parent.parent
+                / "results"
+                / "mcpatlas_domain_classifications.jsonl"
+            )
+            if not classifications_path.exists():
+                raise FileNotFoundError(
+                    f"Domain classifications not found at {classifications_path}. "
+                    "Run scripts/classify_mcpatlas_domains.py first."
+                )
+
+            finance_ids: set[str] = set()
+            all_ids: set[str] = set()
+            with classifications_path.open("r", encoding="utf-8") as cf:
+                for line in cf:
+                    text = line.strip()
+                    if not text:
+                        continue
+                    entry = json.loads(text)
+                    task_id = str(entry.get("task_id", ""))
+                    if not task_id:
+                        continue
+                    all_ids.add(task_id)
+                    if "finance" in (entry.get("domains") or []):
+                        finance_ids.add(task_id)
+
+            if subset_filter == "finance":
+                domain_task_ids = finance_ids
+            else:
+                # general = NOT in finance set
+                domain_task_ids = all_ids - finance_ids
+
         tasks: List[UnifiedTask] = []
         for ex in ds:
             if not isinstance(ex, dict):
                 continue
+
             # Filter: only keep tasks whose tools are all free
             raw_tools = ex.get("ENABLED_TOOLS", "[]")
             enabled = json.loads(raw_tools) if isinstance(raw_tools, str) else raw_tools
-            tool_names = [t if isinstance(t, str) else t.get("name", "") for t in enabled]
+            tool_names = [
+                t if isinstance(t, str) else t.get("name", "") for t in enabled
+            ]
             servers = {_get_server(t) for t in tool_names if t}
             if not servers.issubset(_FREE_SERVERS):
                 continue
 
+            task_id = str(ex.get("TASK", ""))
+            if domain_task_ids is not None and task_id not in domain_task_ids:
+                continue
+            claims = ex.get("GTFA_CLAIMS", [])
+            if isinstance(claims, str):
+                try:
+                    claims = json.loads(claims)
+                except (json.JSONDecodeError, ValueError):
+                    try:
+                        import ast
+
+                        claims = ast.literal_eval(claims)
+                    except (ValueError, SyntaxError):
+                        claims = [claims] if claims.strip() else []
+            if not isinstance(claims, list):
+                claims = [str(claims)] if str(claims).strip() else []
+            claims = [str(c).strip() for c in claims if str(c).strip()]
             tasks.append(
                 UnifiedTask(
-                    task_id=ex.get("TASK", ""),
+                    task_id=task_id,
                     task_name=ex.get("PROMPT", "")[:80],
                     messages=[
                         {
@@ -923,6 +1154,7 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         {"role": "user", "content": ex.get("PROMPT", "")},
                     ],
                     enabled_tools=tool_names,
+                    eval_config={"type": "gtfa", "gtfa_claims": claims},
                 )
             )
         if limit > 0:
@@ -957,12 +1189,14 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         {"role": "user", "content": prompt},
                     ],
                     eval_config={
+                        "type": "swebench",
                         "instance_id": instance_id,
                         "repo": repo,
                         "base_commit": ex.get("base_commit", ""),
                         "dockerhub_tag": ex.get("dockerhub_tag", ""),
                         "test_patch": ex.get("test_patch", ""),
                         "fail_to_pass": ex.get("fail_to_pass", ""),
+                        "FAIL_TO_PASS": ex.get("fail_to_pass", ""),
                         "patch": ex.get("patch", ""),
                     },
                 )
@@ -971,8 +1205,91 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
             tasks = tasks[:limit]
         return tasks
 
+    if name in ("medagentbench", "med_agent_bench"):
+        data_path = (
+            Path(__file__).parent.parent.parent
+            / "third_party"
+            / "MedAgentBench"
+            / "data"
+            / "medagentbench"
+            / "test_data_v1.json"
+        )
+        funcs_path = (
+            Path(__file__).parent.parent.parent
+            / "third_party"
+            / "MedAgentBench"
+            / "data"
+            / "medagentbench"
+            / "funcs_v1.json"
+        )
+        if not data_path.exists() or not funcs_path.exists():
+            raise FileNotFoundError(
+                "MedAgentBench files not found at "
+                f"{data_path} and/or {funcs_path}. "
+                "Clone https://github.com/stanfordmlgroup/MedAgentBench into third_party/"
+            )
+
+        MedAgentBench_prompt = """You are an expert in using FHIR functions to assist medical professionals. You are given a question and a set of possible functions. Based on the question, you will need to make one or more function/tool calls to achieve the purpose.
+
+1. If you decide to invoke a GET function, you MUST put it in the format of
+GET url?param_name1=param_value1&param_name2=param_value2...
+
+2. If you decide to invoke a POST function, you MUST put it in the format of
+POST url
+[your payload data in JSON format]
+
+3. If you have got answers for all the questions and finished all the requested tasks, you MUST call to finish the conversation in the format of (make sure the list is JSON loadable.)
+FINISH([answer1, answer2, ...])
+
+Your response must be in the format of one of the three cases, and you can call only one function each time. You SHOULD NOT include any other text in the response.
+
+Here is a list of functions in JSON format that you can invoke. Note that you should use {api_base} as the api_base.
+{functions}
+
+Context: {context}
+Question: {question}"""
+
+        with data_path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        with funcs_path.open("r", encoding="utf-8") as f:
+            funcs = json.load(f)
+
+        functions_json = json.dumps(funcs)
+        tasks = []
+        for idx, item in enumerate(raw):
+            if not isinstance(item, dict):
+                continue
+            task_id = str(item.get("id", ""))
+            instruction = str(item.get("instruction", ""))
+            context = str(item.get("context", ""))
+            prompt_with_placeholder = MedAgentBench_prompt.format(
+                api_base="{api_base}",
+                functions=functions_json,
+                context=context,
+                question=instruction,
+            )
+            tasks.append(
+                UnifiedTask(
+                    task_id=task_id,
+                    task_name=f"medagentbench_{task_id}",
+                    messages=[
+                        {"role": "user", "content": prompt_with_placeholder},
+                    ],
+                    eval_config={
+                        "type": "medagentbench",
+                        "task_data": item,
+                        "task_index": idx,
+                        "prompt_with_placeholder": prompt_with_placeholder,
+                    },
+                )
+            )
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
     raise ValueError(
-        f"Unknown dataset: {dataset_name}. Supported: mcp-atlas, swe-bench-pro"
+        "Unknown dataset: "
+        f"{dataset_name}. Supported: imo-answerbench, mcp-atlas, swe-bench-pro, medagentbench, tau2-banking"
     )
 
 

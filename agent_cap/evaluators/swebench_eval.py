@@ -7,7 +7,7 @@ from agent_cap.core.evaluator import Evaluator, EvalResult
 class SWEBenchEvaluator(Evaluator):
     def evaluate(self, task_config: Dict[str, Any], backend: Any) -> EvalResult:
         ws = backend._workspace
-        if not ws or not ws.ready:
+        if not ws:
             return EvalResult(
                 passed=False, score=0.0, details={"error": "workspace not ready"}
             )
