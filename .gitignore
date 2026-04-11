@@ -1,6 +1,17 @@
 # Experiment guides with API keys — never commit
 RUN_EXPERIMENTS.md
 docs/RUN_IMO_BENCH.md
+docs/RUN_ALL_DATASETS.md
+scripts/run_api_matrix.sh
+docs/introduction.tex
+
+# Local scripts — keep but don't commit
+agent_cap/run_imo_answerbench.py
+agent_cap/run_imo_answerbench_2.py
+agent_cap/requirements_imoanswerbench.txt
+docs/generate_presentation.py
+docs/progress_update.html
+docs/RUN_SELFHOST.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -85,6 +96,7 @@ scripts/test_persist.txt
 
 # Task workspace
 tasks/
+!third_party/MedAgentBench/src/server/tasks/
 
 # Orchestrator state
 .sisyphus/

@@ -785,11 +785,10 @@ def compute_team_metrics(
     eval_details = (
         getattr(first_eval_result, "eval_details", None) if first_eval_result else None
     )
-    evaluator = (
-        eval_details.get("evaluator", "gtfa")
-        if isinstance(eval_details, dict) and eval_scores
-        else ("gtfa" if eval_scores else None)
-    )
+    if isinstance(eval_details, dict) and eval_scores:
+        evaluator = eval_details.get("evaluator")
+    else:
+        evaluator = None
 
     computed_metrics: Dict[str, Any] = {
         "performance": {
@@ -2061,6 +2060,7 @@ class TeamRunner:
                                     result.eval_passed = is_correct
                                     result.eval_score = 1.0 if is_correct else 0.0
                                     result.eval_details = {
+                                        "evaluator": "medagentbench",
                                         "task_id": task_data.get("id", task.task_id),
                                         "task_index": eval_config.get("task_index"),
                                         "fhir_api_base": fhir_api_base,
@@ -2090,6 +2090,7 @@ class TeamRunner:
                                                 1.0 if is_correct else 0.0
                                             )
                                             result.eval_details = {
+                                                "evaluator": "math_verify",
                                                 "expected": expected,
                                                 "model_answer": boxed,
                                                 "correct": is_correct,
@@ -2098,6 +2099,7 @@ class TeamRunner:
                                             result.eval_passed = False
                                             result.eval_score = 0.0
                                             result.eval_details = {
+                                                "evaluator": "math_verify",
                                                 "expected": expected,
                                                 "error": str(exc),
                                             }
@@ -2105,6 +2107,7 @@ class TeamRunner:
                                         result.eval_passed = False
                                         result.eval_score = 0.0
                                         result.eval_details = {
+                                            "evaluator": "math_verify",
                                             "expected": expected,
                                             "error": "no \\boxed{} found in output",
                                         }
@@ -2128,6 +2131,9 @@ class TeamRunner:
                                     result.eval_details = details
                                 elif details is not None:
                                     result.eval_details = {"details": details}
+                                if not isinstance(result.eval_details, dict):
+                                    result.eval_details = {}
+                                result.eval_details["evaluator"] = eval_type
 
                             for req_row in result.per_request_details:
                                 req_row["example_index"] = i
