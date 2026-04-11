@@ -85,6 +85,7 @@ scripts/test_persist.txt
 
 # Task workspace
 tasks/
+!third_party/MedAgentBench/src/server/tasks/
 
 # Orchestrator state
 .sisyphus/
