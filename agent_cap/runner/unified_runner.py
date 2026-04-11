@@ -694,6 +694,8 @@ async def run_experiment(
                 backend = SWEBenchToolBackend(runtime="modal")
             elif backend_name in ("swebench-k8s", "swe-bench-k8s"):
                 backend = SWEBenchToolBackend(runtime="k8s")
+            elif backend_name == "none":
+                backend = None
             elif backend_name in ("medagentbench", "med-agent-bench"):
                 fhir_url = (
                     config.mcp_server_url
@@ -707,10 +709,12 @@ async def run_experiment(
             else:
                 raise ValueError(
                     "Unknown backend: "
-                    f"{config.backend}. Supported: mcp, swebench-docker, swebench-modal, swebench-k8s, medagentbench"
+                    f"{config.backend}. Supported: mcp, swebench-docker, swebench-modal, swebench-k8s, medagentbench, none"
                 )
 
-            if backend_name == "mcp":
+            if backend_name == "none":
+                all_tools = []
+            elif backend_name == "mcp":
                 setup_ok = await backend.setup({})
                 if not setup_ok:
                     raise RuntimeError("MCP backend setup failed")
@@ -724,7 +728,7 @@ async def run_experiment(
             ):
                 wall_start = time.perf_counter()
                 for i, task in enumerate(normalized_tasks):
-                    if backend_name != "mcp":
+                    if backend_name not in ("mcp", "none"):
                         task_config = task.eval_config or {}
                         task_setup_ok = await backend.setup(task_config)
                         if not task_setup_ok:
@@ -769,9 +773,10 @@ async def run_experiment(
                                     )
                                 except Exception:
                                     pass
-                            await backend.teardown()
+                            if backend:
+                                await backend.teardown()
                             continue
-                        tools = await backend.list_tools()
+                        tools = await backend.list_tools() if backend else []
 
                     # Per-task tool filtering (MCP-ATLAS exposes 10-25 tools per task)
                     if task.enabled_tools and all_tools:
@@ -811,7 +816,7 @@ async def run_experiment(
                             parallel_tool_calls=(backend_name == "mcp"),
                         )
                     finally:
-                        if backend_name != "mcp":
+                        if backend_name not in ("mcp", "none"):
                             try:
                                 print(f"[task {i}] getting patch...", flush=True)
                                 patch = await backend.get_patch()
@@ -852,7 +857,8 @@ async def run_experiment(
                                 import traceback
 
                                 traceback.print_exc()
-                            await backend.teardown()
+                            if backend:
+                                await backend.teardown()
 
                     output_data = {
                         "index": i,
@@ -876,7 +882,7 @@ async def run_experiment(
                             pass
                 wall_end = time.perf_counter()
 
-            if backend_name == "mcp":
+            if backend_name == "mcp" and backend:
                 await backend.teardown()
     finally:
         gpu_stats = gpu_monitor.stop()
@@ -1171,11 +1177,34 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                 continue
             instance_id = ex.get("instance_id", "")
             repo = ex.get("repo", "")
+            base_commit = ex.get("base_commit", "")
             problem = ex.get("problem_statement", "")
+            requirements = ex.get("requirements", "")
+            interface = ex.get("interface", "")
+            repo_language = ex.get("repo_language", "")
+
+            extra_sections = ""
+            if requirements and str(requirements).strip():
+                extra_sections += f"\n\n## Requirements\n{str(requirements).strip()}\n"
+            if interface and str(interface).strip():
+                extra_sections += f"\n\n## Interface\n{str(interface).strip()}\n"
+
+            lang_note = f" (language: {repo_language})" if repo_language else ""
+
             prompt = (
-                f"You are working on {repo}. Fix this issue:\n\n{problem}\n\n"
-                "Use the available tools (read_file, write_file, run_shell, search_code) "
-                "to explore the codebase and make the fix."
+                f"You are a software engineer working on the repository "
+                f"**{repo}**{lang_note} "
+                f"(base commit: `{base_commit}`).\n\n"
+                f"## Issue\n{problem.strip()}\n"
+                f"{extra_sections}\n"
+                "## Task\n"
+                "Use the available tools to explore the codebase, understand the issue, "
+                "and make the necessary code changes to fix it.\n\n"
+                "Guidelines:\n"
+                "- Use `search_code` and `read_file` to find relevant code.\n"
+                "- Use `write_file` to apply your fix.\n"
+                "- Use `run_shell` to run commands if needed.\n"
+                "- Make minimal, targeted changes. Do not modify tests.\n"
             )
             tasks.append(
                 UnifiedTask(
@@ -1184,7 +1213,12 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are a software engineer. Use the available tools to read files, search code, run commands, and write fixes. Make minimal changes to fix the issue.",
+                            "content": (
+                                "You are a software engineer. Use the provided tools "
+                                "(read_file, write_file, run_shell, search_code) to "
+                                "explore the repository and fix the issue. "
+                                "Make minimal changes to non-test source files only."
+                            ),
                         },
                         {"role": "user", "content": prompt},
                     ],
@@ -1192,12 +1226,14 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         "type": "swebench",
                         "instance_id": instance_id,
                         "repo": repo,
-                        "base_commit": ex.get("base_commit", ""),
+                        "base_commit": base_commit,
                         "dockerhub_tag": ex.get("dockerhub_tag", ""),
                         "test_patch": ex.get("test_patch", ""),
                         "fail_to_pass": ex.get("fail_to_pass", ""),
                         "FAIL_TO_PASS": ex.get("fail_to_pass", ""),
                         "patch": ex.get("patch", ""),
+                        "before_repo_set_cmd": ex.get("before_repo_set_cmd", ""),
+                        "selected_test_files_to_run": ex.get("selected_test_files_to_run", ""),
                     },
                 )
             )

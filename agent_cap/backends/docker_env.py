@@ -150,26 +150,40 @@ class DockerWorkspace:
         )
         self._docker_exec(f"curl -sL '{parser_url}' -o /parser.py", timeout=30)
 
-        proc = self._docker_exec(
-            f"cd {self.workdir} && bash /run_script.sh {test_files_str} 2>&1",
+        # Official evaluation flow (matches swe_bench_pro_eval.py):
+        self._docker_exec(
+            f"cd {self.workdir} && bash /run_script.sh {test_files_str} "
+            f"> /workspace/stdout.log 2> /workspace/stderr.log",
             timeout=timeout,
         )
-        output = (proc.stdout + proc.stderr)[-2000:] if proc else ""
 
-        parse_proc = self._docker_exec(
-            f"cd {self.workdir} && python3 /parser.py --log '{output[-8000:]}' "
-            f"--expected '{json.dumps(tests)}' 2>/dev/null",
+        self._docker_exec(
+            f"cd {self.workdir} && python3 /parser.py "
+            f"/workspace/stdout.log /workspace/stderr.log /workspace/output.json",
             timeout=30,
         )
-        parse_output = parse_proc.stdout if parse_proc else ""
 
-        ok = "PASS" in parse_output.upper() if parse_output else False
+        result_proc = self._docker_exec("cat /workspace/output.json", timeout=10)
+        output_json = result_proc.stdout.strip() if result_proc and result_proc.returncode == 0 else ""
+
+        ok = False
+        details = ""
+        try:
+            parsed = json.loads(output_json) if output_json else {}
+            test_results = parsed.get("tests", [])
+            for t in test_results:
+                if t.get("status") == "PASSED":
+                    ok = True
+                    break
+            details = json.dumps(test_results[:10])
+        except json.JSONDecodeError:
+            details = output_json[:500]
 
         return {
             "passed": ok,
             "passed_count": 1 if ok else 0,
             "total": len(tests),
-            "details": output,
+            "details": details,
         }
 
     def cleanup(self):
