@@ -1030,10 +1030,28 @@ class TeamRunner:
         if hasattr(backend, "agent_policy"):
             agent_policy = str(getattr(backend, "agent_policy") or "")
 
+        TAU2_AGENT_INSTRUCTION = (
+            "You are a customer service agent that helps the user according to "
+            "the <policy> provided below.\n"
+            "In each turn you can either:\n"
+            "- Send a message to the user.\n"
+            "- Make a tool call.\n"
+            "You cannot do both at the same time.\n\n"
+            "Try to be helpful and always follow the policy. "
+            "Always make sure you generate valid JSON only."
+        )
+        if agent_policy:
+            executor_system = (
+                f"<instructions>\n{TAU2_AGENT_INSTRUCTION}\n</instructions>\n"
+                f"<policy>\n{agent_policy}\n</policy>"
+            )
+        else:
+            executor_system = PlanExecuteStrategy.EXEC_SYSTEM_PROMPT
+
         messages: List[Dict[str, Any]] = [
             {
                 "role": "system",
-                "content": agent_policy or PlanExecuteStrategy.EXEC_SYSTEM_PROMPT,
+                "content": executor_system,
             },
             {
                 "role": "user",
