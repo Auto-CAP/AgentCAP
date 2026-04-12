@@ -1939,9 +1939,9 @@ class TeamRunner:
                                         )
                                     except Exception:
                                         pass
-                                if backend_name not in (
-                                    "medagentbench",
-                                    "med-agent-bench",
+                                if backend_name in (
+                                    "swebench-docker",
+                                    "swebench-modal",
                                 ):
                                     await backend.teardown()
                                 continue
