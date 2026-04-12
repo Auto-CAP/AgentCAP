@@ -601,9 +601,29 @@ def compute_aggregated_metrics(
             "total_tool_calls": total_tool_calls,
         },
         "quality": {
-            "total_examples": total_examples,
-            "completed": completed_examples,
-            "errors": error_examples,
+            "acc": round(
+                sum(float(r.eval_score) for r in results if r.eval_score is not None)
+                / max(sum(1 for r in results if r.eval_score is not None), 1),
+                3,
+            )
+            if any(r.eval_score is not None for r in results)
+            else None,
+            "task_coverage": round(
+                sum(1 for r in results if r.eval_passed)
+                / max(sum(1 for r in results if r.eval_passed is not None), 1),
+                3,
+            )
+            if any(r.eval_passed is not None for r in results)
+            else None,
+            "evaluator": next(
+                (
+                    r.eval_details.get("evaluator")
+                    for r in results
+                    if isinstance(r.eval_details, dict)
+                    and r.eval_details.get("evaluator")
+                ),
+                None,
+            ),
         },
         "hardware": {
             "gpu_type": hw_info.get("gpu_type", "unknown"),
