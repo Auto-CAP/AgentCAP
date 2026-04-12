@@ -1094,7 +1094,10 @@ class TeamRunner:
                     )
                     + "\n\n"
                     "Plan only the next step the agent should take. Be specific "
-                    "about which tools to use."
+                    "about which tool to call and with what arguments.\n"
+                    "IMPORTANT: When the user's request requires a state change, "
+                    "you MUST plan a tool call to execute it — do NOT just "
+                    "respond with text."
                 )
 
             plan_messages: List[Dict[str, Any]] = [
