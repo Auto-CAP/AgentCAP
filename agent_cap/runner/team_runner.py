@@ -1038,7 +1038,14 @@ class TeamRunner:
             "- Make a tool call.\n"
             "You cannot do both at the same time.\n\n"
             "Try to be helpful and always follow the policy. "
-            "Always make sure you generate valid JSON only."
+            "Always make sure you generate valid JSON only.\n\n"
+            "Typical workflow:\n"
+            "1. Use KB_search to look up policy/product info when needed\n"
+            "2. Use get_user_information_by_* to look up customer details\n"
+            "3. Use get_credit_card_accounts_by_user, "
+            "get_credit_card_transactions_by_user etc. to check account state\n"
+            "4. Use write tools (change_user_email, etc.) to fulfill requests\n"
+            "5. Use transfer_to_human_agents when beyond scope"
         )
         if agent_policy:
             executor_system = (
@@ -1082,19 +1089,25 @@ class TeamRunner:
 
             tau2_plan_system = PlanExecuteStrategy.PLAN_SYSTEM_PROMPT
             if agent_policy:
+                tool_names = ", ".join(
+                    t.get("function", {}).get("name", "")
+                    for t in tools
+                    if t.get("function", {}).get("name")
+                )
                 tau2_plan_system = (
-                    "You are planning actions for a customer service agent with "
-                    "the following policy:\n\n"
-                    f"{agent_policy}\n\n"
-                    "Available tools: "
-                    + ", ".join(
-                        t.get("function", {}).get("name", "")
-                        for t in tools
-                        if t.get("function", {}).get("name")
-                    )
-                    + "\n\n"
-                    "Plan only the next step the agent should take. Be specific "
-                    "about which tool to call and with what arguments.\n"
+                    "You are planning actions for a customer service agent.\n\n"
+                    f"<policy>\n{agent_policy}\n</policy>\n\n"
+                    f"Available tools: {tool_names}\n\n"
+                    "Typical workflow:\n"
+                    "1. Use KB_search to look up policy/product info when needed\n"
+                    "2. Use get_user_information_by_* to look up customer details\n"
+                    "3. Use get_credit_card_accounts_by_user, "
+                    "get_credit_card_transactions_by_user etc. to check account state\n"
+                    "4. Use write tools (change_user_email, apply_for_credit_card, "
+                    "etc.) to fulfill the customer's request\n"
+                    "5. Use transfer_to_human_agents when the request is beyond scope\n\n"
+                    "Plan only the next step. Be specific about which tool to call "
+                    "and with what arguments.\n"
                     "IMPORTANT: When the user's request requires a state change, "
                     "you MUST plan a tool call to execute it — do NOT just "
                     "respond with text."

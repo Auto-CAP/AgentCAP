@@ -169,6 +169,15 @@ class MedAgentBenchToolBackend(ToolBackend):
     async def setup(self, task_config: Dict[str, Any]) -> bool:
         del task_config
 
+        if self._fhir_base:
+            # Server already running, reuse it
+            try:
+                async with self._session.get(f"{self._fhir_base}/metadata") as resp:
+                    if resp.status == 200:
+                        return True
+            except Exception:
+                pass
+
         if self._external_url:
             self._fhir_base = self._external_url
         else:
