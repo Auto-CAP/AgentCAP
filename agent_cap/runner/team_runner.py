@@ -1939,7 +1939,11 @@ class TeamRunner:
                                         )
                                     except Exception:
                                         pass
-                                await backend.teardown()
+                                if backend_name not in (
+                                    "medagentbench",
+                                    "med-agent-bench",
+                                ):
+                                    await backend.teardown()
                                 continue
                             shared_tools = await backend.list_tools()
 
