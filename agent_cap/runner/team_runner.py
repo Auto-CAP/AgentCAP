@@ -2139,7 +2139,8 @@ class TeamRunner:
                                     result.eval_details = {"details": details}
                                 if not isinstance(result.eval_details, dict):
                                     result.eval_details = {}
-                                result.eval_details["evaluator"] = eval_type
+                                if "evaluator" not in result.eval_details:
+                                    result.eval_details["evaluator"] = eval_type
 
                             for req_row in result.per_request_details:
                                 req_row["example_index"] = i
