@@ -315,11 +315,14 @@ class PlanExecuteStrategy(DelegationStrategy):
 
         tool_names_str = ""
         if tools:
-            tool_names_str = "\n\nAvailable tools: " + ", ".join(
-                t.get("function", {}).get("name", "")
-                for t in tools
-                if t.get("function", {}).get("name")
-            )
+            tool_lines = []
+            for t in tools:
+                fn = t.get("function", {})
+                name = fn.get("name", "")
+                desc = fn.get("description", "")
+                if name:
+                    tool_lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+            tool_names_str = "\n\nAvailable tools:\n" + "\n".join(tool_lines)
 
         plan_messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.PLAN_SYSTEM_PROMPT + tool_names_str},
