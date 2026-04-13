@@ -313,8 +313,16 @@ class PlanExecuteStrategy(DelegationStrategy):
         if task.messages:
             user_prompt = str(task.messages[-1].get("content", ""))
 
+        tool_names_str = ""
+        if tools:
+            tool_names_str = "\n\nAvailable tools: " + ", ".join(
+                t.get("function", {}).get("name", "")
+                for t in tools
+                if t.get("function", {}).get("name")
+            )
+
         plan_messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": self.PLAN_SYSTEM_PROMPT},
+            {"role": "system", "content": self.PLAN_SYSTEM_PROMPT + tool_names_str},
             {"role": "user", "content": user_prompt},
         ]
 
