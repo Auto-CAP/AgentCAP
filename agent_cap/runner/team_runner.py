@@ -2216,7 +2216,10 @@ class TeamRunner:
                                 except Exception:
                                     pass
                         finally:
-                            if backend_name != "mcp":
+                            if backend_name in (
+                                "swebench-docker",
+                                "swebench-modal",
+                            ):
                                 try:
                                     patch = await backend.get_patch()
                                     if patch:
