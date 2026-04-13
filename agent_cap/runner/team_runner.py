@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -2097,8 +2098,11 @@ class TeamRunner:
                                         backend, "fhir_api_base", ""
                                     )
                                     is_correct = bool(
-                                        medagent_eval(
-                                            task_data, results_obj, fhir_api_base
+                                        await asyncio.to_thread(
+                                            medagent_eval,
+                                            task_data,
+                                            results_obj,
+                                            fhir_api_base,
                                         )
                                     )
                                     result.eval_passed = is_correct
