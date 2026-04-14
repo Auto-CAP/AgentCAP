@@ -23,6 +23,7 @@ from agent_cap.runner.llm_client import (
     _SCHEMA_PATCHES,
 )
 from agent_cap.runner.tool_backends import (
+    MathPythonToolBackend,
     MCPToolBackend,
     SWEBenchToolBackend,
     ToolBackend,
@@ -676,9 +677,11 @@ async def run_experiment(
                 backend = SWEBenchToolBackend(runtime="docker")
             elif backend_name in ("swebench-modal", "swe-bench-modal"):
                 backend = SWEBenchToolBackend(runtime="modal")
+            elif backend_name in ("math-python", "math_python"):
+                backend = MathPythonToolBackend()
             else:
                 raise ValueError(
-                    f"Unknown backend: {config.backend}. Supported: mcp, swebench-docker, swebench-modal"
+                    f"Unknown backend: {config.backend}. Supported: mcp, math-python, swebench-docker, swebench-modal"
                 )
 
             if backend_name == "mcp":
@@ -952,7 +955,7 @@ Examples:
         "--backend",
         type=str,
         default="mcp",
-        help="Tool backend: 'mcp' or 'swebench-docker' or 'swebench-modal'",
+        help="Tool backend: 'mcp', 'math-python', 'swebench-docker', or 'swebench-modal'",
     )
     parser.add_argument(
         "--swebench-runtime",

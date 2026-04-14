@@ -1,5 +1,6 @@
 aiohttp==3.13.2
 datasets==4.4.1
+google-genai==1.43.0
 ipykernel==6.29.5
 jupyter_client==8.6.3
 math-verify==0.8.0

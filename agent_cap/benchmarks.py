@@ -311,14 +311,31 @@ def _load_swebench_pro(
     return tasks
 
 
+
 def _load_imo_answerbench(num_tasks: int, seed: int) -> List[TaskDef]:
     from datasets import load_dataset
 
     ds = load_dataset("Hwilner/imo-answerbench", split="train")
-    samples = _sample(list(ds), num_tasks, seed)
+
+    # Build the exact Problem IDs we want
+    prefixes = [
+        "imo-bench-algebra",
+        "imo-bench-combinatorics",
+        "imo-bench-geometry",
+        "imo-bench-number_theory",
+    ]
+
+    wanted_ids = {
+        f"{prefix}-{i:03d}"
+        for prefix in prefixes
+        for i in range(1, num_tasks + 1)
+    }
+
+    # Keep only examples whose Problem ID is in wanted_ids
+    selected = [ex for ex in ds if ex.get("Problem ID") in wanted_ids]
 
     tasks = []
-    for i, ex in enumerate(samples):
+    for i, ex in enumerate(selected):
         problem_id = ex.get("Problem ID", f"imo-answerbench-{i}")
         problem = ex["Problem"]
         short_answer = str(ex["Short Answer"]).strip()
@@ -328,14 +345,14 @@ def _load_imo_answerbench(num_tasks: int, seed: int) -> List[TaskDef]:
 
         prompt = (
             f"{problem}\n\n"
-            r"Solve this step by step. After your reasoning, write your final "
+            r"Solve this step by step. After your reasoning, write your final answer. "
             r"Place your final numerical answer inside \boxed{}"
         )
 
         tasks.append(
             TaskDef(
                 id=problem_id,
-                name=problem[:60],
+                name=problem_id,
                 messages=[{"role": "user", "content": prompt}],
                 category="math",
                 eval_config={
@@ -349,4 +366,5 @@ def _load_imo_answerbench(num_tasks: int, seed: int) -> List[TaskDef]:
                 },
             )
         )
+
     return tasks
