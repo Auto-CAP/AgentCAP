@@ -16,7 +16,8 @@ from pathlib import Path
 from tempfile import TemporaryFile
 from typing import Any, Dict, List, Optional
 from google import genai
-
+from datetime import datetime
+import math
 import aiohttp
 from math_verify import parse, verify
 
@@ -36,6 +37,210 @@ SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise a
 - The final answer may be an integer, fraction, expression, tuple, sequence, set, or other mathematical object, depending on the problem.
 - Do not put anything except the final answer inside the final \\boxed{...}.
 """
+
+def _env_str(name: str, default: str = "") -> str:
+    return os.getenv(name, default)
+
+
+def _env_int(name: str, default: int = 0) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return int(value)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_dir = Path(os.getenv("RESULTS_DIR", ".")) / "imo_answerbench"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    detailed_results_path = results_dir / f"detailed-results_imo-answerbench_{timestamp}.jsonl"
+    metadata_path = results_dir / f"metadata_imo-answerbench_{timestamp}.json"
+    metrics_path = results_dir / f"metrics_imo-answerbench_{timestamp}.json"
+    output_data_path = results_dir / f"output-data_imo-answerbench_{timestamp}.jsonl"
+
+    # Create empty files first
+    detailed_results_path.touch()
+    output_data_path.touch()
+
+    metadata = {
+        "hardware": {
+            "gpu_type": _env_str("GPU_TYPE", "unknown"),
+            "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
+            "cpu_type": _env_str("CPU_TYPE", "unknown"),
+            "num_cpus": _env_int("NUM_CPUS", os.cpu_count() or 0),
+        },
+        "model_config": {
+            "model_name": _env_str("MODEL_NAME_FOR_METADATA", args.model_path),
+            "precision": _env_str("MODEL_PRECISION", args.dtype),
+        },
+        "system_environment": {
+            "inference_engine": _env_str("INFERENCE_ENGINE", "vllm"),
+            "is_local": _env_bool("IS_LOCAL", True),
+            "dataset": _env_str("DATASET_NAME", "imo_answerbench"),
+            "num_examples": args.num_tasks,
+            "max_turns": args.max_turns,
+            "max_tokens": args.max_tokens,
+            "temperature": args.temperature,
+            "timestamp": timestamp,
+        },
+    }
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=4)
+
+    # Optional placeholder metrics file for now
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "timestamp": timestamp,
+                "dataset": _env_str("DATASET_NAME", "imo_answerbench"),
+                "num_examples": args.num_tasks,
+                "status": "initialized",
+            },
+            f,
+            indent=4,
+        )
+
+    print(f"Created detailed results file: {detailed_results_path}")
+    print(f"Created metadata file:         {metadata_path}")
+    print(f"Created metrics file:          {metrics_path}")
+    print(f"Created output data file:      {output_data_path}")
+
+    return {
+        "timestamp": timestamp,
+        "results_dir": str(results_dir),
+        "detailed_results_path": str(detailed_results_path),
+        "metadata_path": str(metadata_path),
+        "metrics_path": str(metrics_path),
+        "output_data_path": str(output_data_path),
+    }
+
+def _safe_mean(values: List[float]) -> float:
+    return statistics.mean(values) if values else 0.0
+
+
+def _safe_sum(values: List[float]) -> float:
+    return float(sum(values)) if values else 0.0
+
+
+def _p99(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    if len(values) == 1:
+        return float(values[0])
+    return float(statistics.quantiles(values, n=100, method="inclusive")[98])
+
+
+def write_metrics_file(
+    results: List[Dict[str, Any]],
+    wall_time_s: float,
+    output_paths: Dict[str, str],
+    args: argparse.Namespace,
+) -> None:
+    total_examples = len(results)
+
+    latencies_s = [float(r["latency_ms"]) / 1000.0 for r in results]
+    ttft_s = [float(r["ttft_ms"]) / 1000.0 for r in results]
+    tpot_s = [float(r["tpot_ms_avg"]) / 1000.0 for r in results]
+
+    input_tokens_list = [int(r["input_tokens"]) for r in results]
+    output_tokens_list = [int(r["output_tokens"]) for r in results]
+    tool_calls_list = [int(r["tool_calls"]) for r in results]
+
+    total_input_tokens = int(sum(input_tokens_list))
+    total_output_tokens = int(sum(output_tokens_list))
+    total_tool_calls = int(sum(tool_calls_list))
+
+    # Each solve_one_task currently uses one run_single_example call,
+    # so we treat that as one request unless you later expose a richer request count.
+    num_requests_list = [1 for _ in results]
+    total_requests = int(sum(num_requests_list))
+
+    input_tokens_per_request = []
+    output_tokens_per_request = []
+    max_input_tokens_per_request_list = []
+
+    for r in results:
+        reqs = 1
+        total_in = int(r["input_tokens"])
+        total_out = int(r["output_tokens"])
+
+        input_tokens_per_request.append(total_in / reqs)
+        output_tokens_per_request.append(total_out / reqs)
+        max_input_tokens_per_request_list.append(float(total_in))
+
+    # Decode time estimate from TPOT * output tokens
+    decode_time_s_list = [
+        (float(r["tpot_ms_avg"]) / 1000.0) * int(r["output_tokens"])
+        for r in results
+    ]
+    total_decode_time_s = float(sum(decode_time_s_list))
+
+    acc = (
+        float(sum(float(r["score"]) for r in results)) / total_examples
+        if total_examples > 0
+        else 0.0
+    )
+
+    metrics = {
+        "performance": {
+            "e2e_s": float(wall_time_s),
+            "avg_e2e_latency_s": _safe_mean(latencies_s),
+            "p50_e2e_latency_s": float(statistics.median(latencies_s)) if latencies_s else 0.0,
+            "p99_e2e_latency_s": _p99(latencies_s),
+            "examples_per_second": (float(total_examples) / wall_time_s) if wall_time_s > 0 else 0.0,
+            "ttft": _safe_mean(ttft_s),
+            "p99_ttft": _p99(ttft_s),
+            "tpot": _safe_mean(tpot_s),
+            "p99_tpot": _p99(tpot_s),
+            "decode_time_s": total_decode_time_s,
+            "p99_decode_time_s": _p99(decode_time_s_list),
+            "output_throughput_tok_s": (float(total_output_tokens) / total_decode_time_s)
+            if total_decode_time_s > 0
+            else 0.0,
+        },
+        "agentic": {
+            "avg_total_input_tokens": _safe_mean([float(x) for x in input_tokens_list]),
+            "avg_total_output_tokens": _safe_mean([float(x) for x in output_tokens_list]),
+            "avg_tool_call_count": _safe_mean([float(x) for x in tool_calls_list]),
+            "avg_num_requests": _safe_mean([float(x) for x in num_requests_list]),
+            "avg_input_tokens_per_request": _safe_mean(input_tokens_per_request),
+            "avg_output_tokens_per_request": _safe_mean(output_tokens_per_request),
+            "avg_max_input_tokens_per_request": _safe_mean(max_input_tokens_per_request_list),
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "total_cached_tokens": 0,
+            "avg_cache_hit_rate": 0.0,
+            "total_requests": total_requests,
+            "total_tool_calls": total_tool_calls,
+        },
+        "quality": {
+            "acc": acc,
+            "claim_coverage": "",
+            "eval_judge": f"google/{args.gemini_model}",
+        },
+        "hardware": {
+            "gpu_type": _env_str("GPU_TYPE", "unknown"),
+            "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
+            "avg_gpu_utilization_pct": "",
+            "peak_gpu_memory_used_mb": "",
+            "avg_cpu_utilization_pct": "",
+        },
+    }
+
+    metrics_path = output_paths["metrics_path"]
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=4)
+
+    print(f"Wrote metrics file: {metrics_path}")
 
 
 @dataclass
@@ -644,6 +849,7 @@ def main() -> None:
     parser.add_argument("--gemini-model", type=str, default="gemini-3.1-flash-lite-preview")
 
     args = parser.parse_args()
+    output_paths = initialize_output_files(args)
     t0 = time.time()
 
     runtime_cfg = RuntimeConfig(

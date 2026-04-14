@@ -19,6 +19,7 @@ from agent_cap.runner.llm_client import (
     _to_int,
 )
 from agent_cap.runner.tool_backends import (
+    MathPythonToolBackend,
     MCPToolBackend,
     SWEBenchToolBackend,
     ToolBackend,
@@ -925,10 +926,12 @@ class TeamRunner:
                     backend = SWEBenchToolBackend(runtime="docker")
                 elif backend_name in ("swebench-modal", "swe-bench-modal"):
                     backend = SWEBenchToolBackend(runtime="modal")
+                elif backend_name in ("math-python", "math_python"):
+                    backend = MathPythonToolBackend()
                 else:
                     raise ValueError(
                         "Unknown backend: "
-                        f"{self.config.backend}. Supported: mcp, swebench-docker, swebench-modal"
+                        f"{self.config.backend}. Supported: mcp, math-python, swebench-docker, swebench-modal"
                     )
 
                 if backend_name == "mcp":
@@ -1194,7 +1197,7 @@ Examples:
         "--backend",
         type=str,
         default=None,
-        help="Tool backend: mcp, swebench-docker, swebench-modal",
+        help="Tool backend: mcp, math-python, swebench-docker, swebench-modal",
     )
     parser.add_argument(
         "--swebench-runtime",
