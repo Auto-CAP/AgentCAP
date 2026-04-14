@@ -842,7 +842,7 @@ def main() -> None:
     parser.add_argument("--stream-interval", type=int, default=200)
     parser.add_argument("--context-tokens", type=int, default=131072)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--gpu-memory-utilization", type=float, default=0.92)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.88)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--server-timeout", type=int, default=3600)
     parser.add_argument("--preload-workers", type=int, default=8)
