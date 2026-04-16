@@ -56,15 +56,25 @@ class FHIRMockServer:
 
     def _load_data(self) -> None:
         """Load all supported FHIR dump files into memory."""
+        import logging
+        _log = logging.getLogger(__name__)
         db: Dict[str, List[Dict[str, Any]]] = {}
         for resource_type in self.RESOURCE_TYPES:
             path = self._data_dir / f"{resource_type}.json"
             if not path.exists():
                 db[resource_type] = []
                 continue
-            with path.open("r", encoding="utf-8") as file:
-                payload = json.load(file)
-            db[resource_type] = payload if isinstance(payload, list) else []
+            try:
+                with path.open("r", encoding="utf-8") as file:
+                    payload = json.load(file)
+                db[resource_type] = payload if isinstance(payload, list) else []
+            except json.JSONDecodeError:
+                _log.warning(
+                    "FHIR data file %s is not valid JSON (may be a Git LFS pointer). "
+                    "Run `git lfs pull` to download real data. Starting with empty %s.",
+                    path, resource_type,
+                )
+                db[resource_type] = []
         self._db = db
 
     def _build_app(self) -> web.Application:

@@ -1872,10 +1872,14 @@ class TeamRunner:
                     )
 
                     backend = AsyncMathPythonBackend()
+                elif backend_name in ("financebench", "finance-bench", "finance_bench"):
+                    from agent_cap.runner.tool_backends import FinanceBenchToolBackend
+
+                    backend = FinanceBenchToolBackend()
                 else:
                     raise ValueError(
                         "Unknown backend: "
-                        f"{self.config.backend}. Supported: mcp, swebench-docker, swebench-modal, medagentbench, tau2, math-python"
+                        f"{self.config.backend}. Supported: mcp, swebench-docker, swebench-modal, medagentbench, tau2, math-python, financebench"
                     )
 
                 if backend_name == "mcp":
@@ -2108,6 +2112,9 @@ class TeamRunner:
                                     fhir_api_base = getattr(
                                         backend, "fhir_api_base", ""
                                     )
+                                    import asyncio as _asyncio
+                                    import functools as _functools
+                                    _loop = _asyncio.get_event_loop()
                                     is_correct = bool(
                                         await asyncio.to_thread(
                                             medagent_eval,
@@ -2125,6 +2132,62 @@ class TeamRunner:
                                         "fhir_api_base": fhir_api_base,
                                         "correct": is_correct,
                                         "finish_result": result.output_text,
+                                    }
+                                elif eval_type == "financebench":
+                                    import re as _re
+
+                                    gold = str(eval_config.get("answer", "")).strip()
+                                    pred = str(result.output_text or "").strip()
+
+                                    # Extract answer after "ANSWER:" marker if present
+                                    answer_match = _re.search(
+                                        r"ANSWER\s*:\s*(.+)", pred, _re.IGNORECASE | _re.DOTALL
+                                    )
+                                    if answer_match:
+                                        pred = answer_match.group(1).strip()
+
+                                    def _extract_number(text: str):
+                                        text = text.replace(",", "").replace("$", "").replace("%", "")
+                                        nums = _re.findall(r"-?\d+(?:\.\d+)?", text)
+                                        return float(nums[0]) if nums else None
+
+                                    gold_num = _extract_number(gold)
+                                    pred_num = _extract_number(pred)
+
+                                    is_correct = False
+                                    eval_method = "unknown"
+
+                                    if gold_num is not None and pred_num is not None:
+                                        # Numeric comparison with 2% tolerance
+                                        eval_method = "numeric_tolerance"
+                                        if abs(gold_num) < 1e-9:
+                                            is_correct = abs(pred_num) < 1e-6
+                                        else:
+                                            is_correct = abs(pred_num - gold_num) / abs(gold_num) <= 0.02
+                                    else:
+                                        # Text comparison: check if key terms from gold appear in pred
+                                        eval_method = "keyword_overlap"
+                                        gold_words = set(_re.findall(r"\w+", gold.lower()))
+                                        pred_words = set(_re.findall(r"\w+", pred.lower()))
+                                        stopwords = {"the", "a", "an", "is", "in", "of", "to", "and", "for", "that"}
+                                        gold_key = gold_words - stopwords
+                                        if gold_key:
+                                            overlap = len(gold_key & pred_words) / len(gold_key)
+                                            is_correct = overlap >= 0.5
+
+                                    result.eval_passed = is_correct
+                                    result.eval_score = 1.0 if is_correct else 0.0
+                                    result.eval_details = {
+                                        "evaluator": "financebench",
+                                        "eval_method": eval_method,
+                                        "gold_answer": gold,
+                                        "model_answer": pred,
+                                        "gold_num": gold_num,
+                                        "pred_num": pred_num,
+                                        "correct": is_correct,
+                                        "question_type": eval_config.get("question_type"),
+                                        "company": eval_config.get("company"),
+                                        "doc_name": eval_config.get("doc_name"),
                                     }
                                 elif eval_type == "math_verify":
                                     import importlib
