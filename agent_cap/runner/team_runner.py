@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -192,21 +193,27 @@ class PlanExecuteStrategy(DelegationStrategy):
     """Phase 1: planner generates plan. Phase 2: executor follows plan with tools."""
 
     PLAN_SYSTEM_PROMPT = (
-        "You are an expert planning assistant. Given a task, create a clear, "
-        "specific, step-by-step plan that another AI agent can follow.\n\n"
-        "The executor agent has access to tools but may have limited reasoning, "
-        "so your plan must be detailed and unambiguous.\n\n"
-        "Output a numbered list of concrete steps. Each step should specify:\n"
-        "- What tool to call (if applicable)\n"
-        "- What arguments to use\n"
-        "- What to do with the result\n\n"
-        "Do NOT execute the task yourself. Only produce the plan."
+        "You are a strategic planning agent. You are a PLANNER, not an implementer.\n\n"
+        "Your mission: produce a decision-complete plan for an executor agent. "
+        "A plan is decision-complete when the executor needs ZERO judgment calls — "
+        "every decision is made, every ambiguity resolved, every step is concrete.\n\n"
+        "Rules:\n"
+        "- Output a numbered list of steps. Each step must specify the exact tool to call, "
+        "the exact arguments, and what to do with the result.\n"
+        "- If a step has branching outcomes (success vs failure), specify what to do in each case.\n"
+        "- Do NOT leave choices to the executor. Make all decisions yourself.\n"
+        "- Do NOT execute the task yourself. Only produce the plan."
     )
 
     EXEC_SYSTEM_PROMPT = (
-        "You have been given a task and a step-by-step plan created by a planning agent. "
-        "Follow the plan carefully and execute each step using the available tools. "
-        "If a step fails, try to recover and continue with the remaining steps."
+        "You are a focused task executor. You have been given a task and a plan "
+        "created by a planning agent.\n\n"
+        "Rules:\n"
+        "- Follow the plan precisely, step by step, using the available tools.\n"
+        "- Execute decisively. Do not second-guess the plan unless a step is impossible.\n"
+        "- If a step fails, attempt recovery based on the plan's branching instructions. "
+        "If no recovery path is specified, adapt minimally and continue.\n"
+        "- Report results clearly after completing all steps."
     )
 
     def required_roles(self) -> List[str]:
@@ -306,8 +313,19 @@ class PlanExecuteStrategy(DelegationStrategy):
         if task.messages:
             user_prompt = str(task.messages[-1].get("content", ""))
 
+        tool_names_str = ""
+        if tools:
+            tool_lines = []
+            for t in tools:
+                fn = t.get("function", {})
+                name = fn.get("name", "")
+                desc = fn.get("description", "")
+                if name:
+                    tool_lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+            tool_names_str = "\n\nAvailable tools:\n" + "\n".join(tool_lines)
+
         plan_messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": self.PLAN_SYSTEM_PROMPT},
+            {"role": "system", "content": self.PLAN_SYSTEM_PROMPT + tool_names_str},
             {"role": "user", "content": user_prompt},
         ]
 
@@ -1024,10 +1042,35 @@ class TeamRunner:
         if hasattr(backend, "agent_policy"):
             agent_policy = str(getattr(backend, "agent_policy") or "")
 
+        TAU2_AGENT_INSTRUCTION = (
+            "You are a customer service agent that helps the user according to "
+            "the <policy> provided below.\n"
+            "In each turn you can either:\n"
+            "- Send a message to the user.\n"
+            "- Make a tool call.\n"
+            "You cannot do both at the same time.\n\n"
+            "Try to be helpful and always follow the policy. "
+            "Always make sure you generate valid JSON only.\n\n"
+            "Typical workflow:\n"
+            "1. Use KB_search to look up policy/product info when needed\n"
+            "2. Use get_user_information_by_* to look up customer details\n"
+            "3. Use get_credit_card_accounts_by_user, "
+            "get_credit_card_transactions_by_user etc. to check account state\n"
+            "4. Use write tools (change_user_email, etc.) to fulfill requests\n"
+            "5. Use transfer_to_human_agents when beyond scope"
+        )
+        if agent_policy:
+            executor_system = (
+                f"<instructions>\n{TAU2_AGENT_INSTRUCTION}\n</instructions>\n"
+                f"<policy>\n{agent_policy}\n</policy>"
+            )
+        else:
+            executor_system = PlanExecuteStrategy.EXEC_SYSTEM_PROMPT
+
         messages: List[Dict[str, Any]] = [
             {
                 "role": "system",
-                "content": agent_policy or PlanExecuteStrategy.EXEC_SYSTEM_PROMPT,
+                "content": executor_system,
             },
             {
                 "role": "user",
@@ -1058,19 +1101,28 @@ class TeamRunner:
 
             tau2_plan_system = PlanExecuteStrategy.PLAN_SYSTEM_PROMPT
             if agent_policy:
+                tool_names = ", ".join(
+                    t.get("function", {}).get("name", "")
+                    for t in tools
+                    if t.get("function", {}).get("name")
+                )
                 tau2_plan_system = (
-                    "You are planning actions for a customer service agent with "
-                    "the following policy:\n\n"
-                    f"{agent_policy}\n\n"
-                    "Available tools: "
-                    + ", ".join(
-                        t.get("function", {}).get("name", "")
-                        for t in tools
-                        if t.get("function", {}).get("name")
-                    )
-                    + "\n\n"
-                    "Plan only the next step the agent should take. Be specific "
-                    "about which tools to use."
+                    "You are planning actions for a customer service agent.\n\n"
+                    f"<policy>\n{agent_policy}\n</policy>\n\n"
+                    f"Available tools: {tool_names}\n\n"
+                    "Typical workflow:\n"
+                    "1. Use KB_search to look up policy/product info when needed\n"
+                    "2. Use get_user_information_by_* to look up customer details\n"
+                    "3. Use get_credit_card_accounts_by_user, "
+                    "get_credit_card_transactions_by_user etc. to check account state\n"
+                    "4. Use write tools (change_user_email, apply_for_credit_card, "
+                    "etc.) to fulfill the customer's request\n"
+                    "5. Use transfer_to_human_agents when the request is beyond scope\n\n"
+                    "Plan only the next step. Be specific about which tool to call "
+                    "and with what arguments.\n"
+                    "IMPORTANT: When the user's request requires a state change, "
+                    "you MUST plan a tool call to execute it — do NOT just "
+                    "respond with text."
                 )
 
             plan_messages: List[Dict[str, Any]] = [
@@ -1758,8 +1810,8 @@ class TeamRunner:
         traj_dir.mkdir(parents=True, exist_ok=True)
         metadata_path = out_dir / f"metadata_{suffix}.json"
         metrics_path = out_dir / f"metrics_{suffix}.json"
-        detailed_results_path = out_dir / f"detailed_results_{suffix}.jsonl"
-        output_data_path = out_dir / f"output_data_{suffix}.jsonl"
+        detailed_results_path = out_dir / f"detailed-results_{suffix}.jsonl"
+        output_data_path = out_dir / f"output-data_{suffix}.jsonl"
 
         metadata = self._metadata(normalized_tasks, timestamp)
         metadata_path.write_text(
@@ -1903,7 +1955,11 @@ class TeamRunner:
                                         )
                                     except Exception:
                                         pass
-                                await backend.teardown()
+                                if backend_name in (
+                                    "swebench-docker",
+                                    "swebench-modal",
+                                ):
+                                    await backend.teardown()
                                 continue
                             shared_tools = await backend.list_tools()
 
@@ -2060,14 +2116,11 @@ class TeamRunner:
                                     import functools as _functools
                                     _loop = _asyncio.get_event_loop()
                                     is_correct = bool(
-                                        await _loop.run_in_executor(
-                                            None,
-                                            _functools.partial(
-                                                medagent_eval,
-                                                task_data,
-                                                results_obj,
-                                                fhir_api_base,
-                                            ),
+                                        await asyncio.to_thread(
+                                            medagent_eval,
+                                            task_data,
+                                            results_obj,
+                                            fhir_api_base,
                                         )
                                     )
                                     result.eval_passed = is_correct
@@ -2202,7 +2255,8 @@ class TeamRunner:
                                     result.eval_details = {"details": details}
                                 if not isinstance(result.eval_details, dict):
                                     result.eval_details = {}
-                                result.eval_details["evaluator"] = eval_type
+                                if "evaluator" not in result.eval_details:
+                                    result.eval_details["evaluator"] = eval_type
 
                             for req_row in result.per_request_details:
                                 req_row["example_index"] = i
@@ -2240,7 +2294,10 @@ class TeamRunner:
                                 except Exception:
                                     pass
                         finally:
-                            if backend_name != "mcp":
+                            if backend_name in (
+                                "swebench-docker",
+                                "swebench-modal",
+                            ):
                                 try:
                                     patch = await backend.get_patch()
                                     if patch:
@@ -2470,8 +2527,8 @@ Examples:
     print(f"\nDone. Output directory: {result.output_dir}")
     print(f"  metadata:         metadata_{result.suffix}.json")
     print(f"  metrics:          metrics_{result.suffix}.json")
-    print(f"  detailed_results: detailed_results_{result.suffix}.jsonl")
-    print(f"  output_data:      output_data_{result.suffix}.jsonl")
+    print(f"  detailed_results: detailed-results_{result.suffix}.jsonl")
+    print(f"  output_data:      output-data_{result.suffix}.jsonl")
 
 
 __all__ = [

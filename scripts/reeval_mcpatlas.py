@@ -27,7 +27,10 @@ print(f"Loaded claims for {len(task_claims)} tasks")
 
 evaluator = GTFAEvaluator()
 base_dir = Path("/data/sicheng/agent-team-data")
-runs = sorted(base_dir.glob("*_mcpatlas/team_plan_execute/output_data_*.jsonl"))
+runs = sorted(
+    list(base_dir.glob("*_mcpatlas/team_plan_execute/output-data_*.jsonl"))
+    + list(base_dir.glob("*_mcpatlas/team_plan_execute/output_data_*.jsonl"))
+)
 
 print(f"Found {len(runs)} runs to re-evaluate\n")
 

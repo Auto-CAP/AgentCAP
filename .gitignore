@@ -12,6 +12,8 @@ agent_cap/requirements_imoanswerbench.txt
 docs/generate_presentation.py
 docs/progress_update.html
 docs/RUN_SELFHOST.md
+docs/RESULTS.md
+docs/results_*.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
