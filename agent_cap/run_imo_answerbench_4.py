@@ -26,14 +26,8 @@ from openai import OpenAI
 
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
-from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+from openai_harmony import HarmonyEncodingName, load_harmony_encoding, Conversation, Role, Message
 
-# You may need to adjust these two imports depending on your installed openai_harmony version.
-# Common possibilities:
-#   from openai_harmony import Conversation, Role
-# or
-#   from openai_harmony.conversation import Conversation, Role
-from openai_harmony import Conversation, Role
 
 
 SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
@@ -265,6 +259,19 @@ def write_metrics_file(
         json.dump(metrics, f, indent=4)
 
     print(f"Wrote metrics file: {metrics_path}")
+
+def _task_message_to_harmony(msg: Dict[str, Any]) -> Message:
+    role = msg["role"]
+    content = msg["content"]
+
+    if role == "system":
+        return Message.from_role_and_content(Role.SYSTEM, content)
+    if role == "user":
+        return Message.from_role_and_content(Role.USER, content)
+    if role == "assistant":
+        return Message.from_role_and_content(Role.ASSISTANT, content)
+
+    raise ValueError(f"Unsupported benchmark message role: {role}")
 
 
 @dataclass
@@ -797,17 +804,16 @@ def _extract_tool_call(last_message: Any) -> tuple[str, Dict[str, Any]]:
     raise ValueError(f"Could not extract tool arguments from message: {last_message!r}")
 
 
-def _append_tool_response_to_conversation(conversation: Any, tool_name: str, tool_output: str) -> None:
-    """
-    This is the part most likely to depend on your local Harmony package.
-    If your Conversation class supports appending raw dict messages, this works.
-    If not, replace this with the constructor your notebook uses for tool messages.
-    """
-    tool_message = {
-        "role": "tool",
-        "recipient": tool_name,
-        "content": [{"type": "text", "text": tool_output}],
-    }
+def _append_tool_response_to_conversation(
+    conversation: Any,
+    tool_output: str,
+    request_message: Any,
+) -> None:
+    tool_message = Message(
+        author="tool",
+        channel=getattr(request_message, "channel", None),
+        content=[{"type": "text", "text": tool_output}],
+    )
 
     if hasattr(conversation, "messages") and isinstance(conversation.messages, list):
         conversation.messages.append(tool_message)
@@ -863,8 +869,8 @@ def run_harmony_attempt(
 
     try:
         initial_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            *task.messages,
+            Message.from_role_and_content(Role.SYSTEM, SYSTEM_PROMPT),
+            *[_task_message_to_harmony(m) for m in task.messages],
         ]
 
         conversation = Conversation.from_messages(initial_messages)
@@ -873,7 +879,7 @@ def run_harmony_attempt(
             prompt_ids = encoding.render_conversation_for_completion(conversation, Role.ASSISTANT)
             total_input_tokens += len(prompt_ids)
 
-            remaining_ctx = max_tokens if max_tokens > 0 else 4096
+            remaining_ctx = min(max_tokens, 131072) - len(prompt_ids)
             if remaining_ctx <= 0:
                 errors.append("No remaining token budget.")
                 break
@@ -965,7 +971,11 @@ def run_harmony_attempt(
                     tool_name, tool_args = _extract_tool_call(last_message)
                     tool_call_count += 1
                     tool_output = backend.execute_tool(tool_name, tool_args)
-                    _append_tool_response_to_conversation(conversation, tool_name, tool_output)
+                    _append_tool_response_to_conversation(
+                        conversation,
+                        tool_output,
+                        last_message,
+                    )
                 except Exception as exc:
                     errors.append(f"Tool execution failed: {type(exc).__name__}: {exc}")
                     break
