@@ -415,7 +415,12 @@ class SyncMathPythonBackend:
         result = self._backend.execute(name, "call", arguments)
         if result.success:
             return result.output
-        raise RuntimeError(result.output)
+
+        # AIMO3-style: feed tool failure back to the model as tool output
+        output = result.output or "Unknown tool error."
+        if not str(output).startswith("[ERROR]"):
+            output = f"[ERROR] {output}"
+        return output
 
     def teardown(self) -> None:
         self._backend.teardown()
@@ -1145,7 +1150,16 @@ def run_harmony_attempt(
                     tool_name, tool_args = _extract_tool_call(last_message)
                     tool_call_count += 1
                     tool_output = backend.execute_tool(tool_name, tool_args)
-                    print(f'[run_imo_answerbench_4.py][line 1146] python tool called {tool_call_count} times ', flush = True)
+
+                    print(
+                        f'[run_imo_answerbench_4.py] python tool called {tool_call_count} times',
+                        flush=True
+                    )
+
+                    if "[ERROR] Execution timed out" in tool_output:
+                        errors.append("Python tool timeout")
+                    elif tool_output.startswith("[ERROR]") or "Traceback" in tool_output or "Error:" in tool_output:
+                        errors.append("Python tool error")
 
                     _append_tool_response_to_conversation(
                         conversation,
@@ -1153,8 +1167,12 @@ def run_harmony_attempt(
                         tool_output,
                         last_message,
                     )
+
+                    # continue the loop; do NOT break on tool failure
+                    continue
+
                 except Exception as exc:
-                    errors.append(f"Tool execution failed: {type(exc).__name__}: {exc}")
+                    errors.append(f"Tool plumbing failed: {type(exc).__name__}: {exc}")
                     break
             else:
                 content = getattr(last_message, "content", None) or []
