@@ -973,7 +973,7 @@ def run_harmony_attempt(
     try:
         tool_config = ToolNamespaceConfig(
             name="python",
-            description=backend.list_tools()[0]["description"] if backend.list_tools() else (
+            description=backend.list_tools()[0]["function"]["description"] if backend.list_tools() else (
                 "Use this tool to execute Python code for calculations, verification, "
                 "examples, and small brute-force checks. Always use print() to show results."
             ),
