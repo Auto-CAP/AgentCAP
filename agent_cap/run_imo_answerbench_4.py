@@ -862,36 +862,40 @@ def _build_tool_response_message(tool_name: str, tool_output: str) -> Dict[str, 
 
 
 def _extract_tool_call(last_message: Any) -> tuple[str, Dict[str, Any]]:
-    """
-    Best-effort extraction of tool name + args from a Harmony assistant message.
-    You may need to tweak this depending on your openai_harmony object structure.
-    """
     recipient = getattr(last_message, "recipient", None)
     if recipient is None:
         raise ValueError("Assistant tool-call message missing recipient.")
 
-    # Common case: structured arguments already parsed.
+    content = getattr(last_message, "content", None) or []
+
     if hasattr(last_message, "arguments"):
         args = getattr(last_message, "arguments")
         if isinstance(args, dict):
-            return recipient, args
+            return str(recipient), args
 
-    # Fallback: content[0].text contains JSON arguments.
-    content = getattr(last_message, "content", None) or []
-    if content:
-        maybe_text = getattr(content[0], "text", None)
-        if maybe_text:
-            try:
-                return recipient, json.loads(maybe_text)
-            except Exception:
-                pass
+    maybe_text = None
+    if content and getattr(content[0], "text", None) is not None:
+        maybe_text = content[0].text
 
-    # Another fallback: raw text body
+    if isinstance(recipient, str) and "python" in recipient:
+        if isinstance(maybe_text, str) and maybe_text.strip():
+            return "python", {"code": maybe_text}
+
+    if isinstance(maybe_text, str):
+        try:
+            parsed = json.loads(maybe_text)
+            if isinstance(parsed, dict):
+                return str(recipient), parsed
+        except Exception:
+            pass
+
     raw_text = str(last_message)
     json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
     if json_match:
         try:
-            return recipient, json.loads(json_match.group(0))
+            parsed = json.loads(json_match.group(0))
+            if isinstance(parsed, dict):
+                return str(recipient), parsed
         except Exception:
             pass
 
