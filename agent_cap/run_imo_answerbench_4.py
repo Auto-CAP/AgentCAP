@@ -1141,6 +1141,8 @@ def run_harmony_attempt(
                     tool_name, tool_args = _extract_tool_call(last_message)
                     tool_call_count += 1
                     tool_output = backend.execute_tool(tool_name, tool_args)
+                    print('####### tool output line 1145 run_imo_answerbench_4.py ###############')
+                    print(tool_output)
                     _append_tool_response_to_conversation(
                         conversation,
                         tool_name,
