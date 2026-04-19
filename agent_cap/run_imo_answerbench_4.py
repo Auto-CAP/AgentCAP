@@ -27,7 +27,18 @@ from openai import OpenAI
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
 from agent_cap.runner.unified_runner import collect_hardware_info
-from openai_harmony import HarmonyEncodingName, load_harmony_encoding, Conversation, Role, Message
+from openai_harmony import (
+    HarmonyEncodingName,
+    load_harmony_encoding,
+    Conversation,
+    Role,
+    Message,
+    SystemContent,
+    ReasoningEffort,
+    ToolNamespaceConfig,
+    Author,
+    TextContent,
+)
 
 
 
@@ -889,14 +900,21 @@ def _extract_tool_call(last_message: Any) -> tuple[str, Dict[str, Any]]:
 
 def _append_tool_response_to_conversation(
     conversation: Any,
+    tool_name: str,
     tool_output: str,
     request_message: Any,
 ) -> None:
-    tool_message = Message(
-        author="tool",
-        channel=getattr(request_message, "channel", None),
-        content=[{"type": "text", "text": tool_output}],
+    tool_message = (
+        Message(
+            author=Author(role=Role.TOOL, name=tool_name),
+            content=[TextContent(text=tool_output)],
+        )
+        .with_recipient("assistant")
     )
+
+    channel = getattr(request_message, "channel", None)
+    if channel:
+        tool_message = tool_message.with_channel(channel)
 
     if hasattr(conversation, "messages") and isinstance(conversation.messages, list):
         conversation.messages.append(tool_message)
@@ -953,11 +971,26 @@ def run_harmony_attempt(
     backend.setup(task.eval_config or {})
 
     try:
+        tool_config = ToolNamespaceConfig(
+            name="python",
+            description=backend.list_tools()[0]["description"] if backend.list_tools() else (
+                "Use this tool to execute Python code for calculations, verification, "
+                "examples, and small brute-force checks. Always use print() to show results."
+            ),
+            tools=[],
+        )
+
+        system_content = (
+            SystemContent.new()
+            .with_model_identity(SYSTEM_PROMPT)
+            .with_reasoning_effort(reasoning_effort=ReasoningEffort.HIGH)
+            .with_tools(tool_config)
+        )
+
         initial_messages = [
-            Message.from_role_and_content(Role.SYSTEM, SYSTEM_PROMPT),
+            Message.from_role_and_content(Role.SYSTEM, system_content),
             *[_task_message_to_harmony(m) for m in task.messages],
         ]
-
         conversation = Conversation.from_messages(initial_messages)
 
         for turn_idx in range(max_turns):
@@ -1069,16 +1102,6 @@ def run_harmony_attempt(
 
             last_message = parsed_messages[-1]
 
-            if getattr(last_message, "channel", None) == "final":
-                content = getattr(last_message, "content", None) or []
-                if content and getattr(content[0], "text", None) is not None:
-                    response_text = content[0].text
-                else:
-                    response_text = "".join(text_chunks)
-
-                final_answer = _scan_for_answer(response_text)
-                break
-
             recipient = getattr(last_message, "recipient", None)
             has_tool_calls_this_request = recipient is not None and "python" in str(recipient)
             num_tool_calls_this_request = 1 if has_tool_calls_this_request else 0
@@ -1099,6 +1122,20 @@ def run_harmony_attempt(
                 }
             )
 
+            if getattr(last_message, "channel", None) == "final":
+                content = getattr(last_message, "content", None) or []
+                if content and getattr(content[0], "text", None) is not None:
+                    response_text = content[0].text
+                else:
+                    response_text = "".join(text_chunks)
+
+                final_answer = _scan_for_answer(response_text)
+                break
+
+            recipient = getattr(last_message, "recipient", None)
+            has_tool_calls_this_request = recipient is not None and "python" in str(recipient)
+            num_tool_calls_this_request = 1 if has_tool_calls_this_request else 0
+
             if recipient is not None and "python" in str(recipient):
                 try:
                     tool_name, tool_args = _extract_tool_call(last_message)
@@ -1106,6 +1143,7 @@ def run_harmony_attempt(
                     tool_output = backend.execute_tool(tool_name, tool_args)
                     _append_tool_response_to_conversation(
                         conversation,
+                        tool_name,
                         tool_output,
                         last_message,
                     )
