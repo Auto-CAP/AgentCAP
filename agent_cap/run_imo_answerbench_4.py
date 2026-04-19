@@ -1132,6 +1132,8 @@ def run_harmony_attempt(
                     response_text = "".join(text_chunks)
 
                 final_answer = _scan_for_answer(response_text)
+                # print('[run_imo_answerbench_4.py][line 1135] === Printing Response Text...')
+                # print(response_text)
                 break
 
             recipient = getattr(last_message, "recipient", None)
@@ -1143,8 +1145,8 @@ def run_harmony_attempt(
                     tool_name, tool_args = _extract_tool_call(last_message)
                     tool_call_count += 1
                     tool_output = backend.execute_tool(tool_name, tool_args)
-                    print('####### tool output line 1145 run_imo_answerbench_4.py ###############')
-                    print(tool_output)
+                    print(f'[run_imo_answerbench_4.py][line 1146] python tool called {tool_call_count} times ', flush = True)
+
                     _append_tool_response_to_conversation(
                         conversation,
                         tool_name,
@@ -1256,7 +1258,7 @@ async def solve_one_task(
 
 def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
     status = "✅" if result["correct"] else "❌"
-    print("\n" + "=" * 100)
+    print("\n" + "==============================================================================================================================")
     print(f"[{index}/{total}] {result['task_id']}  {status}")
     print(f"Name: {result['task_name']}")
     print(f"Expected:  {result['expected']}")
@@ -1272,7 +1274,7 @@ def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
     if result["errors"]:
         print(f"Errors: {result['errors']}")
     print("\nResponse preview:")
-    print(result["response"])
+    print(result["response"], flush=True)
 
 
 def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
@@ -1335,12 +1337,13 @@ async def async_main(
             seed=args.seed + index,
             judge=judge,
         )
-        print(f'[JUDGE RESPONSE]: {result["judge_response"]}')
+
 
         results.append(result)
         append_detailed_result_rows(result.get("detailed_rows", []), output_paths["detailed_results_path"])
         append_output_data_row(result, index, output_paths["output_data_path"])
         print_task_result(index, len(tasks), result)
+        print(f'[JUDGE RESPONSE]: {result["judge_response"]}', flush=True)
 
     return results
 
