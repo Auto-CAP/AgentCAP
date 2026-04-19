@@ -635,9 +635,7 @@ class VLLMInfraGPTOSS:
             list(executor.map(_read_file, files_to_load))
 
         elapsed = time.time() - start_time
-        print(
-            f"Processed {len(files_to_load)} files ({total_size / 1e9:.2f} GB) in {elapsed:.2f} seconds.\n"
-        )
+        print(f"Processed {len(files_to_load)} files ({total_size / 1e9:.2f} GB) in {elapsed:.2f} seconds.\n", flush = True)
 
     def _start_server(self) -> subprocess.Popen:
         cmd = [
@@ -678,7 +676,7 @@ class VLLMInfraGPTOSS:
 
         self.log_file = open("vllm_server.log", "w")
         print("Launching vLLM:")
-        print(" ".join(cmd))
+        print(" ".join(cmd), flush = True)
         return subprocess.Popen(
             cmd,
             stdout=self.log_file,
@@ -687,13 +685,13 @@ class VLLMInfraGPTOSS:
         )
 
     def _wait_for_server(self) -> None:
-        print("Waiting for vLLM server...")
+        print("Waiting for vLLM server...", flush = True)
         start_time = time.time()
         models_url = f"{self.base_url}/models"
 
         for i in range(self.cfg.server_timeout):
             if i % 100 == 0:
-                print(f"waiting for server to start: poll count={i}")
+                print(f"waiting for server to start: poll count={i}", flush=True)
 
             if self.server_process is None:
                 raise RuntimeError("Server process was not created.")
@@ -712,7 +710,7 @@ class VLLMInfraGPTOSS:
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     if resp.status == 200:
                         elapsed = time.time() - start_time
-                        print(f"Server is ready (took {elapsed:.2f} seconds).\n")
+                        print(f"Server is ready (took {elapsed:.2f} seconds).\n", flush=True)
                         return
             except Exception:
                 time.sleep(1)
