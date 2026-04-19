@@ -26,6 +26,7 @@ from openai import OpenAI
 
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
+from agent_cap.runner.unified_runner import collect_hardware_info
 from openai_harmony import HarmonyEncodingName, load_harmony_encoding, Conversation, Role, Message
 
 
@@ -78,9 +79,61 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _find_config_value(config: Any, key: str) -> Any:
+    if isinstance(config, dict):
+        if key in config:
+            return config[key]
+        for value in config.values():
+            found = _find_config_value(value, key)
+            if found is not None:
+                return found
+    elif isinstance(config, list):
+        for item in config:
+            found = _find_config_value(item, key)
+            if found is not None:
+                return found
+    return None
+
+
+def infer_model_precision(model_path: str) -> str:
+    config_path = Path(model_path) / "config.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            model_config = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return "unknown"
+
+    quant_method = _find_config_value(model_config, "quant_method")
+    if quant_method is not None:
+        quant_method_str = str(quant_method)
+        if re.search(r"\d", quant_method_str):
+            return quant_method_str
+
+    dtype = _find_config_value(model_config, "dtype")
+    if dtype is not None:
+        return str(dtype)
+
+    return "unknown"
+
+
 def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_dir = Path(os.getenv("RESULTS_DIR", ".")) / "imo_answerbench"
+
+    hw_info = collect_hardware_info()
+
+    model_name = Path(args.model_path).name
+    dataset_name = "imo_answerbench"
+    gpu_shortform = str(hw_info.get("gpu_type", "unknown")).replace(" ", "-")
+    number_of_gpus = int(hw_info.get("num_gpus", 0))
+
+    results_dir = (
+        Path("/llm-cache-pvc/outputs/TEAS_Development_Results_Private/agentic_results/eidf/vllm")
+        / model_name
+        / dataset_name
+        / f"{gpu_shortform}-x-{number_of_gpus}"
+        / "batch-size-default"
+        / timestamp
+    )
     results_dir.mkdir(parents=True, exist_ok=True)
 
     detailed_results_path = results_dir / f"detailed-results_imo-answerbench_{timestamp}.jsonl"
@@ -92,20 +145,15 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     output_data_path.touch()
 
     metadata = {
-        "hardware": {
-            "gpu_type": _env_str("GPU_TYPE", "unknown"),
-            "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
-            "cpu_type": _env_str("CPU_TYPE", "unknown"),
-            "num_cpus": _env_int("NUM_CPUS", os.cpu_count() or 0),
-        },
+        "hardware": hw_info,
         "model_config": {
             "model_name": _env_str("MODEL_NAME_FOR_METADATA", args.model_path),
-            "precision": _env_str("MODEL_PRECISION", args.dtype),
+            "precision": infer_model_precision(args.model_path),
         },
         "system_environment": {
             "inference_engine": _env_str("INFERENCE_ENGINE", "vllm"),
             "is_local": _env_bool("IS_LOCAL", True),
-            "dataset": _env_str("DATASET_NAME", "imo_answerbench"),
+            "dataset": dataset_name,
             "num_examples": args.num_tasks,
             "max_turns": args.max_turns,
             "max_tokens": args.max_tokens,
@@ -121,7 +169,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         json.dump(
             {
                 "timestamp": timestamp,
-                "dataset": _env_str("DATASET_NAME", "imo_answerbench"),
+                "dataset": dataset_name,
                 "num_examples": args.num_tasks,
                 "status": "initialized",
             },
@@ -129,6 +177,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
             indent=4,
         )
 
+    print(f"Created results directory:      {results_dir}")
     print(f"Created detailed results file: {detailed_results_path}")
     print(f"Created metadata file:         {metadata_path}")
     print(f"Created metrics file:          {metrics_path}")
@@ -259,6 +308,40 @@ def write_metrics_file(
         json.dump(metrics, f, indent=4)
 
     print(f"Wrote metrics file: {metrics_path}")
+
+def append_output_data_row(
+    result: Dict[str, Any],
+    index: int,
+    output_data_path: str,
+) -> None:
+    row = {
+        "index": index - 1,
+        "task_id": result["task_id"],
+        "input_tokens": result["input_tokens"],
+        "output_tokens": result["output_tokens"],
+        "tool_call_count": result["tool_calls"],
+        "num_requests": result["num_requests"],
+        "e2e_latency_s": float(result["latency_ms"]) / 1000.0,
+        "output_text": result["response"],
+        "errors": result["errors"],
+        "eval_passed": result["judge_equivalent"],
+        "eval_score": result["score"],
+        "eval_details": result["judge_response"],
+    }
+
+    with open(output_data_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+def append_detailed_result_rows(
+    detailed_rows: List[Dict[str, Any]],
+    detailed_results_path: str,
+) -> None:
+    with open(detailed_results_path, "a", encoding="utf-8") as f:
+        for row in detailed_rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+
 
 def _task_message_to_harmony(msg: Dict[str, Any]) -> Message:
     role = msg["role"]
@@ -825,6 +908,7 @@ def _append_tool_response_to_conversation(
 def run_harmony_attempt(
     *,
     task: Any,
+    example_index: int,
     client: OpenAI,
     model: str,
     encoding: Any,
@@ -864,7 +948,8 @@ def run_harmony_attempt(
     errors: List[str] = []
     response_text = ""
     final_answer = None
-
+    num_requests = 0
+    detailed_rows: List[Dict[str, Any]] = []
     backend.setup(task.eval_config or {})
 
     try:
@@ -894,6 +979,8 @@ def run_harmony_attempt(
                 "return_token_ids": True,
             }
 
+            num_requests += 1
+
             stream = client.completions.create(
                 model=model,
                 prompt=prompt_ids,
@@ -903,6 +990,8 @@ def run_harmony_attempt(
                 stream=True,
                 extra_body=extra,
             )
+
+            cached_tokens_this_request = 0
 
             try:
                 for chunk in stream:
@@ -921,6 +1010,16 @@ def run_harmony_attempt(
                     if new_text:
                         text_chunks.append(new_text)
 
+                    # Best-effort extraction of cached tokens if vLLM/OpenAI-compatible
+                    # usage metadata is present on the streamed chunk.
+                    usage = getattr(chunk, "usage", None)
+                    if usage is not None:
+                        prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
+                        if prompt_tokens_details is not None:
+                            maybe_cached = getattr(prompt_tokens_details, "cached_tokens", None)
+                            if maybe_cached is not None:
+                                cached_tokens_this_request = int(maybe_cached)
+
                 stream_end = time.time()
 
             finally:
@@ -935,6 +1034,21 @@ def run_harmony_attempt(
 
             total_prefill_time_s += max(0.0, first_token_time - stream_start)
             total_decode_time_s += max(0.0, stream_end - first_token_time)
+
+            input_tokens_this_request = len(prompt_ids)
+            output_tokens_this_request = len(token_buffer)
+            prefill_time_s_this_request = max(0.0, first_token_time - stream_start)
+            decode_time_s_this_request = max(0.0, stream_end - first_token_time)
+            tpot_s_this_request = (
+                decode_time_s_this_request / output_tokens_this_request
+                if output_tokens_this_request > 0
+                else 0.0
+            )
+            output_throughput_tok_s_this_request = (
+                output_tokens_this_request / decode_time_s_this_request
+                if decode_time_s_this_request > 0
+                else 0.0
+            )
 
             if not token_buffer:
                 errors.append("Empty token buffer.")
@@ -966,6 +1080,25 @@ def run_harmony_attempt(
                 break
 
             recipient = getattr(last_message, "recipient", None)
+            has_tool_calls_this_request = recipient is not None and "python" in str(recipient)
+            num_tool_calls_this_request = 1 if has_tool_calls_this_request else 0
+
+            detailed_rows.append(
+                {
+                    "example_index": example_index,
+                    "request_index": num_requests - 1,
+                    "input_tokens": input_tokens_this_request,
+                    "output_tokens": output_tokens_this_request,
+                    "cached_tokens": cached_tokens_this_request,
+                    "prefill_time_s": prefill_time_s_this_request,
+                    "decode_time_s": decode_time_s_this_request,
+                    "tpot_s": tpot_s_this_request,
+                    "output_throughput_tok_s": output_throughput_tok_s_this_request,
+                    "has_tool_calls": has_tool_calls_this_request,
+                    "num_tool_calls": num_tool_calls_this_request,
+                }
+            )
+
             if recipient is not None and "python" in str(recipient):
                 try:
                     tool_name, tool_args = _extract_tool_call(last_message)
@@ -1014,6 +1147,7 @@ def run_harmony_attempt(
             "correct": score >= 1.0,
             "response": response_text,
             "tool_calls": tool_call_count,
+            "num_requests": num_requests,
             "tool_latencies_ms": [],
             "input_tokens": total_input_tokens,
             "output_tokens": total_output_tokens,
@@ -1026,6 +1160,7 @@ def run_harmony_attempt(
             "judge_response": judge_result.get("raw_response"),
             "judge_status_code": judge_result.get("status_code"),
             "judge_attempts": 1,
+            "detailed_rows": detailed_rows,
         }
     
     finally:
@@ -1035,6 +1170,7 @@ def run_harmony_attempt(
 
 async def solve_one_task(
     task: Any,
+    example_index: int,
     model: str,
     base_url: str,
     max_turns: int,
@@ -1059,6 +1195,7 @@ async def solve_one_task(
     return await asyncio.to_thread(
         run_harmony_attempt,
         task=task,
+        example_index=example_index,
         client=client,
         model=model,
         encoding=encoding,
@@ -1130,7 +1267,10 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
             print(f"  {ans}: {cnt}")
 
 
-async def async_main(args: argparse.Namespace) -> List[Dict[str, Any]]:
+async def async_main(
+    args: argparse.Namespace,
+    output_paths: Dict[str, str],
+) -> List[Dict[str, Any]]:
     judge = OpenRouterEquivalenceJudge(model_name=args.judge_model)
 
     tasks = load_benchmark("imo_answerbench", num_tasks=args.num_tasks, seed=args.seed)
@@ -1140,6 +1280,7 @@ async def async_main(args: argparse.Namespace) -> List[Dict[str, Any]]:
     for index, task in enumerate(tasks, start=1):
         result = await solve_one_task(
             task=task,
+            example_index=index - 1,
             model=args.model,
             base_url=f"http://127.0.0.1:{args.port}/v1",
             max_turns=args.max_turns,
@@ -1155,6 +1296,8 @@ async def async_main(args: argparse.Namespace) -> List[Dict[str, Any]]:
         print(f'[JUDGE RESPONSE]: {result["judge_response"]}')
 
         results.append(result)
+        append_detailed_result_rows(result.get("detailed_rows", []), output_paths["detailed_results_path"])
+        append_output_data_row(result, index, output_paths["output_data_path"])
         print_task_result(index, len(tasks), result)
 
     return results
@@ -1216,7 +1359,7 @@ def main() -> None:
     infra = VLLMInfraGPTOSS(runtime_cfg)
     try:
         infra.start()
-        results = asyncio.run(async_main(args))
+        results = asyncio.run(async_main(args, output_paths))
     finally:
         infra.stop()
 
