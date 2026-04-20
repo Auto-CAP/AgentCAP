@@ -432,10 +432,16 @@ class OpenRouterEquivalenceJudge:
         model_name: str = "openrouter/elephant-alpha",
         api_key: Optional[str] = None,
         timeout: float = 60.0,
+        max_retries: int = 10,
+        backoff_start_s: float = 20.0,
+        backoff_cap_s: float = 60.0,
     ):
         self.model_name = model_name
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.backoff_start_s = backoff_start_s
+        self.backoff_cap_s = backoff_cap_s
 
         if not self.api_key:
             raise ValueError(
@@ -469,6 +475,15 @@ class OpenRouterEquivalenceJudge:
 
         return None
 
+    def _compute_backoff_seconds(self, attempt: int) -> float:
+        """
+        Linear backoff:
+        attempt=1 -> 20s
+        attempt=2 -> 40s
+        attempt>=3 -> 60s (cap)
+        """
+        return min(self.backoff_start_s * attempt, self.backoff_cap_s)
+
     def judge_equivalence(
         self,
         predicted: Optional[str],
@@ -501,40 +516,110 @@ Expected answer:
 {expected}
 """
 
-        response = requests.post(
-            url="https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                # "HTTP-Referer": "<YOUR_SITE_URL>",
-                # "X-OpenRouter-Title": "<YOUR_SITE_NAME>",
-            },
-            data=json.dumps(
+        payload = {
+            "model": self.model_name,
+            "messages": [
                 {
-                    "model": self.model_name,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        }
-                    ],
-                    "temperature": 0.0,
+                    "role": "user",
+                    "content": prompt,
                 }
-            ),
-            timeout=self.timeout,
-        )
+            ],
+            "temperature": 0.0,
+        }
 
-        response.raise_for_status()
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
 
-        data = response.json()
-        text = data["choices"][0]["message"]["content"]
-        equivalent = self._extract_json_bool(text)
+        last_error = None
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                response = requests.post(
+                    url="https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+
+                data = response.json()
+                text = data["choices"][0]["message"]["content"]
+                equivalent = self._extract_json_bool(text)
+
+                return {
+                    "equivalent": bool(equivalent) if equivalent is not None else False,
+                    "raw_response": text,
+                    "status_code": response.status_code,
+                    "response_json": data,
+                }
+
+            except requests.exceptions.RequestException as exc:
+                last_error = exc
+                status_code = None
+                response_json = None
+
+                if getattr(exc, "response", None) is not None:
+                    status_code = exc.response.status_code
+                    try:
+                        response_json = exc.response.json()
+                    except Exception:
+                        response_json = None
+
+                if attempt < self.max_retries:
+                    sleep_s = self._compute_backoff_seconds(attempt)
+                    print(
+                        f"[OpenRouterEquivalenceJudge] attempt {attempt}/{self.max_retries} failed: "
+                        f"{type(exc).__name__}: {exc}. Retrying in {sleep_s:.1f}s...",
+                        flush=True,
+                    )
+                    time.sleep(sleep_s)
+                    continue
+
+                return {
+                    "equivalent": False,
+                    "raw_response": (
+                        f"Judge failed after {self.max_retries} attempts: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    "status_code": status_code,
+                    "response_json": response_json,
+                }
+
+            except Exception as exc:
+                last_error = exc
+
+                if attempt < self.max_retries:
+                    sleep_s = self._compute_backoff_seconds(attempt)
+                    print(
+                        f"[OpenRouterEquivalenceJudge] attempt {attempt}/{self.max_retries} failed: "
+                        f"{type(exc).__name__}: {exc}. Retrying in {sleep_s:.1f}s...",
+                        flush=True,
+                    )
+                    time.sleep(sleep_s)
+                    continue
+
+                return {
+                    "equivalent": False,
+                    "raw_response": (
+                        f"Judge failed after {self.max_retries} attempts: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    "status_code": None,
+                    "response_json": None,
+                }
 
         return {
-            "equivalent": bool(equivalent) if equivalent is not None else False,
-            "raw_response": text,
-            "status_code": response.status_code,
-            "response_json": data,
+            "equivalent": False,
+            "raw_response": (
+                f"Judge failed after {self.max_retries} attempts: "
+                f"{type(last_error).__name__}: {last_error}"
+                if last_error is not None
+                else "Judge failed for unknown reason."
+            ),
+            "status_code": None,
+            "response_json": None,
         }
 
     async def judge_equivalence_async(
