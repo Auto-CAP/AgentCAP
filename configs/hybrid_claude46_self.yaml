@@ -1,0 +1,24 @@
+name: claude46-self
+description: "Baseline: Claude Opus 4.6 plans and executes"
+experiment_type: plan-execute
+
+planner:
+  id: anthropic/claude-opus-4.6
+  base_url: https://openrouter.ai/api
+  api_key: ${OPENROUTER_API_KEY}
+  is_local: false
+  input_price_per_1m: 5.0
+  output_price_per_1m: 25.0
+
+executor:
+  id: anthropic/claude-opus-4.6
+  base_url: https://openrouter.ai/api
+  api_key: ${OPENROUTER_API_KEY}
+  is_local: false
+  input_price_per_1m: 5.0
+  output_price_per_1m: 25.0
+
+mcp_server_url: http://localhost:1984
+max_turns: 50
+max_tokens: 8192
+plan_max_tokens: 4096

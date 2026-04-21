@@ -109,12 +109,14 @@ class ToolExecutor:
         max_output_chars: int = 16_000,
         container_id: Optional[str] = None,
         modal_sandbox: Optional[Any] = None,
+        exec_fn: Optional[Any] = None,
     ) -> None:
         self.workspace = Path(workspace_dir).resolve()
         self.shell_timeout = shell_timeout
         self.max_output_chars = max_output_chars
         self.container_id = container_id
         self.modal_sandbox = modal_sandbox
+        self.exec_fn = exec_fn
 
     def execute(
         self,
@@ -155,6 +157,8 @@ class ToolExecutor:
         raise ValueError(f"Unknown tool: {name}")
 
     def _exec(self, cmd: str) -> subprocess.CompletedProcess:
+        if self.exec_fn:
+            return self.exec_fn(cmd, timeout=self.shell_timeout)
         if self.modal_sandbox:
             process = self.modal_sandbox.exec(
                 "bash", "-c", f"cd {self.workspace} && {cmd}"

@@ -1,0 +1,170 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: mcpatlas-gptoss-smoke-
+  namespace: eidf230ns
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: mcpatlas-smoke
+        kueue.x-k8s.io/queue-name: eidf230ns-user-queue
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+        nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB
+      securityContext:
+        fsGroup: 2000
+      volumes:
+        - name: llm-cache
+          persistentVolumeClaim:
+            claimName: llm-cache-pvc
+
+      # --- sidecar: MCP-ATLAS tool server (no GPU) ---
+      initContainers: []
+
+      containers:
+        # ---- Container 1: MCP tool server sidecar ----
+        - name: mcp-server
+          image: ghcr.io/scaleapi/mcp-atlas:latest
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              # Fix httpx.TimeoutError removed in httpx>=0.28
+              python3 -c "
+              import site, os, httpx
+              sc = os.path.join(site.getsitepackages()[0], 'sitecustomize.py')
+              os.makedirs(os.path.dirname(sc), exist_ok=True)
+              with open(sc, 'w') as f:
+                  f.write('import httpx\\nif not hasattr(httpx, \"TimeoutError\"): httpx.TimeoutError = httpx.TimeoutException\\n')
+              print('httpx.TimeoutError patched')
+              "
+              exec /agent-environment/entrypoint.sh uv run python -m uvicorn agent_environment.main:app --host 0.0.0.0 --port 1984
+          workingDir: /agent-environment
+          ports:
+            - containerPort: 1984
+          env:
+            - name: ENABLED_SERVERS
+              value: "calculator,fetch,whois,weather,pubmed,ddg-search,wikipedia,arxiv,open-library,osm-mcp-server,met-museum,github"
+            - name: GITHUB_TOKEN
+              value: "YOUR_GITHUB_TOKEN_HERE"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+            limits:
+              cpu: "4"
+              memory: 16Gi
+
+        # ---- Container 2: vLLM + benchmark runner (GPU) ----
+        - name: runner
+          image: ghcr.io/pytorch/pytorch:2.10.0-cuda12.9-cudnn9-devel
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+
+              echo "=== Setting up Python env ==="
+              cd /workspace
+              . /workspace/venv_smoke/bin/activate
+              pip install -e /workspace/AgentCAP_smoke
+
+              echo "=== Verify environment ==="
+              python -c "
+              import torch, vllm, os
+              print('torch:', torch.__version__)
+              print('vllm:', vllm.__version__)
+              print('cuda:', torch.cuda.is_available())
+              print('gpu count:', torch.cuda.device_count())
+              print('model path exists:', os.path.isdir('/workspace/models/unsloth/gpt-oss-120b'))
+              "
+
+              echo "=== Starting vLLM server in background ==="
+              vllm serve \
+                  --model /workspace/models/unsloth/gpt-oss-120b \
+                  --served-model-name openai/gpt-oss-120b \
+                  --port 30002 \
+                  --gpu-memory-utilization 0.92 \
+                  --max-model-len 131072 \
+                  --tool-call-parser openai \
+                  > /workspace/vllm_smoke.log 2>&1 &
+              VLLM_PID=$!
+
+              echo "=== Waiting for vLLM to be ready ==="
+              for i in $(seq 1 180); do
+                  if bash -c "echo > /dev/tcp/localhost/30002" 2>/dev/null; then
+                      echo "vLLM port open after $((i*5))s"
+                      sleep 5
+                      echo "vLLM ready!"
+                      break
+                  fi
+                  if ! kill -0 $VLLM_PID 2>/dev/null; then
+                      echo "vLLM process died. Logs:"
+                      tail -100 /workspace/vllm_smoke.log
+                      exit 1
+                  fi
+                  sleep 5
+              done
+
+              if ! bash -c "echo > /dev/tcp/localhost/30002" 2>/dev/null; then
+                  echo "vLLM failed to start in 900s. Logs:"
+                  tail -100 /workspace/vllm_smoke.log
+                  exit 1
+              fi
+
+              echo "=== Waiting for MCP server sidecar ==="
+              for i in $(seq 1 60); do
+                  if bash -c "echo > /dev/tcp/localhost/1984" 2>/dev/null; then
+                      echo "MCP server ready after $((i*2))s"
+                      break
+                  fi
+                  sleep 2
+              done
+
+              echo "=== Running MCP-ATLAS benchmark ==="
+              python -m agent_cap.runner.unified_runner \
+                  --model-name openai/gpt-oss-120b \
+                  --dataset mcp-atlas \
+                  --backend mcp \
+                  --serving-engine vllm \
+                  --base-url http://localhost:30002/v1 \
+                  --mcp-server-url http://localhost:1984 \
+                  --max-turns 15 \
+                  --num-tasks 20 \
+                  --output-dir /workspace/results/mcpatlas_a100_20
+
+              echo "=== Done! ==="
+              ls -la /workspace/results/mcpatlas_smoke/
+
+              # Kill vLLM
+              kill $VLLM_PID 2>/dev/null || true
+          env:
+            - name: HF_HOME
+              value: /workspace/hf_cache
+            - name: HUGGINGFACE_HUB_CACHE
+              value: /workspace/hf_cache/hub
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+            - name: PIP_CACHE_DIR
+              value: /workspace/pip_cache
+            - name: PIP_BREAK_SYSTEM_PACKAGES
+              value: "1"
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: yufan-github-pat
+                  key: GITHUB_TOKEN
+          resources:
+            requests:
+              cpu: "4"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: llm-cache
+              mountPath: /workspace

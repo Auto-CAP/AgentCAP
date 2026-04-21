@@ -19,6 +19,10 @@ class SWEBenchBackend(ToolBackend):
             from agent_cap.backends.modal_env import ModalWorkspace
 
             self._workspace = ModalWorkspace(task_config)
+        elif self.runtime == "k8s":
+            from agent_cap.backends.k8s_env import K8sWorkspace
+
+            self._workspace = K8sWorkspace(task_config)
         else:
             from agent_cap.backends.docker_env import DockerWorkspace
 
@@ -31,11 +35,13 @@ class SWEBenchBackend(ToolBackend):
 
         modal_sb = getattr(self._workspace, "_sandbox", None)
         container_id = getattr(self._workspace, "container_id", None)
+        exec_fn = getattr(self._workspace, "_exec", None) if self.runtime == "k8s" else None
         self._executor = ToolExecutor(
             workspace_dir=self._workspace.workspace,
             shell_timeout=self.shell_timeout,
             container_id=container_id,
             modal_sandbox=modal_sb,
+            exec_fn=exec_fn,
         )
         return True
 
@@ -73,6 +79,11 @@ class SWEBenchBackend(ToolBackend):
         if self._workspace:
             return self._workspace.get_git_diff()
         return ""
+
+    def run_tests(self, timeout: int = 300) -> Dict[str, Any]:
+        if self._workspace and hasattr(self._workspace, "run_tests"):
+            return self._workspace.run_tests(timeout=timeout)
+        return {"passed": False, "reason": "no workspace or run_tests not supported"}
 
     def cleanup(self) -> None:
         if self._workspace:

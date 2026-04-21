@@ -28,6 +28,20 @@ from agent_cap.cost.hybrid import (
     compute_local_cost_runtime,
 )
 
+_PYTHON_BACKEND = None
+
+
+def _get_python_backend():
+    global _PYTHON_BACKEND
+    if _PYTHON_BACKEND is None:
+        from agent_cap.backends.math_python_backend import (
+            MathPythonBackend,
+            PYTHON_TOOL_DEFINITIONS,
+        )
+        _PYTHON_BACKEND = MathPythonBackend()
+        _PYTHON_BACKEND.setup({})
+    return _PYTHON_BACKEND
+
 LOGGER = logging.getLogger("hybrid_experiment")
 
 SYSTEM_PROMPT = (
@@ -55,6 +69,33 @@ EXEC_WITH_PLAN_PROMPT = (
     "TASK: {task}\n\n"
     "PLAN:\n{plan}\n\n"
     "Execute the plan now."
+)
+
+IMO_SYSTEM_PROMPT = (
+    "You are an expert mathematical problem solver with expertise at the IMO level, "
+    "with access to a Python execution tool.\n\n"
+    "Rules:\n"
+    "- Justify important steps.\n"
+    "- Use the python tool for calculations, symbolic checks (sympy), sanity checks, and small experiments.\n"
+    "- Keep Python usage focused and relevant. Always print important final values.\n"
+    "- Incorporate tool output back into your reasoning.\n"
+    "- Put your final answer inside \\boxed{...}."
+)
+
+IMO_PLAN_SYSTEM_PROMPT = (
+    "You are an elite mathematical problem-solving planner for IMO-level problems. "
+    "The executor has access to a single `python` tool that runs Python/sympy in a "
+    "persistent Jupyter kernel. Given a problem, output a short numbered plan the "
+    "executor can follow. For each step, state (a) whether to use python, (b) what to "
+    "compute or verify, and (c) how to use the result. Keep plans crisp: 4--8 steps. "
+    "Do NOT solve the problem yourself."
+)
+
+IMO_EXEC_PROMPT = (
+    "Problem:\n{task}\n\n"
+    "Plan:\n{plan}\n\n"
+    "Follow the plan. Use the `python` tool as needed. "
+    "Put the final answer inside \\boxed{{...}}."
 )
 
 THINK_PATTERN = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
@@ -246,11 +287,98 @@ def now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
+_SCHEMA_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _coerce_value(value: Any, schema: Optional[Dict[str, Any]]) -> Any:
+    """Best-effort coerce LLM-emitted value to schema-declared JSON type."""
+    if not isinstance(schema, dict):
+        return value
+    types = schema.get("type")
+    if isinstance(types, list):
+        type_set = [t for t in types if isinstance(t, str)]
+    elif isinstance(types, str):
+        type_set = [types]
+    else:
+        type_set = []
+
+    if isinstance(value, str):
+        if "integer" in type_set:
+            try:
+                return int(value)
+            except ValueError:
+                pass
+        if "number" in type_set:
+            try:
+                return float(value)
+            except ValueError:
+                pass
+        if "boolean" in type_set:
+            lv = value.strip().lower()
+            if lv in {"true", "1", "yes"}:
+                return True
+            if lv in {"false", "0", "no"}:
+                return False
+        if "array" in type_set and value.strip().startswith("["):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                pass
+        if "object" in type_set and value.strip().startswith("{"):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                pass
+    if isinstance(value, dict) and "object" in type_set:
+        props = schema.get("properties") or {}
+        return {k: _coerce_value(v, props.get(k)) for k, v in value.items()}
+    if isinstance(value, list) and "array" in type_set:
+        items_schema = schema.get("items") if isinstance(schema.get("items"), dict) else None
+        return [_coerce_value(v, items_schema) for v in value]
+    return value
+
+
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _coerce_time_field(key: str, value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    kl = key.lower()
+    is_time_field = (
+        kl in {"timemin", "time_min", "timemax", "time_max", "start", "end",
+               "starttime", "start_time", "endtime", "end_time", "after", "before"}
+    )
+    if is_time_field and _DATE_ONLY_RE.match(value.strip()):
+        suffix = "T23:59:59Z" if "max" in kl or kl in {"end", "endtime", "end_time", "before"} else "T00:00:00Z"
+        return value.strip() + suffix
+    return value
+
+
+def coerce_tool_args(tool_name: str, args: Any) -> Any:
+    schema = _SCHEMA_CACHE.get(tool_name)
+    if not isinstance(args, dict):
+        return args
+    if not schema:
+        return {k: _coerce_time_field(k, v) for k, v in args.items()}
+    props = schema.get("properties") or {}
+    return {
+        k: _coerce_time_field(k, _coerce_value(v, props.get(k)))
+        for k, v in args.items()
+    }
+
+
 async def list_openai_tools(
     session: aiohttp.ClientSession,
     mcp_server_url: str,
     enabled_tools: Sequence[str],
 ) -> List[Dict[str, Any]]:
+    if enabled_tools and "__PYTHON_TOOL__" in enabled_tools:
+        from agent_cap.backends.math_python_backend import PYTHON_TOOL_DEFINITIONS
+        for tool in PYTHON_TOOL_DEFINITIONS:
+            schema = tool.get("function", {}).get("parameters") or {}
+            _SCHEMA_CACHE[tool["function"]["name"]] = schema
+        return list(PYTHON_TOOL_DEFINITIONS)
     async with session.post(f"{mcp_server_url.rstrip('/')}/list-tools") as resp:
         if resp.status != 200:
             body = await resp.text()
@@ -266,13 +394,15 @@ async def list_openai_tools(
             continue
         if enabled and name not in enabled:
             continue
+        schema = tool.get("inputSchema") or tool.get("input_schema") or {}
+        _SCHEMA_CACHE[name] = schema
         transformed.append(
             {
                 "type": "function",
                 "function": {
                     "name": name,
                     "description": str(tool.get("description", "")),
-                    "parameters": tool.get("input_schema", {}),
+                    "parameters": schema,
                 },
             }
         )
@@ -446,12 +576,45 @@ async def chat_completion_streaming(
     )
 
 
+MAX_TOOL_RESULT_CHARS = 40000
+
+
+def _truncate_tool_result(payload: Any) -> Any:
+    if isinstance(payload, list):
+        total = 0
+        out = []
+        for item in payload:
+            if isinstance(item, dict) and "text" in item:
+                text = str(item.get("text", ""))
+                if total + len(text) > MAX_TOOL_RESULT_CHARS:
+                    allowed = max(0, MAX_TOOL_RESULT_CHARS - total)
+                    item = dict(item)
+                    item["text"] = (
+                        text[:allowed]
+                        + f"\n\n[...TRUNCATED: tool result was {len(text)} chars, kept first {allowed}]"
+                    )
+                    out.append(item)
+                    break
+                total += len(text)
+            out.append(item)
+        return out
+    return payload
+
+
 async def mcp_call_tool(
     session: aiohttp.ClientSession,
     mcp_server_url: str,
     tool_name: str,
     tool_args: Any,
 ) -> Any:
+    if tool_name == "python":
+        backend = _get_python_backend()
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, lambda: backend.execute(tool_name, "tc", tool_args if isinstance(tool_args, dict) else {})
+        )
+        text = result.output if not result.success else (result.output or "(no output)")
+        return _truncate_tool_result([{"type": "text", "text": text}])
     async with session.post(
         f"{mcp_server_url.rstrip('/')}/call-tool",
         json={"tool_name": tool_name, "tool_args": tool_args},
@@ -460,7 +623,7 @@ async def mcp_call_tool(
         if resp.status != 200:
             body = await resp.text()
             raise RuntimeError(f"tool call failed ({resp.status}): {body}")
-        return await resp.json()
+        return _truncate_tool_result(await resp.json())
 
 
 # ---------------------------------------------------------------------------
@@ -490,8 +653,10 @@ async def run_plan_phase(
         "Be specific about which tools to use and with what arguments."
     )
 
+    is_imo = "__PYTHON_TOOL__" in set(enabled_tools)
+    plan_system = IMO_PLAN_SYSTEM_PROMPT if is_imo else PLAN_SYSTEM_PROMPT
     messages = [
-        {"role": "system", "content": PLAN_SYSTEM_PROMPT},
+        {"role": "system", "content": plan_system},
         {"role": "user", "content": user_content},
     ]
 
@@ -566,14 +731,19 @@ async def run_exec_phase(
 ) -> PhaseResult:
     """Execute a task, optionally guided by a plan."""
     tools = await list_openai_tools(session, mcp_server_url, enabled_tools)
+    is_imo = "__PYTHON_TOOL__" in set(enabled_tools)
 
     if plan_text:
-        user_content = EXEC_WITH_PLAN_PROMPT.format(task=task_prompt, plan=plan_text)
+        if is_imo:
+            user_content = IMO_EXEC_PROMPT.format(task=task_prompt, plan=plan_text)
+        else:
+            user_content = EXEC_WITH_PLAN_PROMPT.format(task=task_prompt, plan=plan_text)
     else:
         user_content = task_prompt
 
+    exec_system = IMO_SYSTEM_PROMPT if is_imo else SYSTEM_PROMPT
     messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": exec_system},
         {"role": "user", "content": user_content},
     ]
 
@@ -639,6 +809,7 @@ async def run_exec_phase(
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             except json.JSONDecodeError:
                 args = {}
+            args = coerce_tool_args(name, args)
             try:
                 tool_payload = await mcp_call_tool(session, mcp_server_url, name, args)
             except Exception as exc:
@@ -826,13 +997,37 @@ def existing_task_ids(conn: sqlite3.Connection, experiment_name: str) -> set:
 # ---------------------------------------------------------------------------
 
 
-def load_tasks(num_tasks: int) -> List[Dict[str, Any]]:
-    ds = load_dataset("ScaleAI/MCP-Atlas", split="train")
-    n = min(max(num_tasks, 0), len(ds))
-    if n == 0:
-        return []
-    sel = ds.select(range(n))
-    return [sel[i] for i in range(n)]
+def load_tasks(num_tasks: int, dataset: str = "mcp-atlas") -> List[Dict[str, Any]]:
+    if dataset == "mcp-atlas":
+        ds = load_dataset("ScaleAI/MCP-Atlas", split="train")
+        n = min(max(num_tasks, 0), len(ds))
+        sel = ds.select(range(n)) if n > 0 else []
+        return [dict(sel[i]) for i in range(n)]
+    if dataset == "imo-answerbench":
+        ds = load_dataset("Hwilner/imo-answerbench", split="train")
+        by_cat: Dict[str, List[Any]] = {}
+        for ex in ds:
+            by_cat.setdefault(ex.get("Category", "Other"), []).append(ex)
+        categories = sorted(by_cat.keys())
+        per_cat = max(1, num_tasks // max(1, len(categories)))
+        out = []
+        for cat in categories:
+            for ex in by_cat[cat][:per_cat]:
+                prompt = (
+                    ex["Problem"]
+                    + "\n\nSolve this step by step. "
+                    + r"Place your final answer inside \boxed{}."
+                )
+                out.append({
+                    "TASK": ex.get("Problem ID", f"imo-{cat}-{len(out)}"),
+                    "PROMPT": prompt,
+                    "ENABLED_TOOLS": "[]",
+                    "GTFA_CLAIMS": [],
+                    "expected_answer": str(ex.get("Short Answer", "")).strip(),
+                    "Category": cat,
+                })
+        return out[:num_tasks]
+    raise ValueError(f"Unknown dataset: {dataset}")
 
 
 # ---------------------------------------------------------------------------
@@ -842,7 +1037,7 @@ def load_tasks(num_tasks: int) -> List[Dict[str, Any]]:
 
 async def run_experiment(args: argparse.Namespace) -> None:
     config = HybridConfig.from_yaml(args.config)
-    tasks = load_tasks(args.num_tasks)
+    tasks = load_tasks(args.num_tasks, dataset=args.dataset)
 
     if args.dry_run:
         print(f"Experiment: {config.name}")
@@ -870,6 +1065,8 @@ async def run_experiment(args: argparse.Namespace) -> None:
             task_id = str(row.get("TASK", f"mcpatlas-{idx}"))
             prompt = str(row.get("PROMPT", ""))
             enabled_tools = parse_enabled_tools(row.get("ENABLED_TOOLS"))
+            if args.dataset == "imo-answerbench":
+                enabled_tools = ["__PYTHON_TOOL__"]
 
             if task_id in done:
                 LOGGER.info(
@@ -982,7 +1179,7 @@ async def run_experiment(args: argparse.Namespace) -> None:
                 "plan_cost_usd": plan_cost,
                 "plan_latency_s": p_lat,
                 "exec_model_id": config.executor.id,
-                "exec_response": exec_result.response[:5000],
+                "exec_response": exec_result.response[:50000],
                 "exec_input_tokens": exec_result.input_tokens,
                 "exec_output_tokens": exec_result.output_tokens,
                 "exec_cost_usd": exec_cost,
@@ -1042,6 +1239,12 @@ def parse_args() -> argparse.Namespace:
         "--db",
         default="results/hybrid_experiments.db",
         help="SQLite database path (default: results/hybrid_experiments.db)",
+    )
+    parser.add_argument(
+        "--dataset",
+        default="mcp-atlas",
+        choices=["mcp-atlas", "imo-answerbench"],
+        help="Which benchmark to run (default: mcp-atlas)",
     )
     parser.add_argument(
         "--dry-run",
