@@ -10,11 +10,12 @@ from math_verify import parse, verify
 import aiohttp
 import asyncio
 import json
-
+from typing import Optional
 
 JUDGE_URL = "https://openrouter.ai/api/v1/chat/completions"
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "google/gemini-3.1-flash-lite-preview")
-JUDGE_PROMPT = """You are grading an IMO mathematical answer.
+JUDGE_MODEL_2 = os.environ.get("JUDGE_MODEL", "openrouter/elephant-alpha")
+JUDGE_PROMPT_2 = """You are grading an IMO mathematical answer.
 
 GROUND TRUTH ANSWER: {gt}
 SUBMITTED ANSWER: {pred}
@@ -39,11 +40,99 @@ An answer IS wrong when:
 Return only `yes` (equivalent/correct) or `no` (different/incomplete/wrong). No other text."""
 
 
+JUDGE_PROMPT = """
+You are a strict mathematical answer equivalence judge.
+
+Determine whether the following two final answers are mathematically equivalent.
+
+Rules:
+- Focus only on whether the predicted answer and expected answer represent the same mathematical value.
+- Ignore formatting differences like whitespace, commas, LaTeX wrappers, or extra prose.
+- If they represent the same integer or the same mathematical expression/value, return equivalent=true.
+- If they do not represent the same value, return equivalent=false.
+- Return only `yes` (equivalent/correct) or `no` (different/incomplete/wrong). No other text.
+
+Predicted answer:
+{pred}
+
+Expected answer:
+{gt}
+
+"""
+
+
+def last_boxed_only_string(text: str) -> Optional[str]:
+    positions = [m.start() for m in re.finditer(r"\\boxed\b", text)]
+    if not positions:
+        return None
+
+    for start in reversed(positions):
+        i = start + len(r"\boxed")
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text) or text[i] != "{":
+            continue
+
+        depth = 0
+        j = i
+        while j < len(text):
+            ch = text[j]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : j + 1]
+            j += 1
+
+    return None
+
+
+def remove_boxed(boxed_str: str) -> str:
+    boxed_str = boxed_str.strip()
+    if not boxed_str.startswith(r"\boxed"):
+        return boxed_str
+
+    i = len(r"\boxed")
+    while i < len(boxed_str) and boxed_str[i].isspace():
+        i += 1
+    if i >= len(boxed_str) or boxed_str[i] != "{":
+        return boxed_str
+
+    return boxed_str[i + 1 : -1].strip()
+
+
+def extract_last_boxed_content(text: str) -> Optional[str]:
+    boxed = last_boxed_only_string(text)
+    if boxed is None:
+        return None
+    return remove_boxed(boxed)
+
 def extract_boxed(text):
     if not text:
         return None
     matches = re.findall(r"\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", text)
     return matches[-1].strip() if matches else None
+
+
+def _scan_for_answer(text: str) -> Optional[str]:
+    """
+    Your AIMO3-style answer scan, but returning string content rather than forcing int,
+    because IMO AnswerBench answers can be non-integers.
+    """
+    boxed_content = extract_last_boxed_content(text)
+    if boxed_content is not None:
+        return boxed_content.strip()
+
+    matches = re.findall(r'final\s+answer\s+is\s*(.+)', text, re.IGNORECASE)
+    if matches:
+        return matches[-1].strip()
+
+    bold_matches = re.findall(r'(?:\*\*|__)\s*(.+?)\s*(?:\*\*|__)', text)
+    if bold_matches:
+        return bold_matches[-1].strip()
+
+    return None
 
 
 async def judge_pair(session, gt, pred):
@@ -84,7 +173,10 @@ async def run(args):
         async def one(row):
             tid = row["task_id"]
             resp = row["exec_response"] or ""
-            pred = extract_boxed(resp)
+            # pred = extract_boxed(resp)
+            print('[LINE 177]: Changed extract_boxed method to _scan_for_answer')
+            pred = _scan_for_answer(resp)
+
             if tid not in expected:
                 return
             gt, cat = expected[tid]
