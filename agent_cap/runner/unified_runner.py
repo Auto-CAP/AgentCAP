@@ -25,6 +25,7 @@ from agent_cap.runner.llm_client import (
     _SCHEMA_PATCHES,
 )
 from agent_cap.runner.tool_backends import (
+    MathPythonToolBackend,
     MedAgentBenchToolBackend,
     MCPToolBackend,
     SWEBenchToolBackend,
@@ -712,6 +713,8 @@ async def run_experiment(
                 backend = SWEBenchToolBackend(runtime="docker")
             elif backend_name in ("swebench-modal", "swe-bench-modal"):
                 backend = SWEBenchToolBackend(runtime="modal")
+            elif backend_name in ("math-python", "math_python"):
+                backend = MathPythonToolBackend()
             elif backend_name in ("swebench-k8s", "swe-bench-k8s"):
                 backend = SWEBenchToolBackend(runtime="k8s")
             elif backend_name in ("medagentbench", "med-agent-bench"):
@@ -1426,7 +1429,7 @@ Examples:
         "--backend",
         type=str,
         default="mcp",
-        help="Tool backend: 'mcp' or 'swebench-docker' or 'swebench-modal'",
+        help="Tool backend: 'mcp', 'math-python', 'swebench-docker', or 'swebench-modal'",
     )
     parser.add_argument(
         "--swebench-runtime",

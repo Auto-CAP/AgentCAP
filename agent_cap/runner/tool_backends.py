@@ -1,4 +1,5 @@
 import abc
+import asyncio
 import json
 import math
 import re
@@ -140,6 +141,38 @@ class SWEBenchToolBackend(ToolBackend):
             return self._backend.get_patch()
         return ""
 
+
+class MathPythonToolBackend(ToolBackend):
+    def __init__(
+        self,
+        startup_timeout: float = 30.0,
+        exec_timeout: float = 30.0,
+        preload: str = "minimal",
+        auto_print_last_expr: bool = True,
+    ):
+        from agent_cap.backends.math_python_backend import MathPythonBackend
+
+        self._backend = MathPythonBackend(
+            startup_timeout=startup_timeout,
+            exec_timeout=exec_timeout,
+            preload=preload,
+            auto_print_last_expr=auto_print_last_expr,
+        )
+
+    async def setup(self, task_config: Dict[str, Any]) -> bool:
+        return await asyncio.to_thread(self._backend.setup, task_config)
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        return self._backend.get_tool_definitions()
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+        result = await asyncio.to_thread(self._backend.execute, name, "call", arguments)
+        if result.success:
+            return [{"type": "text", "text": result.output}]
+        raise RuntimeError(result.output)
+
+    async def teardown(self) -> None:
+        await asyncio.to_thread(self._backend.teardown)
     def run_tests(self, timeout: int = 300) -> Dict[str, Any]:
         if self._backend:
             return self._backend.run_tests(timeout=timeout)
