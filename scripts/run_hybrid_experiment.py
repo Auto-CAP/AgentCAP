@@ -71,7 +71,7 @@ EXEC_WITH_PLAN_PROMPT = (
     "Execute the plan now."
 )
 
-IMO_SYSTEM_PROMPT = (
+IMO_SYSTEM_PROMPT_2 = (
     "You are an expert mathematical problem solver with expertise at the IMO level, "
     "with access to a persistent Python (with sympy) execution tool.\n\n"
     "Rules:\n"
@@ -89,7 +89,17 @@ IMO_SYSTEM_PROMPT = (
     "- Put your final answer inside \\boxed{...}."
 )
 
-IMO_PLAN_SYSTEM_PROMPT = (
+IMO_SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
+
+# Output Format
+- Provide a brief summary of the solution.
+- Then state the final mathematical answer clearly.
+- Put the final answer inside \\boxed{...}.
+- The final answer may be an integer, fraction, expression, tuple, sequence, set, or other mathematical object, depending on the problem.
+- Do not put anything except the final answer inside the final \\boxed{...}.
+"""
+
+IMO_PLAN_SYSTEM_PROMPT_2 = (
     "You are an elite mathematical problem-solving planner for IMO-level problems. "
     "The executor has access to a single `python` tool that runs Python/sympy in a "
     "persistent Jupyter kernel. Given a problem, output a short numbered plan the "
@@ -107,10 +117,18 @@ IMO_PLAN_SYSTEM_PROMPT = (
     "- Keep the plan crisp: 4--8 steps. Do NOT solve the problem yourself; only plan."
 )
 
+IMO_PLAN_SYSTEM_PROMPT = (
+    "You are an elite mathematical problem-solving planner for IMO-level problems. "
+    "The first step is to draft a plan for the solution, outlining the main ideas only."
+    "Keep the plan crisp: 4--8 steps. Do NOT solve the problem yourself; only plan."
+)
+
 IMO_EXEC_PROMPT = (
     "Problem:\n{task}\n\n"
+    "You are provided with a solution plan."
+    "The plan may be wrong or contain errors."
     "Plan:\n{plan}\n\n"
-    "Follow the plan. Use the `python` tool as needed. "
+    "Solve the problem and output the solution in the correct format, together with a solution summary."
     "Put the final answer inside \\boxed{{...}}."
 )
 
@@ -716,6 +734,8 @@ async def run_plan_phase(
     assistant = choices[0].get("message") or {}
     plan_text = strip_think_tags(str(assistant.get("content", "")))
 
+    # print(f'[ASSITANT PLAN LINE 719] {assistant}', flush = True)
+
     messages.append(assistant)
 
     return PhaseResult(
@@ -812,6 +832,7 @@ async def run_exec_phase(
 
         assistant = choices[0].get("message") or {}
         messages.append(assistant)
+        # print(f'[ASSITANT THINKING LINE 817] {assistant}', flush = True)
 
         tool_calls = assistant.get("tool_calls") or []
         if not tool_calls:
@@ -831,16 +852,33 @@ async def run_exec_phase(
             if not isinstance(args, dict):
                 args = {"code": str(args)} if name == "python" else {}
             args = coerce_tool_args(name, args)
+            LOGGER.info(
+                "  Tool call turn=%d name=%s args=%s",
+                turn,
+                name,
+                json.dumps(args, ensure_ascii=False),
+            )
+
+
             try:
                 tool_payload = await mcp_call_tool(session, mcp_server_url, name, args)
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
                 tool_payload = [{"type": "text", "text": f"ERROR: {exc}"}]
+
+            tool_output= flatten_tool_payload(tool_payload)
+            LOGGER.info(
+                "  Tool output turn=%d name=%s output=%s",
+                turn,
+                name,
+                tool_output,
+            )
+
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
-                    "content": flatten_tool_payload(tool_payload),
+                    "content": flatten_tool_payload(tool_output),
                 }
             )
 
