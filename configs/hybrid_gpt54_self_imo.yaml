@@ -1,5 +1,5 @@
-name: gpt54-qwen35-27b
-description: "GPT-5.4 plans, Qwen3.5-27B executes"
+name: hybrid_gpt54_self-imo
+description: "Baseline: GPT-5.4 plans and executes (full API)"
 experiment_type: plan-execute
 
 planner:
@@ -11,11 +11,14 @@ planner:
   output_price_per_1m: 15.0
 
 executor:
-  id: qwen35-27b
-  base_url: http://localhost:30001
-  is_local: true
+  id: gpt-5.4
+  base_url: https://api.openai.com
+  api_key: ${OPENAI_API_KEY}
+  is_local: false
+  input_price_per_1m: 2.5
+  output_price_per_1m: 15.0
 
 mcp_server_url: http://localhost:1984
 max_turns: 50
-max_tokens: 8192
+max_tokens: 32768
 plan_max_tokens: 4096

@@ -1,5 +1,5 @@
-name: gpt54-qwen35-27b
-description: "GPT-5.4 plans, Qwen3.5-27B executes"
+name: gpt54-gptoss120b
+description: "GPT-5.4 plans, GPT-OSS-120B executes"
 experiment_type: plan-execute
 
 planner:
@@ -11,8 +11,8 @@ planner:
   output_price_per_1m: 15.0
 
 executor:
-  id: qwen35-27b
-  base_url: http://localhost:30001
+  id: gpt-oss-120b
+  base_url: http://localhost:30002
   is_local: true
 
 mcp_server_url: http://localhost:1984

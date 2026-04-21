@@ -1,4 +1,4 @@
-name: gpt54-qwen35-27b
+name: hybrid_gpt54_qwen35_27b-imo
 description: "GPT-5.4 plans, Qwen3.5-27B executes"
 experiment_type: plan-execute
 
@@ -17,5 +17,5 @@ executor:
 
 mcp_server_url: http://localhost:1984
 max_turns: 50
-max_tokens: 8192
+max_tokens: 32768
 plan_max_tokens: 4096

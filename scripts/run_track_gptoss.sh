@@ -1,0 +1,34 @@
+#!/bin/bash
+set -e
+export OPENAI_API_KEY="${OPENAI_API_KEY:?please set OPENAI_API_KEY}"
+export OPENROUTER_API_KEY="${OPENROUTER_API_KEY:?please set OPENROUTER_API_KEY}"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:?please set ANTHROPIC_API_KEY}"
+export ANTHROPIC_BASE_URL=https://cc1.zhihuiapi.top
+cd /home/sicheng/AgentCAP
+
+NUM_TASKS=60
+LOG_DIR=/data/sicheng/agentcap_logs
+mkdir -p "$LOG_DIR"
+
+CONFIGS=(
+    hybrid_gpt54_gptoss120b
+    hybrid_claude46_gptoss120b
+    hybrid_minimax_gptoss120b
+    hybrid_glm_gptoss120b
+)
+
+for cfg in "${CONFIGS[@]}"; do
+    db="results/hybrid_${cfg#hybrid_}.db"
+    log="$LOG_DIR/${cfg}.log"
+    echo "================================================"
+    echo "[$(date)] Track-GPTOSS: Running $cfg -> $db"
+    echo "================================================"
+    python scripts/run_hybrid_experiment.py \
+        --config "configs/${cfg}.yaml" \
+        --num-tasks "$NUM_TASKS" \
+        --db "$db" 2>&1 | tee "$log"
+    echo "[$(date)] Track-GPTOSS: Finished $cfg"
+    echo
+done
+
+echo "TRACK GPTOSS DONE"

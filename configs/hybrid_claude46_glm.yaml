@@ -1,22 +1,22 @@
-name: minimax-self
-description: "MiniMax M2.5 plans and executes"
+name: claude46-glm
+description: "anthropic/claude-opus-4.6 plans, z-ai/glm-5.1 executes"
 experiment_type: plan-execute
 
 planner:
-  id: minimax/minimax-m2.7
+  id: anthropic/claude-opus-4.6
   base_url: https://openrouter.ai/api
   api_key: ${OPENROUTER_API_KEY}
   is_local: false
-  input_price_per_1m: 0.40
-  output_price_per_1m: 1.60
+  input_price_per_1m: 5.0
+  output_price_per_1m: 25.0
 
 executor:
-  id: minimax/minimax-m2.7
+  id: z-ai/glm-5.1
   base_url: https://openrouter.ai/api
-  is_local: false
   api_key: ${OPENROUTER_API_KEY}
-  input_price_per_1m: 0.40
-  output_price_per_1m: 1.60
+  is_local: false
+  input_price_per_1m: 0.95
+  output_price_per_1m: 3.15
 
 mcp_server_url: http://localhost:1984
 max_turns: 50

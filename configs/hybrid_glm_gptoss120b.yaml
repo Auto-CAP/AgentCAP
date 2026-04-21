@@ -1,0 +1,21 @@
+name: glm51-gptoss120b
+description: "GLM-4.6 plans, GPT-OSS-120B executes"
+experiment_type: plan-execute
+
+planner:
+  id: z-ai/glm-5.1
+  base_url: https://openrouter.ai/api
+  api_key: ${OPENROUTER_API_KEY}
+  is_local: false
+  input_price_per_1m: 0.95
+  output_price_per_1m: 3.15
+
+executor:
+  id: gpt-oss-120b
+  base_url: http://localhost:30002
+  is_local: true
+
+mcp_server_url: http://localhost:1984
+max_turns: 50
+max_tokens: 8192
+plan_max_tokens: 4096

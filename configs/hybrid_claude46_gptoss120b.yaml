@@ -1,0 +1,21 @@
+name: claude46-gptoss120b
+description: "Claude Opus 4.6 plans, GPT-OSS-120B executes"
+experiment_type: plan-execute
+
+planner:
+  id: anthropic/claude-opus-4.6
+  base_url: https://openrouter.ai/api
+  api_key: ${OPENROUTER_API_KEY}
+  is_local: false
+  input_price_per_1m: 5.0
+  output_price_per_1m: 25.0
+
+executor:
+  id: gpt-oss-120b
+  base_url: http://localhost:30002
+  is_local: true
+
+mcp_server_url: http://localhost:1984
+max_turns: 50
+max_tokens: 8192
+plan_max_tokens: 4096

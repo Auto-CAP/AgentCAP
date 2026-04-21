@@ -1,19 +1,22 @@
-name: gpt54-qwen35-27b
-description: "GPT-5.4 plans, Qwen3.5-27B executes"
+name: glm-gpt54
+description: "z-ai/glm-5.1 plans, gpt-5.4 executes"
 experiment_type: plan-execute
 
 planner:
+  id: z-ai/glm-5.1
+  base_url: https://openrouter.ai/api
+  api_key: ${OPENROUTER_API_KEY}
+  is_local: false
+  input_price_per_1m: 0.95
+  output_price_per_1m: 3.15
+
+executor:
   id: gpt-5.4
   base_url: https://api.openai.com
   api_key: ${OPENAI_API_KEY}
   is_local: false
   input_price_per_1m: 2.5
   output_price_per_1m: 15.0
-
-executor:
-  id: qwen35-27b
-  base_url: http://localhost:30001
-  is_local: true
 
 mcp_server_url: http://localhost:1984
 max_turns: 50

@@ -78,7 +78,8 @@ class MCPToolBackend(ToolBackend):
                         "name": name,
                         "description": str(tool.get("description", "")),
                         "parameters": _fix_tool_schema(
-                            tool.get("input_schema", {}), name
+                            tool.get("inputSchema") or tool.get("input_schema") or {},
+                            name,
                         ),
                     },
                 }
@@ -440,9 +441,7 @@ class FinanceBenchToolBackend(ToolBackend):
         top = scored[:3]
         parts = []
         for score, page, snippet, full in top:
-            parts.append(
-                f"[Page {page}]\n{full[:3000] if full else snippet[:1000]}"
-            )
+            parts.append(f"[Page {page}]\n{full[:3000] if full else snippet[:1000]}")
         return "\n\n---\n\n".join(parts) if parts else "No relevant passages found."
 
     @staticmethod

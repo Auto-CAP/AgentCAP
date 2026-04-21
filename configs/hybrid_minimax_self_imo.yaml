@@ -1,4 +1,4 @@
-name: minimax-self
+name: hybrid_minimax_self-imo
 description: "MiniMax M2.5 plans and executes"
 experiment_type: plan-execute
 
@@ -20,5 +20,5 @@ executor:
 
 mcp_server_url: http://localhost:1984
 max_turns: 50
-max_tokens: 8192
+max_tokens: 32768
 plan_max_tokens: 4096

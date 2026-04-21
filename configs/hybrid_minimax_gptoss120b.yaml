@@ -1,5 +1,5 @@
-name: minimax-self
-description: "MiniMax M2.5 plans and executes"
+name: minimax-gptoss120b
+description: "MiniMax M2.5 plans, GPT-OSS-120B executes"
 experiment_type: plan-execute
 
 planner:
@@ -11,12 +11,9 @@ planner:
   output_price_per_1m: 1.60
 
 executor:
-  id: minimax/minimax-m2.7
-  base_url: https://openrouter.ai/api
-  is_local: false
-  api_key: ${OPENROUTER_API_KEY}
-  input_price_per_1m: 0.40
-  output_price_per_1m: 1.60
+  id: gpt-oss-120b
+  base_url: http://localhost:30002
+  is_local: true
 
 mcp_server_url: http://localhost:1984
 max_turns: 50
