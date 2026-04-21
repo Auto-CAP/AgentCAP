@@ -9,7 +9,7 @@ planner:
   input_price_per_1m: 0.60
   output_price_per_1m: 3.00
 executor:
-  id: MiniMax-M2.5
+  id: minimax/minimax-m2.7
   base_url: https://api.minimaxi.com
   api_key: ${ANTHROPIC_API_KEY}
   is_local: false

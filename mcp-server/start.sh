@@ -7,7 +7,7 @@ ATLAS_DIR="${MCP_ATLAS_DIR:-$REPO_ROOT/third_party/mcp-atlas}"
 ENV_FILE="${MCP_ENV_FILE:-$ATLAS_DIR/.env}"
 PORT="${MCP_PORT:-1984}"
 
-ENABLED_SERVERS="${ENABLED_SERVERS:-calculator,fetch,whois,weather,pubmed,brave-search,exa,google-maps,github,airtable,alchemy,clinicaltrialsgov-mcp-server,context7,ddg-search,lara-translate,met-museum,open-library,osm-mcp-server,mongodb}"
+ENABLED_SERVERS="${ENABLED_SERVERS:-calculator,fetch,whois,weather,pubmed,github,clinicaltrialsgov-mcp-server,context7,ddg-search,met-museum,open-library,osm-mcp-server,filesystem,git,desktop-commander,memory,mcp-code-executor,arxiv,cli-mcp-server,wikipedia,alchemy}"
 
 if [ ! -f "$ENV_FILE" ]; then
     if [ -f "$ATLAS_DIR/env.template" ]; then

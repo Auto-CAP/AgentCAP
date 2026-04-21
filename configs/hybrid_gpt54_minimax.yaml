@@ -1,5 +1,5 @@
 name: gpt54-minimax
-description: "GPT-5.4 plans, MiniMax M2.5 executes"
+description: "gpt-5.4 plans, minimax/minimax-m2.7 executes"
 experiment_type: plan-execute
 
 planner:
@@ -11,14 +11,14 @@ planner:
   output_price_per_1m: 15.0
 
 executor:
-  id: MiniMax-M2.5
-  base_url: https://api.minimaxi.com
-  api_key: ${ANTHROPIC_API_KEY}
+  id: minimax/minimax-m2.7
+  base_url: https://openrouter.ai/api
+  api_key: ${OPENROUTER_API_KEY}
   is_local: false
-  input_price_per_1m: 0.30
-  output_price_per_1m: 1.20
+  input_price_per_1m: 0.4
+  output_price_per_1m: 1.6
 
 mcp_server_url: http://localhost:1984
-max_turns: 20
+max_turns: 50
 max_tokens: 8192
 plan_max_tokens: 4096

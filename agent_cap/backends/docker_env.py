@@ -169,7 +169,7 @@ class DockerWorkspace:
             "passed": ok,
             "passed_count": 1 if ok else 0,
             "total": len(tests),
-            "details": details,
+            "details": output,
         }
 
     def cleanup(self):
