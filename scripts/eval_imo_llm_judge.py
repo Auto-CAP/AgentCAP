@@ -17,11 +17,26 @@ JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "google/gemini-3.1-flash-lite-previe
 JUDGE_PROMPT = """You are grading an IMO mathematical answer.
 
 GROUND TRUTH ANSWER: {gt}
-
 SUBMITTED ANSWER: {pred}
 
-Are these two answers mathematically equivalent (same value / set / formula / condition)?
-Return a single word: yes or no."""
+Decide whether the submitted answer is mathematically equivalent to the ground truth.
+
+CRITICAL RULES — NONE of the following are wrong answers:
+- Different LaTeX formatting of the same value (e.g., `\\frac{{1}}{{2}}` vs `\\frac12`, `1/2`, `0.5`, `\\tfrac12`).
+- Same multi-value answer written in different order or separators (comma, "or", `\\quad`, `\\qquad`, parentheses, "and", line breaks).
+- Same formula with different variable names (e.g., `P(x)=x+1` vs `P(n)=n+1` vs `Q(x)=x+1`).
+- Added labels or wrappers around the same value (e.g., `C_{{\\min}}=2^{{u-2}}` vs `2^{{u-2}}`; `T(m)=-4` vs `-4`).
+- Extra restating / quantifiers that do not change the value (e.g., `P(x)=x+1 for all integers x` vs `P(x)=x+1`).
+- Equivalent expressions (e.g., `\\lfloor \\log_2 a \\rfloor + 1` vs `\\lceil \\log_2(a+1) \\rceil` for positive integer `a`---treat as equivalent only if mathematically identical on the domain).
+- Math identity: `2025^2 a(a-1)` vs `2025^2\\,a(a-1)`.
+
+An answer IS wrong when:
+- It gives a DIFFERENT numerical value, set, or formula from the ground truth.
+- It is INCOMPLETE: ground truth has multiple distinct solutions and the submission gives only some (e.g., GT `{{-2/3, 0, 2/3}}`, pred `r=0` -> wrong, incomplete).
+- It is EXTRANEOUS: submission includes values not in the ground truth.
+- The expressions are not mathematically equivalent even after normalizing notation.
+
+Return only `yes` (equivalent/correct) or `no` (different/incomplete/wrong). No other text."""
 
 
 def extract_boxed(text):

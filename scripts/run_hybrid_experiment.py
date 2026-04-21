@@ -73,12 +73,19 @@ EXEC_WITH_PLAN_PROMPT = (
 
 IMO_SYSTEM_PROMPT = (
     "You are an expert mathematical problem solver with expertise at the IMO level, "
-    "with access to a Python execution tool.\n\n"
+    "with access to a persistent Python (with sympy) execution tool.\n\n"
     "Rules:\n"
-    "- Justify important steps.\n"
-    "- Use the python tool for calculations, symbolic checks (sympy), sanity checks, and small experiments.\n"
-    "- Keep Python usage focused and relevant. Always print important final values.\n"
-    "- Incorporate tool output back into your reasoning.\n"
+    "- Do NOT rely on pure chain-of-thought arithmetic for numeric, symbolic, or combinatorial steps. "
+    "Whenever a step can be computed exactly with Python or sympy, call the `python` tool.\n"
+    "- When exploring, avoid pure brute force over large unstructured spaces; instead, use python to "
+    "verify identities, check small cases, confirm conjectures, enumerate well-chosen parametric families, "
+    "and simplify or factor symbolic expressions via sympy.\n"
+    "- Always import what you need fresh each call (the kernel is persistent, but state may be overwritten). "
+    "Always `print(...)` the key intermediate and final values so the tool output is useful.\n"
+    "- Incorporate each tool output back into your reasoning before the next step.\n"
+    "- Justify non-trivial steps in text; do not skip proofs.\n"
+    "- If you discover the answer depends on a parameter (e.g., m, n, k), confirm the functional form "
+    "by checking multiple values, not just one.\n"
     "- Put your final answer inside \\boxed{...}."
 )
 
@@ -86,9 +93,18 @@ IMO_PLAN_SYSTEM_PROMPT = (
     "You are an elite mathematical problem-solving planner for IMO-level problems. "
     "The executor has access to a single `python` tool that runs Python/sympy in a "
     "persistent Jupyter kernel. Given a problem, output a short numbered plan the "
-    "executor can follow. For each step, state (a) whether to use python, (b) what to "
-    "compute or verify, and (c) how to use the result. Keep plans crisp: 4--8 steps. "
-    "Do NOT solve the problem yourself."
+    "executor can follow. For each step, state (a) whether to call python, (b) what "
+    "exact quantity/identity/expression to compute or verify, and (c) how the result "
+    "feeds the next step.\n\n"
+    "Strong preference rules for the plan:\n"
+    "- Insist that the executor use python for numeric/symbolic/combinatorial checks "
+    "rather than pure mental arithmetic.\n"
+    "- If the answer likely depends on a parameter (m, n, k, ...), explicitly require "
+    "verifying the pattern on at least 3 different parameter values before claiming a "
+    "closed form.\n"
+    "- Do NOT recommend naive brute force over huge unstructured spaces; prefer "
+    "parametric families, symbolic simplification, or well-motivated small cases.\n"
+    "- Keep the plan crisp: 4--8 steps. Do NOT solve the problem yourself; only plan."
 )
 
 IMO_EXEC_PROMPT = (
@@ -808,7 +824,12 @@ async def run_exec_phase(
             try:
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             except json.JSONDecodeError:
-                args = {}
+                if name == "python" and isinstance(raw_args, str) and raw_args.strip():
+                    args = {"code": raw_args}
+                else:
+                    args = {}
+            if not isinstance(args, dict):
+                args = {"code": str(args)} if name == "python" else {}
             args = coerce_tool_args(name, args)
             try:
                 tool_payload = await mcp_call_tool(session, mcp_server_url, name, args)
