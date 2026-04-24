@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: mcp-sidecar-
+  namespace: eidf230ns
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: mcp-sidecar
+        kueue.x-k8s.io/queue-name: eidf230ns-user-queue
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mcp-server
+          image: ghcr.io/scaleapi/mcp-atlas:latest
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              python3 -c "
+              import httpx
+              if not hasattr(httpx, 'TimeoutError'):
+                  httpx.TimeoutError = httpx.TimeoutException
+              import site, os
+              sc = os.path.join(site.getsitepackages()[0], 'sitecustomize.py')
+              os.makedirs(os.path.dirname(sc), exist_ok=True)
+              with open(sc, 'w') as f:
+                  f.write('import httpx\nif not hasattr(httpx, \"TimeoutError\"): httpx.TimeoutError = httpx.TimeoutException\n')
+              print('httpx.TimeoutError patched')
+              "
+              exec /agent-environment/entrypoint.sh uv run python -m uvicorn agent_environment.main:app --host 0.0.0.0 --port 1984
+          workingDir: /agent-environment
+          ports:
+            - containerPort: 1984
+          env:
+            - name: ENABLED_SERVERS
+              value: "arxiv,brave-search,calculator,cli-mcp-server,clinicaltrialsgov-mcp-server,context7,ddg-search,desktop-commander,fetch,filesystem,git,github,mcp-code-executor,mcp-server-code-runner,memory,met-museum,open-library,osm-mcp-server,pubmed,weather,whois,wikipedia"
+            - name: GITHUB_TOKEN
+              value: "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"
+            - name: BRAVE_API_KEY
+              value: "BSAxkWQYJr7q_g1QJlH5Mxqn2luwLoS"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+            limits:
+              cpu: "4"
+              memory: 16Gi

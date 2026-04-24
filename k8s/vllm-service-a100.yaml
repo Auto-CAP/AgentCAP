@@ -21,6 +21,10 @@ spec:
         - name: llm-cache
           persistentVolumeClaim:
             claimName: llm-cache-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
       containers:
         - name: vllm
           image: ghcr.io/pytorch/pytorch:2.10.0-cuda12.9-cudnn9-devel
@@ -30,18 +34,19 @@ spec:
               set -euo pipefail
               cd /workspace
               . /workspace/venv_smoke/bin/activate
-              pip install -e /workspace/AgentCAP_smoke 2>&1 | tail -1
+              python -c "import vllm; print('vLLM', vllm.__version__)"
               echo "=== Starting vLLM server ==="
               exec vllm serve \
-                  --model /workspace/models/unsloth/gpt-oss-120b \
+                  /workspace/models/unsloth/gpt-oss-120b \
                   --served-model-name openai/gpt-oss-120b \
-                  --port 30002 \
+                  --host 0.0.0.0 \
+                  --port 8000 \
                   --gpu-memory-utilization 0.92 \
                   --max-model-len 131072 \
                   --tensor-parallel-size 2 \
                   --tool-call-parser openai
           ports:
-            - containerPort: 30002
+            - containerPort: 8000
           env:
             - name: HF_HOME
               value: /workspace/hf_cache
@@ -59,3 +64,18 @@ spec:
           volumeMounts:
             - name: llm-cache
               mountPath: /workspace
+            - name: dshm
+              mountPath: /dev/shm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-gptoss-a100
+  namespace: eidf230ns
+spec:
+  selector:
+    app: vllm-gptoss-a100
+  ports:
+    - port: 30002
+      targetPort: 8000
+  type: ClusterIP

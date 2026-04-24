@@ -1,21 +1,20 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: vllm-gptoss-server-
+  generateName: sglang-gptoss-a100-
   namespace: eidf230ns
 spec:
-  # Keep running until we manually delete
   backoffLimit: 0
   template:
     metadata:
       labels:
-        app: vllm-gptoss
+        app: sglang-gptoss-a100
         kueue.x-k8s.io/queue-name: eidf230ns-user-queue
     spec:
       restartPolicy: Never
       nodeSelector:
         nvidia.com/gpu.present: "true"
-        nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+        nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB
       securityContext:
         fsGroup: 2000
       volumes:
@@ -27,29 +26,29 @@ spec:
             medium: Memory
             sizeLimit: 16Gi
       containers:
-        - name: vllm
+        - name: sglang
           image: ghcr.io/pytorch/pytorch:2.10.0-cuda12.9-cudnn9-devel
           command: ["/bin/bash", "-lc"]
           args:
             - |
               set -euo pipefail
+              apt-get update -qq && apt-get install -y -qq libnuma-dev > /dev/null 2>&1
               cd /workspace
-              pip install --break-system-packages vllm==0.19.0 2>&1 | tail -3
-              python3 -c "import vllm; print('vLLM', vllm.__version__)"
-              echo "=== Starting vLLM server ==="
-              exec vllm serve \
-                  --model /workspace/models/unsloth/gpt-oss-120b \
+              pip install --break-system-packages "sglang[all]==0.5.9" 2>&1 | tail -3
+              python3 -c "import sglang; print('SGLang', sglang.__version__)"
+              echo "=== Starting SGLang server ==="
+              exec python3 -m sglang.launch_server \
+                  --model-path /workspace/models/unsloth/gpt-oss-120b \
                   --served-model-name openai/gpt-oss-120b \
+                  --host 0.0.0.0 \
                   --port 8000 \
-                  --gpu-memory-utilization 0.85 \
-                  --max-model-len 131072 \
-                  --tensor-parallel-size 2 \
-                  --tool-call-parser openai
+                  --mem-fraction-static 0.92 \
+                  --context-length 131072 \
+                  --tp 2 \
+                  --enable-cache-report
           ports:
             - containerPort: 8000
           env:
-            - name: VLLM_WORKER_MULTIPROC_METHOD
-              value: spawn
             - name: HF_HOME
               value: /workspace/hf_cache
             - name: HUGGINGFACE_HUB_CACHE
@@ -72,11 +71,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: vllm-gptoss
+  name: sglang-gptoss-a100
   namespace: eidf230ns
 spec:
   selector:
-    app: vllm-gptoss
+    app: sglang-gptoss-a100
   ports:
     - port: 30002
       targetPort: 8000

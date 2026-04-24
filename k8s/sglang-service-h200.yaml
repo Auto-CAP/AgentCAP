@@ -1,14 +1,14 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: vllm-gptoss-h200-
+  generateName: sglang-gptoss-h200-
   namespace: eidf230ns
 spec:
   backoffLimit: 0
   template:
     metadata:
       labels:
-        app: vllm-gptoss-h200
+        app: sglang-gptoss-h200
         kueue.x-k8s.io/queue-name: eidf230ns-user-queue
     spec:
       restartPolicy: Never
@@ -22,29 +22,28 @@ spec:
           persistentVolumeClaim:
             claimName: llm-cache-pvc
       containers:
-        - name: vllm
+        - name: sglang
           image: ghcr.io/pytorch/pytorch:2.10.0-cuda12.9-cudnn9-devel
           command: ["/bin/bash", "-lc"]
           args:
             - |
               set -euo pipefail
+              apt-get update -qq && apt-get install -y -qq libnuma-dev > /dev/null 2>&1
               cd /workspace
-              . /workspace/venv_smoke/bin/activate
-              pip install vllm==0.19.0 2>&1 | tail -3
-              python3 -c "import vllm; print('vLLM', vllm.__version__)"
-              echo "=== Starting vLLM server ==="
-              exec vllm serve \
-                  --model /workspace/models/unsloth/gpt-oss-120b \
+              pip install --break-system-packages "sglang[all]==0.5.9" 2>&1 | tail -3
+              python3 -c "import sglang; print('SGLang', sglang.__version__)"
+              echo "=== Starting SGLang server ==="
+              exec python3 -m sglang.launch_server \
+                  --model-path /workspace/models/unsloth/gpt-oss-120b \
                   --served-model-name openai/gpt-oss-120b \
-                  --port 30002 \
-                  --gpu-memory-utilization 0.88 \
+                  --host 0.0.0.0 \
+                  --port 8000 \
+                  --mem-fraction-static 0.88 \
+                  --context-length 131072 \
                   --kv-cache-dtype fp8_e4m3 \
-                  --max-model-len 131072 \
-                  --max-num-seqs 32 \
-                  --tool-call-parser openai \
-                  --enable-auto-tool-choice
+                  --enable-cache-report
           ports:
-            - containerPort: 30002
+            - containerPort: 8000
           env:
             - name: HF_HOME
               value: /workspace/hf_cache
@@ -62,3 +61,16 @@ spec:
           volumeMounts:
             - name: llm-cache
               mountPath: /workspace
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-gptoss-h200
+  namespace: eidf230ns
+spec:
+  selector:
+    app: sglang-gptoss-h200
+  ports:
+    - port: 30002
+      targetPort: 8000
+  type: ClusterIP

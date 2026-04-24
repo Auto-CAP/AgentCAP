@@ -47,7 +47,7 @@ spec:
             - containerPort: 1984
           env:
             - name: ENABLED_SERVERS
-              value: "calculator,fetch,whois,weather,pubmed,ddg-search,wikipedia,arxiv,open-library,osm-mcp-server,met-museum,github"
+              value: "arxiv,brave-search,calculator,cli-mcp-server,clinicaltrialsgov-mcp-server,context7,ddg-search,desktop-commander,fetch,filesystem,git,github,mcp-code-executor,mcp-server-code-runner,memory,met-museum,open-library,osm-mcp-server,pubmed,weather,whois,wikipedia"
             - name: GITHUB_TOKEN
               value: "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"
           resources:
@@ -133,9 +133,8 @@ spec:
                   --base-url http://localhost:30002/v1 \
                   --mcp-server-url http://localhost:1984 \
                   --max-turns 15 \
-                  --num-tasks 20 \
-                  --num-tasks 63 \
-                  --output-dir /workspace/results/mcpatlas_a100_63free
+                  --num-tasks 60 \
+                  --output-dir /workspace/results/mcpatlas_a100_vllm_v4
 
               echo "=== Done! ==="
               ls -la /workspace/results/mcpatlas_smoke/
