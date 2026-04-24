@@ -5,7 +5,7 @@ from agent_cap.backends.tool_executor import TOOL_DEFINITIONS
 
 
 class SWEBenchBackend(ToolBackend):
-    def __init__(self, runtime: str = "modal", shell_timeout: int = 30):
+    def __init__(self, runtime: str = "modal", shell_timeout: int = 450):
         self.runtime = runtime
         self.shell_timeout = shell_timeout
         self._workspace: Any = None
@@ -36,13 +36,22 @@ class SWEBenchBackend(ToolBackend):
         modal_sb = getattr(self._workspace, "_sandbox", None)
         container_id = getattr(self._workspace, "container_id", None)
         exec_fn = getattr(self._workspace, "_exec", None) if self.runtime == "k8s" else None
+        write_file_fn = getattr(self._workspace, "write_file", None) if self.runtime == "k8s" else None
         self._executor = ToolExecutor(
             workspace_dir=self._workspace.workspace,
             shell_timeout=self.shell_timeout,
             container_id=container_id,
             modal_sandbox=modal_sb,
             exec_fn=exec_fn,
+            write_file_fn=write_file_fn,
         )
+        # For SWE-bench Lite: activate conda env + disable colors
+        if self._workspace.workdir == "/testbed":
+            self._executor._shell_init = (
+                "export TERM=dumb NO_COLOR=1 PY_COLORS=0 && "
+                "source /opt/miniconda3/bin/activate 2>/dev/null && "
+                "conda activate testbed 2>/dev/null"
+            )
         return True
 
     def execute(
