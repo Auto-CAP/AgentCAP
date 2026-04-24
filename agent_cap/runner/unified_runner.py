@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import importlib
 import time
@@ -183,6 +184,74 @@ def flatten_tool_payload(payload: Any) -> str:
     return str(payload)
 
 
+def _recover_tool_calls_from_content(
+    content: str, turn_index: int
+) -> List[Dict[str, Any]]:
+    """Recover tool calls from raw gpt-oss tokens leaked into content.
+
+    SGLang's gpt-oss parser sometimes fails and returns raw tokens like:
+      <|start|>assistant<|channel|>analysis to=functions.bash code<|message|>{"command":"ls"}<|call|>
+    We extract the first valid tool call from such content.
+    """
+    if not content:
+        return []
+    import re
+
+    # Pattern: to=functions.<tool_name> ... <|message|>{json}(<|call|> or end-of-string)
+    # <|call|> may be absent when server uses it as a stop token (stripped from output).
+    pattern = r'to=functions\.(\S+?)\s.*?<\|message\|>(.*?)(?:<\|call\|>|$)'
+    matches = re.finditer(pattern, content, re.DOTALL)
+
+    recovered = []
+    for m in matches:
+        raw_name = m.group(1).rstrip()
+        # Clean tool name: "bash" from "bash code", etc.
+        tool_name = raw_name.split()[0] if " " in raw_name else raw_name
+        args_str = m.group(2).strip()
+        try:
+            json.loads(args_str)  # validate
+            recovered.append({
+                "id": f"recovered_{turn_index}_{len(recovered)}",
+                "type": "function",
+                "function": {"name": tool_name, "arguments": args_str},
+            })
+        except json.JSONDecodeError:
+            continue
+    # Fallback: simple JSON extraction for non-gpt-oss formats
+    if not recovered and ('{"command"' in content or '{"path"' in content):
+        idx = content.find("{")
+        while idx != -1 and idx < len(content):
+            depth = 0
+            end = idx
+            for i, ch in enumerate(content[idx:], idx):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+            args_json = content[idx:end]
+            try:
+                parsed = json.loads(args_json)
+                if "command" in parsed and "path" not in parsed:
+                    tname = "bash"
+                elif "path" in parsed:
+                    tname = "str_replace_editor"
+                else:
+                    tname = "bash"
+                recovered.append({
+                    "id": f"recovered_{turn_index}_{len(recovered)}",
+                    "type": "function",
+                    "function": {"name": tname, "arguments": args_json},
+                })
+                break
+            except json.JSONDecodeError:
+                pass
+            idx = content.find("{", end)
+    return recovered
+
+
 def count_tool_calls(messages: Sequence[Dict[str, Any]]) -> int:
     total = 0
     for message in messages:
@@ -237,6 +306,8 @@ async def run_single_example(
 
     start = time.perf_counter()
     executed_turns = 0
+    no_tool_retries = 0
+    submit_count = 0
 
     for turn_index in range(max_turns):
         executed_turns = turn_index + 1
@@ -255,23 +326,33 @@ async def run_single_example(
                 encoding="utf-8",
             )
 
-        try:
-            timed = await _chat_with_fallback(
-                session=session,
-                base_url=base_url,
-                api_key=api_key,
-                model=model,
-                messages=messages,
-                tools=tools,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                openrouter_provider=openrouter_provider,
-                use_streaming=use_streaming,
-                errors=errors,
-                parallel_tool_calls=parallel_tool_calls,
-            )
-        except Exception as exc:
-            errors.append(f"llm_request_failed: {exc}")
+        # Retry LLM requests with exponential backoff (official: 20 retries)
+        timed = None
+        for _llm_retry in range(10):
+            try:
+                timed = await _chat_with_fallback(
+                    session=session,
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    openrouter_provider=openrouter_provider,
+                    use_streaming=use_streaming,
+                    errors=errors,
+                    parallel_tool_calls=parallel_tool_calls,
+                )
+                break
+            except Exception as exc:
+                if _llm_retry < 9:
+                    wait = min(2 ** _llm_retry, 60)
+                    errors.append(f"llm_retry_{_llm_retry}: {exc}")
+                    await asyncio.sleep(wait)
+                    continue
+                errors.append(f"llm_request_failed: {exc}")
+        if timed is None:
             break
 
         result = timed.response_json
@@ -297,7 +378,11 @@ async def run_single_example(
         if "role" not in assistant:
             assistant["role"] = "assistant"
         tool_calls = assistant.get("tool_calls") or []
-        # print(f'[TOOL CALLS (unified_runner.py line 294)]: {tool_calls}')
+        # SGLang returns multiple tool calls even with parallel_tool_calls=false
+        # Keep only first to match vLLM behavior (model designed for 1 call per turn)
+        if not parallel_tool_calls and len(tool_calls) > 1:
+            tool_calls = tool_calls[:1]
+            assistant["tool_calls"] = tool_calls
 
         if task_dir is not None:
             response_data = {
@@ -338,16 +423,50 @@ async def run_single_example(
         request_details_file.flush()
         request_index += 1
 
+        # If server failed to parse tool call but content contains one, extract it.
+        # SGLang gpt-oss parser leaks raw tokens like:
+        #   <|start|>assistant<|channel|>analysis to=functions.bash code<|message|>{"command":"ls"}<|call|>
+        if not tool_calls:
+            content = assistant.get("content", "") or ""
+            recovered = _recover_tool_calls_from_content(content, turn_index)
+            if recovered:
+                tool_calls = [recovered[0]]
+                assistant["tool_calls"] = tool_calls
+                assistant["content"] = None
+
+        # Normalize SGLang gpt-oss output:
+        # When tool_calls present, clear garbage content (chat template forbids both content+thinking)
+        if tool_calls:
+            assistant["content"] = None
+
         messages.append(assistant)
 
         if not tool_calls:
-            break
+            # Model didn't call any tool. Remind it to keep working.
+            # Allow up to 3 no-tool responses before giving up.
+            no_tool_retries += 1
+            if no_tool_retries >= 3:
+                break
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Your last output did not use any tool calls! "
+                    "Please make sure your output includes exactly ONE function call! "
+                    "If you think you have already resolved the issue, please submit "
+                    "your changes by calling the `submit` tool. "
+                    "Else, please continue with a new tool call!"
+                ),
+            })
+            continue
 
         tool_calls_log: List[Dict[str, Any]] = []
         tool_results_log: List[Dict[str, Any]] = []
         for tc in tool_calls:
             function = tc.get("function") or {}
             name = str(function.get("name", ""))
+            # Fix vLLM GPT-OSS Harmony token leak bug (vllm#32587)
+            if "<|" in name:
+                name = name[:name.index("<|")]
             if not name:
                 continue
             raw_args = function.get("arguments", "{}")
@@ -410,13 +529,45 @@ async def run_single_example(
                 }
             )
 
+            # SWE-agent wraps tool results with OBSERVATION template
+            # even in function_calling mode
+            obs_content = (
+                flattened_result
+                if not flattened_result
+                else f"OBSERVATION:\n{flattened_result}"
+            )
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
-                    "content": flattened_result,
+                    "content": obs_content,
                 }
             )
+
+        # If model called submit — multi-stage review (matches official SWE-agent)
+        if any(tc_log["name"] == "submit" for tc_log in tool_calls_log):
+            if task_dir is not None:
+                (task_dir / f"turn_{turn_index:03d}_tool_calls.json").write_text(
+                    json.dumps(tool_calls_log, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                (task_dir / f"turn_{turn_index:03d}_tool_results.json").write_text(
+                    json.dumps(tool_results_log, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            # First submit → review, second submit → done
+            submit_count += 1
+            if submit_count >= 2:
+                break
+            review_msg = (
+                "Thank you for your work on this issue. Please carefully follow the steps below:\n\n"
+                "1. If you made any changes after running your reproduction script, re-run it to verify the fix.\n"
+                "2. Remove your reproduction script (if you created one).\n"
+                "3. If you modified any TEST files, revert them with `git checkout -- <test_file>`.\n"
+                "4. Call `submit` again to confirm your submission.\n"
+            )
+            messages.append({"role": "user", "content": review_msg})
+            continue
 
         if task_dir is not None:
             (task_dir / f"turn_{turn_index:03d}_tool_calls.json").write_text(
@@ -1189,22 +1340,49 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
             if interface and str(interface).strip():
                 extra_sections += f"\n\n## Interface\n{str(interface).strip()}\n"
 
+            # Get fail_to_pass test names for the prompt
+            import ast as _ast
+            f2p_raw = ex.get("fail_to_pass", "[]")
+            try:
+                f2p_tests = json.loads(f2p_raw) if isinstance(f2p_raw, str) else f2p_raw
+            except json.JSONDecodeError:
+                try:
+                    f2p_tests = _ast.literal_eval(f2p_raw)
+                except Exception:
+                    f2p_tests = []
+            # Extract test file paths from test names (e.g. "tests/foo.py::test_bar" -> "tests/foo.py")
+            test_files = sorted(set(t.split("::")[0] for t in f2p_tests if "::" in t))
+
             lang_note = f" (language: {repo_language})" if repo_language else ""
 
+            # Official SWE-agent prompt from tool_use.yaml (instance_template)
+            working_dir = "/app"
             prompt = (
-                f"You are a software engineer working on the repository "
-                f"**{repo}**{lang_note} "
-                f"(base commit: `{base_commit}`).\n\n"
-                f"## Issue\n{problem.strip()}\n"
-                f"{extra_sections}\n"
-                "## Task\n"
-                "Use the available tools to explore the codebase, understand the issue, "
-                "and make the necessary code changes to fix it.\n\n"
-                "Guidelines:\n"
-                "- Use `search_code` and `read_file` to find relevant code.\n"
-                "- Use `write_file` to apply your fix.\n"
-                "- Use `run_shell` to run commands if needed.\n"
-                "- Make minimal, targeted changes. Do not modify tests.\n"
+                f"<uploaded_files>\n{working_dir}\n</uploaded_files>\n"
+                f"I've uploaded a python code repository in the directory {working_dir}. "
+                "Consider the following PR description:\n\n"
+                f"<pr_description>\n{problem.strip()}\n</pr_description>\n\n"
+                "Can you help me implement the necessary changes to the repository "
+                "so that the requirements specified in the <pr_description> are met?\n"
+                "I've already taken care of all changes to any of the test files described "
+                "in the <pr_description>. This means you DON'T have to modify the testing "
+                "logic or any of the tests in any way!\n"
+                f"Your task is to make the minimal changes to non-tests files in the {working_dir} "
+                "directory to ensure the <pr_description> is satisfied.\n"
+                "Follow these steps to resolve the issue:\n"
+                "1. As a first step, it might be a good idea to find and read code relevant to the <pr_description>\n"
+                "2. Create a script to reproduce the error and execute it with `python <filename.py>` using the bash tool, to confirm the error\n"
+                "3. Edit the source code of the repo to resolve the issue\n"
+                "4. Rerun your reproduce script and confirm that the error is fixed!\n"
+                "5. Think about edgecases and make sure your fix handles them as well\n"
+                "Your thinking should be thorough and so it's fine if it's very long.\n\n"
+                "⚠️⚠️⚠️ CRITICAL - YOU MUST DO THIS BEFORE STOPPING ⚠️⚠️⚠️\n"
+                "After editing code, run this EXACT command:\n"
+                + "```\npython -m pytest "
+                + " ".join(f'"{t}"' for t in f2p_tests)
+                + " -x --tb=long\n```\n"
+                + "If any test fails, fix your code and re-run. DO NOT stop until ALL tests above pass.\n"
+                + "Your task is INCOMPLETE if you have not run and passed these tests.\n"
             )
             tasks.append(
                 UnifiedTask(
@@ -1214,10 +1392,12 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         {
                             "role": "system",
                             "content": (
-                                "You are a software engineer. Use the provided tools "
-                                "(read_file, write_file, run_shell, search_code) to "
-                                "explore the repository and fix the issue. "
-                                "Make minimal changes to non-test source files only."
+                                "You are a helpful assistant that can interact "
+                                "with a computer to solve tasks.\n"
+                                "You MUST only use the tools defined above: `bash`, `str_replace_editor`, and `submit`. "
+                                "Do NOT use any other tool names such as exec, open_file, search, view, print_tree, etc.\n"
+                                "After editing code, ALWAYS run tests with: `python -m pytest <test_file> -x --tb=long` "
+                                "to verify your fix. If tests fail, fix the code and re-run tests."
                             ),
                         },
                         {"role": "user", "content": prompt},
@@ -1232,8 +1412,178 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         "fail_to_pass": ex.get("fail_to_pass", ""),
                         "FAIL_TO_PASS": ex.get("fail_to_pass", ""),
                         "patch": ex.get("patch", ""),
+                        "pass_to_pass": ex.get("pass_to_pass", ""),
                         "before_repo_set_cmd": ex.get("before_repo_set_cmd", ""),
                         "selected_test_files_to_run": ex.get("selected_test_files_to_run", ""),
+                    },
+                )
+            )
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
+    if name in ("swebench_lite", "swe_bench_lite"):
+        from datasets import load_dataset as hf_load
+
+        ds = hf_load("princeton-nlp/SWE-bench_Lite", split="test")
+        tasks = []
+        for ex in ds:
+            if not isinstance(ex, dict):
+                continue
+            instance_id = ex.get("instance_id", "")
+            repo = ex.get("repo", "")
+            base_commit = ex.get("base_commit", "")
+            problem = ex.get("problem_statement", "")
+
+            import ast as _ast
+            f2p_raw = ex.get("FAIL_TO_PASS", "[]")
+            try:
+                f2p_tests = json.loads(f2p_raw) if isinstance(f2p_raw, str) else f2p_raw
+            except json.JSONDecodeError:
+                try:
+                    f2p_tests = _ast.literal_eval(f2p_raw)
+                except Exception:
+                    f2p_tests = []
+
+            working_dir = "/testbed"
+            prompt = (
+                "MANDATORY RULES (read carefully before starting):\n"
+                "- Do NOT modify any test files. Only edit source code.\n"
+                "- Do NOT run tests until AFTER you have edited the source code.\n"
+                "- Do NOT submit until you have run the tests and they all pass.\n"
+                "- If tests fail, keep trying — analyze the error, fix your code, re-run. Do NOT give up after one failure.\n"
+                "- Do NOT spend too many turns just reading files. Quickly identify the relevant code, then make your edit.\n"
+                "- ALWAYS write a small reproduce script first to confirm the bug, then fix the code, then re-run to confirm it's fixed.\n"
+                "- If your fix causes a new error (e.g. AttributeError, wrong order of initialization), READ the traceback carefully and adjust. Pay attention to the order of operations in __init__ methods.\n\n"
+                f"<uploaded_files>\n{working_dir}\n</uploaded_files>\n"
+                f"I've uploaded a python code repository in the directory {working_dir}. "
+                "Consider the following PR description:\n\n"
+                f"<pr_description>\n{problem.strip()}\n</pr_description>\n\n"
+                "Can you help me implement the necessary changes to the repository "
+                "so that the requirements specified in the <pr_description> are met?\n"
+                "I've already taken care of all changes to any of the test files described "
+                "in the <pr_description>. This means you DON'T have to modify the testing "
+                "logic or any of the tests in any way!\n"
+                f"Your task is to make the minimal changes to non-tests files in the {working_dir} "
+                "directory to ensure the <pr_description> is satisfied.\n"
+                "Follow these steps to resolve the issue:\n"
+                "1. As a first step, it might be a good idea to find and read code relevant to the <pr_description>\n"
+                "2. Create a script to reproduce the error and execute it with `python <filename.py>` using the bash tool, to confirm the error\n"
+                "3. Edit the sourcecode of the repo to resolve the issue\n"
+                "4. Rerun your reproduce script and confirm that the error is fixed!\n"
+                "5. Think about edgecases and make sure your fix handles them as well\n"
+                "Your thinking should be thorough and so it's fine if it's very long.\n"
+            )
+
+            # Add per-repo test verification instruction
+            from swebench.harness.test_spec.python import MAP_REPO_VERSION_TO_SPECS
+            _specs = MAP_REPO_VERSION_TO_SPECS.get(repo, {}).get(
+                ex.get("version", ""), {}
+            )
+            _test_cmd = _specs.get("test_cmd", "pytest -rA")
+
+            # Build test directives from f2p test names
+            if "runtests.py" in _test_cmd:
+                # Django: extract module names from "test_name (module.Class)"
+                _modules = sorted(set(
+                    t.split("(")[-1].rstrip(")").rsplit(".", 1)[0]
+                    for t in f2p_tests if "(" in t
+                ))
+                _test_directive = " ".join(_modules) if _modules else ""
+                _verify_cmd = f"./tests/runtests.py --settings=test_sqlite --parallel 1 {_test_directive}"
+            elif "bin/test" in _test_cmd:
+                # sympy: f2p names are bare function names, get files from test_patch
+                import re as _re2
+                _files = sorted(set(
+                    m.group(1) for m in _re2.finditer(
+                        r'^\+\+\+ b/(.+)$', ex.get("test_patch", ""), _re2.MULTILINE
+                    ) if m.group(1).endswith(".py")
+                ))
+                _verify_cmd = f"PYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning' bin/test -C --verbose " + " ".join(_files)
+            elif "tox" in _test_cmd:
+                # sphinx: use tox as official test runner
+                _tox_tests = " ".join(f'"{t}"' for t in f2p_tests)
+                _verify_cmd = f"{_test_cmd} {_tox_tests}"
+            else:
+                # pytest-based repos
+                _verify_cmd = "python -m pytest -x --tb=long " + " ".join(
+                    f'"{t}"' for t in f2p_tests
+                )
+
+            # Extract test file paths for full suite run
+            _test_files = sorted(set(
+                t.split("::")[0] for t in f2p_tests if "::" in t
+            ))
+            if "runtests.py" in _test_cmd:
+                _full_cmd = _verify_cmd  # Django: same command runs the module
+            elif "tox" in _test_cmd:
+                # sphinx: use tox for full suite too
+                _tox_files = " ".join(f'"{f}"' for f in _test_files) if _test_files else ""
+                _full_cmd = f"{_test_cmd} {_tox_files}" if _tox_files else _verify_cmd
+            elif _test_files:
+                _full_cmd = "python -m pytest " + " ".join(f'"{f}"' for f in _test_files)
+            else:
+                _full_cmd = _verify_cmd
+
+            prompt += (
+                "\n========== VERIFICATION (MANDATORY — read before submitting) ==========\n"
+                "After making your code changes, you MUST run these commands to verify:\n\n"
+                f"Step 1 — Run the failing tests to check your fix:\n{_verify_cmd}\n\n"
+                f"Step 2 — Run the full test file to check for regressions:\n{_full_cmd}\n\n"
+                "RULES:\n"
+                "- Only run tests AFTER you have edited source code.\n"
+                "- Do NOT submit until BOTH steps pass.\n"
+                "- If tests fail, carefully read the FULL error message and traceback. The error tells you exactly what's wrong — fix it and re-run. NEVER give up or submit with failing tests.\n"
+                "- If you get an AttributeError or NameError, it usually means you placed code in the wrong location or wrong order. Move your change to the correct place.\n"
+                "- Do NOT modify any test files.\n"
+                "- Do NOT submit without making any code changes. You MUST edit source code to fix the issue.\n"
+                "=========================================================================\n"
+            )
+
+            # Docker image: swebench replaces __ with _1776_ in image names
+            image_id = instance_id.replace("__", "_1776_")
+            dockerhub_tag = f"sweb.eval.x86_64.{image_id}:latest"
+
+            tasks.append(
+                UnifiedTask(
+                    task_id=instance_id,
+                    task_name=f"[{repo}] {problem[:60]}",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a helpful assistant that can interact with a computer to solve tasks.\n\n"
+                                "You have exactly THREE tools — use ONLY these:\n"
+                                "1. bash — run shell commands\n"
+                                "2. str_replace_editor — view/edit files. Commands:\n"
+                                "   - view: view file or directory (use path, optional view_range)\n"
+                                "   - str_replace: replace text (use path, old_str, new_str)\n"
+                                "   - create: create new file (use path, file_text)\n"
+                                "   - insert: insert text after a line (use path, insert_line, new_str)\n"
+                                "   - undo_edit: undo last edit (use path)\n"
+                                "3. submit — submit your changes when done\n\n"
+                                "Do NOT call any other tool (no view_file, no open_file, no search, etc.).\n"
+                                "Do NOT modify any test files. Only run tests AFTER you have made code changes.\n"
+                                "Use the EXACT test commands given in the instructions — do not invent your own."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    eval_config={
+                        "type": "swebench",
+                        "instance_id": instance_id,
+                        "repo": repo,
+                        "base_commit": base_commit,
+                        "dockerhub_tag": dockerhub_tag,
+                        "test_patch": ex.get("test_patch", ""),
+                        "fail_to_pass": ex.get("FAIL_TO_PASS", ""),
+                        "FAIL_TO_PASS": ex.get("FAIL_TO_PASS", ""),
+                        "patch": ex.get("patch", ""),
+                        "pass_to_pass": ex.get("PASS_TO_PASS", ""),
+                        "before_repo_set_cmd": "",
+                        "selected_test_files_to_run": "",
+                        "workdir": working_dir,
+                        "version": ex.get("version", ""),
                     },
                 )
             )
@@ -1325,7 +1675,7 @@ Question: {question}"""
 
     raise ValueError(
         "Unknown dataset: "
-        f"{dataset_name}. Supported: imo-answerbench, mcp-atlas, swe-bench-pro, medagentbench, tau2-banking"
+        f"{dataset_name}. Supported: imo-answerbench, mcp-atlas, swe-bench-pro, swe-bench-lite, medagentbench, tau2-banking"
     )
 
 
