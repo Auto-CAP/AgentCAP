@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cu128
 
-aiohttp==3.13.2
+aiohttp==3.13.3
 datasets==4.4.1
 google-genai==1.43.0
 ipykernel==6.29.5
