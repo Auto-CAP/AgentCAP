@@ -23,6 +23,7 @@ import aiohttp
 from google import genai
 from math_verify import parse, verify
 from openai import OpenAI
+from huggingface_hub import snapshot_download
 
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
@@ -666,6 +667,45 @@ async def apply_llm_judgment(
 
     return result
 
+def resolve_model_path(model_path: str, local_model_root: Optional[str] = None) -> str:
+    """
+    If model_path is an existing local directory, return it unchanged.
+    Otherwise, treat it as a Hugging Face repo id and download it locally.
+
+    Examples:
+      - /workspace/models/unsloth/gpt-oss-120b   -> use as-is if it exists
+      - openai/gpt-oss-120b                      -> download from HF
+    """
+    path_obj = Path(model_path)
+    if path_obj.is_dir():
+        resolved = str(path_obj.resolve())
+        print(f"Using local model directory: {resolved}", flush=True)
+        return resolved
+
+    # Choose a stable local destination for downloaded models
+    if local_model_root is None:
+        local_model_root = os.getenv("HF_LOCAL_MODEL_ROOT", "/workspace/models")
+
+    target_dir = Path(local_model_root) / model_path.split("/")[-1]
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+    print(
+        f"Local model directory not found for '{model_path}'. "
+        f"Treating it as a Hugging Face repo id and downloading to {target_dir}",
+        flush=True,
+    )
+
+    resolved = snapshot_download(
+        repo_id=model_path,
+        local_dir=str(target_dir),
+        token=hf_token,
+        resume_download=True,
+    )
+
+    print(f"Downloaded model snapshot to: {resolved}", flush=True)
+    return resolved
+
 class VLLMInfraGPTOSS:
     def __init__(self, cfg: RuntimeConfig):
         self.cfg = cfg
@@ -701,7 +741,9 @@ class VLLMInfraGPTOSS:
 
     def _preload_model_weights(self) -> None:
         if not os.path.isdir(self.cfg.model_path):
-            raise FileNotFoundError(f"Model path does not exist: {self.cfg.model_path}")
+            raise FileNotFoundError(
+                f"Resolved model path does not exist or is not a directory: {self.cfg.model_path}"
+            )
 
         print(f"Loading model weights from {self.cfg.model_path} into OS Page Cache...")
         start_time = time.time()
@@ -1486,6 +1528,7 @@ def main() -> None:
     parser.add_argument("--judge-model", type=str, default="openrouter/elephant-alpha")
 
     args = parser.parse_args()
+    args.model_path = resolve_model_path(args.model_path)
     output_paths = initialize_output_files(args)
     t0 = time.time()
 
