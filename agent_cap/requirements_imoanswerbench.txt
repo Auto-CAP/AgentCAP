@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+
 aiohttp==3.13.2
 datasets==4.4.1
 google-genai==1.43.0
@@ -11,3 +13,8 @@ PyYAML==6.0.3
 pyzmq==27.1.0
 sympy==1.14.0
 transformers==4.57.1
+
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+torchaudio==2.10.0+cu128
+vllm==0.19.0
