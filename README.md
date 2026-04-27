@@ -8,8 +8,9 @@ This folder packages the data behind the two plots requested in the review:
 
 | File | Purpose | Source |
 |---|---|---|
-| `cost_accuracy_team_configs.csv` | Master table: every team configuration shown in the paper, tagged with team type and deployment mode | Paper Section 6 cost--accuracy table |
-| `plot1_homo_vs_hetero_allapi.csv` | Subset for plot 1: all-API teams only, distinguished as homogeneous (planner=executor) vs heterogeneous (planner!=executor) | Filtered from master |
+| `plot1_full_matrix_allapi.csv` | **Full 4x4 API planner-by-executor matrix on every benchmark.** This is the "full combination space" version of plot 1. 73 rows: 16 each for MCP-Atlas, MedAgentBench, FinanceBench, IMO-AnswerBench, plus 9 for SWEBench (API matrix is 3x3, GLM not run). Columns: benchmark, planner, executor, team_type, accuracy_pct, cost_per_task_usd. | MCP/Med/Finance from raw `metrics_*.json` (`quality.acc` for accuracy, token totals + provider prices for cost). IMO accuracy from paper appendix matrix, cost from `imo_*_*.db`. SWEBench from paper §4 matrix; cost only available where also reported in §6 cost--accuracy table. |
+| `cost_accuracy_team_configs.csv` | Master table: every team configuration shown in the paper, tagged with team type and deployment mode (includes hybrid and local teams beyond the API matrix) | Paper Section 6 cost--accuracy table |
+| `plot1_homo_vs_hetero_allapi.csv` | Subset for plot 1: all-API teams from the master table, distinguished as homogeneous vs heterogeneous | Filtered from master |
 | `plot2_deployment_modes.csv` | Subset for plot 2: every team grouped by deployment mode (`all-API`, `hybrid`, `all-local`) | Filtered from master |
 | `mcp_atlas_selfplay_per_task.csv` | Per-task DB results for the four API self-play runs on MCP-Atlas (60 tasks each), if recomputation from raw is needed | `/home/sicheng/AgentCAP/results/hybrid_*_self.db` |
 | `financebench_selfplay_aggregate.csv` | Aggregate per-role token totals for FinanceBench self-play, used to derive cost from provider prices | `/data/sicheng/agent-team-data/*_*_financebench/team_plan_execute/metrics_*190823.json` |
