@@ -1,5 +1,12 @@
 benchmark,planner,executor,accuracy_pct,cost_per_task_usd,source
+MCP-Atlas,GPT-5.4,Qwen3.5-27B,62.5,0.0826,hybrid_db
+MCP-Atlas,GPT-5.4,GPT-OSS-120B,63.3,0.0308,hybrid_db
+MCP-Atlas,Claude-Opus-4.6,Qwen3.5-27B,66.3,0.0864,hybrid_db
+MCP-Atlas,Claude-Opus-4.6,GPT-OSS-120B,60.8,0.0440,hybrid_db
+MCP-Atlas,MiniMax-M2.7,Qwen3.5-27B,69.5,0.0621,hybrid_db
+MCP-Atlas,MiniMax-M2.7,GPT-OSS-120B,59.1,0.0168,hybrid_db
 MCP-Atlas,GLM-5.1,Qwen3.5-27B,28.4,0.1552,metrics_json
+MCP-Atlas,GLM-5.1,GPT-OSS-120B,65.5,0.0201,hybrid_db
 MedAgentBench,GPT-5.4,Qwen3.5-27B,91.7,0.0220,metrics_json
 MedAgentBench,GPT-5.4,GPT-OSS-120B,83.3,0.0180,metrics_json
 MedAgentBench,Claude-Opus-4.6,Qwen3.5-27B,93.3,0.0793,metrics_json
@@ -21,7 +28,10 @@ FinanceBench,GLM-5.1,Qwen3.5-27B,56.0,0.0159,metrics_json
 FinanceBench,GLM-5.1,Qwen3-32B,0.0,0.0018,metrics_json
 FinanceBench,GLM-5.1,GPT-OSS-20B,45.3,0.0091,metrics_json
 FinanceBench,GLM-5.1,GPT-OSS-120B,45.3,0.0144,metrics_json
+IMO-AnswerBench,GPT-5.4,GPT-OSS-120B,59.0,0.0824,imo_db+paper_matrix
 IMO-AnswerBench,Claude-Opus-4.6,GPT-OSS-120B,78.1,0.1315,imo_db
+IMO-AnswerBench,MiniMax-M2.7,GPT-OSS-120B,56.2,0.0577,imo_db+paper_matrix
+IMO-AnswerBench,GLM-5.1,GPT-OSS-120B,62.5,0.0689,imo_db+paper_matrix
 SWEBench,GPT-5.4,Qwen3.5-4B,27.5,0.0051,paper_matrix
 SWEBench,GPT-5.4,Qwen3.5-27B,39.8,0.0055,paper_matrix
 SWEBench,GPT-5.4,GPT-OSS-20B,11.8,0.0052,paper_matrix
