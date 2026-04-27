@@ -28,7 +28,9 @@ FinanceBench,GLM-5.1,Qwen3.5-27B,56.0,0.0159,metrics_json
 FinanceBench,GLM-5.1,Qwen3-32B,0.0,0.0018,metrics_json
 FinanceBench,GLM-5.1,GPT-OSS-20B,45.3,0.0091,metrics_json
 FinanceBench,GLM-5.1,GPT-OSS-120B,45.3,0.0144,metrics_json
+IMO-AnswerBench,GPT-5.4,Qwen3.5-27B,56.2,0.1647,imo_db+llm_judge
 IMO-AnswerBench,GPT-5.4,GPT-OSS-120B,59.0,0.0824,imo_db+paper_matrix
+IMO-AnswerBench,Claude-Opus-4.6,Qwen3.5-27B,80.6,0.2502,imo_db+llm_judge
 IMO-AnswerBench,Claude-Opus-4.6,GPT-OSS-120B,78.1,0.1315,imo_db
 IMO-AnswerBench,MiniMax-M2.7,GPT-OSS-120B,56.2,0.0577,imo_db+paper_matrix
 IMO-AnswerBench,GLM-5.1,GPT-OSS-120B,62.5,0.0689,imo_db+paper_matrix
