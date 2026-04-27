@@ -64,11 +64,11 @@ IMO-AnswerBench,GLM-5.1,Claude-Opus-4.6,75.4,0.7372,imo_db
 IMO-AnswerBench,GLM-5.1,MiniMax-M2.7,62.5,0.2086,imo_db
 IMO-AnswerBench,GLM-5.1,GLM-5.1,62.5,0.3329,imo_db
 SWEBench,GPT-5.4,GPT-5.4,68.2,0.0300,paper_matrix
-SWEBench,GPT-5.4,Claude-Opus-4.6,71.6,,paper_matrix
+SWEBench,GPT-5.4,Claude-Opus-4.6,71.6,0.0575,paper_matrix
 SWEBench,GPT-5.4,MiniMax-M2.7,76.2,0.0210,paper_matrix
-SWEBench,Claude-Opus-4.6,GPT-5.4,31.7,,paper_matrix
+SWEBench,Claude-Opus-4.6,GPT-5.4,31.7,0.0355,paper_matrix
 SWEBench,Claude-Opus-4.6,Claude-Opus-4.6,32.4,0.0630,paper_matrix
-SWEBench,Claude-Opus-4.6,MiniMax-M2.7,60.1,,paper_matrix
-SWEBench,MiniMax-M2.7,GPT-5.4,48.1,,paper_matrix
-SWEBench,MiniMax-M2.7,Claude-Opus-4.6,19.7,,paper_matrix
-SWEBench,MiniMax-M2.7,MiniMax-M2.7,20.2,,paper_matrix
+SWEBench,Claude-Opus-4.6,MiniMax-M2.7,60.1,0.0265,paper_matrix
+SWEBench,MiniMax-M2.7,GPT-5.4,48.1,0.0270,paper_matrix
+SWEBench,MiniMax-M2.7,Claude-Opus-4.6,19.7,0.0545,paper_matrix
+SWEBench,MiniMax-M2.7,MiniMax-M2.7,20.2,0.0180,paper_matrix
