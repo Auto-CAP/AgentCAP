@@ -1677,6 +1677,7 @@ def main() -> None:
         enable_auto_tool_choice=args.enable_auto_tool_choice,
         server_timeout=args.server_timeout,
         preload_workers=args.preload_workers,
+        preload_model_weights=args.preload_model_weights,
     )
 
     infra = VLLMInfraDeepSeek32(runtime_cfg)
