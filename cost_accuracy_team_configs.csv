@@ -10,7 +10,7 @@ MedAgentBench,GLM-5.1,Qwen3.5-27B,heterogeneous,hybrid,0.005,88.3
 MedAgentBench,Claude-Opus-4.6,Claude-Opus-4.6,homogeneous,all-API,0.09,93.3
 MedAgentBench,GLM-5.1,GLM-5.1,homogeneous,all-API,0.009,90.0
 MedAgentBench,MiniMax-M2.7,MiniMax-M2.7,homogeneous,all-API,0.007,73.3
-FinanceBench,Qwen3.5-9B,Qwen3.5-27B,heterogeneous,all-local,0.001,60.0
+FinanceBench,Qwen3.5-4B,Qwen3.5-27B,heterogeneous,all-local,0.001,60.0
 FinanceBench,MiniMax-M2.7,GLM-5.1,heterogeneous,all-API,0.04,53.3
 FinanceBench,GLM-5.1,GLM-5.1,homogeneous,all-API,0.03,54.7
 FinanceBench,Claude-Opus-4.6,Claude-Opus-4.6,homogeneous,all-API,0.16,45.3

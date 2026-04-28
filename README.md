@@ -53,7 +53,7 @@ Self-hosted prices at 4 x H100 SXM, $1.89/hr/GPU, c=1000, TP=4 (paper Appendix t
 | Qwen3.5-27B | 0.46 |
 | GPT-OSS-120B | 0.29 |
 | GPT-OSS-20B | 0.20 (estimated by size scaling) |
-| Qwen3.5-9B | 0.10 (estimated) |
+| Qwen3.5-4B | 0.10 (estimated) |
 | Qwen3.5-4B | 0.06 (estimated) |
 | Qwen3-32B | 0.55 (estimated; only present in FinanceBench hybrid runs) |
 
