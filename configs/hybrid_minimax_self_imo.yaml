@@ -1,0 +1,24 @@
+name: hybrid_minimax_self-imo
+description: "MiniMax M2.5 plans and executes"
+experiment_type: plan-execute
+
+planner:
+  id: minimax/minimax-m2.7
+  base_url: https://openrouter.ai/api
+  api_key: ${OPENROUTER_API_KEY}
+  is_local: false
+  input_price_per_1m: 0.40
+  output_price_per_1m: 1.60
+
+executor:
+  id: minimax/minimax-m2.7
+  base_url: https://openrouter.ai/api
+  is_local: false
+  api_key: ${OPENROUTER_API_KEY}
+  input_price_per_1m: 0.40
+  output_price_per_1m: 1.60
+
+mcp_server_url: http://localhost:1984
+max_turns: 50
+max_tokens: 32768
+plan_max_tokens: 4096

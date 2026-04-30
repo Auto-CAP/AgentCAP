@@ -1,5 +1,9 @@
 import abc
+import asyncio
 import json
+import math
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 from urllib.parse import urlparse, urlunparse
 
@@ -75,7 +79,8 @@ class MCPToolBackend(ToolBackend):
                         "name": name,
                         "description": str(tool.get("description", "")),
                         "parameters": _fix_tool_schema(
-                            tool.get("input_schema", {}), name
+                            tool.get("inputSchema") or tool.get("input_schema") or {},
+                            name,
                         ),
                     },
                 }
@@ -136,6 +141,38 @@ class SWEBenchToolBackend(ToolBackend):
             return self._backend.get_patch()
         return ""
 
+
+class MathPythonToolBackend(ToolBackend):
+    def __init__(
+        self,
+        startup_timeout: float = 30.0,
+        exec_timeout: float = 30.0,
+        preload: str = "minimal",
+        auto_print_last_expr: bool = True,
+    ):
+        from agent_cap.backends.math_python_backend import MathPythonBackend
+
+        self._backend = MathPythonBackend(
+            startup_timeout=startup_timeout,
+            exec_timeout=exec_timeout,
+            preload=preload,
+            auto_print_last_expr=auto_print_last_expr,
+        )
+
+    async def setup(self, task_config: Dict[str, Any]) -> bool:
+        return await asyncio.to_thread(self._backend.setup, task_config)
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        return self._backend.get_tool_definitions()
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+        result = await asyncio.to_thread(self._backend.execute, name, "call", arguments)
+        if result.success:
+            return [{"type": "text", "text": result.output}]
+        raise RuntimeError(result.output)
+
+    async def teardown(self) -> None:
+        await asyncio.to_thread(self._backend.teardown)
     def run_tests(self, timeout: int = 300) -> Dict[str, Any]:
         if self._backend:
             return self._backend.run_tests(timeout=timeout)
@@ -168,6 +205,15 @@ class MedAgentBenchToolBackend(ToolBackend):
 
     async def setup(self, task_config: Dict[str, Any]) -> bool:
         del task_config
+
+        if self._fhir_base:
+            # Server already running, reuse it
+            try:
+                async with self._session.get(f"{self._fhir_base}/metadata") as resp:
+                    if resp.status == 200:
+                        return True
+            except Exception:
+                pass
 
         if self._external_url:
             self._fhir_base = self._external_url
@@ -309,3 +355,138 @@ class MedAgentBenchToolBackend(ToolBackend):
             return normalized
 
         return f"{self._fhir_base}/{normalized.lstrip('/')}"
+
+
+class FinanceBenchToolBackend(ToolBackend):
+    """Tool backend for FinanceBench: search pre-extracted SEC filing evidence + safe calculator."""
+
+    DEFAULT_DATA_PATH = (
+        Path(__file__).resolve().parent.parent.parent
+        / "third_party"
+        / "financebench"
+        / "data"
+        / "financebench_open_source.jsonl"
+    )
+
+    def __init__(self, data_path: Optional[Path] = None):
+        self._data_path = data_path or self.DEFAULT_DATA_PATH
+        # doc_name -> list of evidence dicts {evidence_text, evidence_page_num, evidence_text_full_page}
+        self._doc_index: Dict[str, List[Dict[str, Any]]] = {}
+        self._task_config: Dict[str, Any] = {}
+
+    def _load_index(self) -> None:
+        if self._doc_index:
+            return
+        with self._data_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                item = json.loads(line)
+                for ev in item.get("evidence", []):
+                    doc = ev.get("doc_name", "")
+                    if doc:
+                        self._doc_index.setdefault(doc, []).append(ev)
+
+    async def setup(self, task_config: Dict[str, Any]) -> bool:
+        self._load_index()
+        self._task_config = task_config
+        return True
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_document",
+                    "description": (
+                        "Search the pre-extracted text of an SEC filing for information "
+                        "relevant to the query. Returns matching evidence passages."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "doc_name": {
+                                "type": "string",
+                                "description": (
+                                    "The document identifier, e.g. '3M_2018_10K'. "
+                                    "Format: {COMPANY}_{YEAR}_{TYPE}."
+                                ),
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "Keywords or phrase to search for in the document.",
+                            },
+                        },
+                        "required": ["doc_name", "query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculate",
+                    "description": (
+                        "Evaluate a mathematical expression and return the numeric result. "
+                        "Supports basic arithmetic, percentages, and common financial formulas. "
+                        "Example: '(1577 / 32136) * 100' returns 4.906..."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "expression": {
+                                "type": "string",
+                                "description": "A Python-style arithmetic expression to evaluate.",
+                            }
+                        },
+                        "required": ["expression"],
+                    },
+                },
+            },
+        ]
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+        if name == "search_document":
+            return self._search_document(
+                str(arguments.get("doc_name", "")),
+                str(arguments.get("query", "")),
+            )
+        if name == "calculate":
+            return self._calculate(str(arguments.get("expression", "")))
+        raise ValueError(f"Unknown tool: {name}")
+
+    def _search_document(self, doc_name: str, query: str) -> str:
+        entries = self._doc_index.get(doc_name, [])
+        if not entries:
+            available = sorted(self._doc_index.keys())[:10]
+            return (
+                f"Document '{doc_name}' not found. "
+                f"Available documents (sample): {available}"
+            )
+        query_lower = query.lower()
+        query_terms = query_lower.split()
+        scored: List[tuple] = []
+        for ev in entries:
+            full = ev.get("evidence_text_full_page", "")
+            snippet = ev.get("evidence_text", "")
+            combined = (full + " " + snippet).lower()
+            score = sum(1 for t in query_terms if t in combined)
+            scored.append((score, ev.get("evidence_page_num", 0), snippet, full))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        top = scored[:3]
+        parts = []
+        for score, page, snippet, full in top:
+            parts.append(f"[Page {page}]\n{full[:3000] if full else snippet[:1000]}")
+        return "\n\n---\n\n".join(parts) if parts else "No relevant passages found."
+
+    @staticmethod
+    def _calculate(expression: str) -> str:
+        safe_names = {k: getattr(math, k) for k in dir(math) if not k.startswith("_")}
+        safe_names["abs"] = abs
+        safe_names["round"] = round
+        try:
+            result = eval(expression, {"__builtins__": {}}, safe_names)  # noqa: S307
+            return str(result)
+        except Exception as exc:
+            return f"Error evaluating '{expression}': {exc}"
+
+    async def teardown(self) -> None:
+        pass
