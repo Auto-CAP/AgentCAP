@@ -1,0 +1,138 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: vllm-gptoss-gsm8k-chatapi-hh-a100-
+  labels:
+    kueue.x-k8s.io/queue-name: eidf230ns-user-queue
+spec:
+  completions: 1
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      containers:
+      - name: vllm-server
+        image: vllm/vllm-openai:v0.16.0
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: HF_HOME
+            value: /mnt/input/hf_cache
+          - name: TEAS_OUTPUT_DIR
+            value: /mnt/develop/outputs
+          - name: GIT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: teas-develop-results-private-ap
+                key: token
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            timestamp=$( date +%Y%m%d-%H%M )
+            RUN_DIR=/dev/shm/$timestamp
+            mkdir -p $RUN_DIR
+            exec &> $RUN_DIR/stdout_stderr.log
+
+            apt-get update
+            apt-get -y install git
+            git clone https://github.com/Auto-CAP/MoE-CAP.git /dev/shm/MoE-CAP
+            cd /dev/shm/MoE-CAP
+            echo "MoE-CAP commit: $(git rev-parse HEAD)"
+            pip install -e .
+            pip install gputil
+
+            # --- Patch gsm8k_data_loader: add #### <number> system prompt ---
+            python3 - << 'PYEOF'
+            from pathlib import Path
+            p = Path("/dev/shm/MoE-CAP/moe_cap/data_loader/gsm8k_data_loader.py")
+            src = p.read_text()
+            marker = "self._process_targets()"
+            patch = (
+                "        self._process_targets()\n"
+                "        gsm8k_system = (\n"
+                "            \"Solve the math problem. End your response with a line of the form \"\n"
+                "            \"'#### <number>' containing only the final numeric answer (no units, \"\n"
+                "            \"no commas, no currency symbols).\"\n"
+                "        )\n"
+                "        self.system_prompts = [gsm8k_system] * len(self.dataset)"
+            )
+            assert src.count(marker) == 1, "marker not unique"
+            src = src.replace("        " + marker, patch, 1)
+            p.write_text(src)
+            print("Patched gsm8k_data_loader.py")
+            PYEOF
+            grep -n "system_prompts" /dev/shm/MoE-CAP/moe_cap/data_loader/gsm8k_data_loader.py || true
+
+            # --- Start vLLM server ---
+            echo "Initialising server"
+            python3 -m moe_cap.systems.vllm \
+              --model unsloth/gpt-oss-120b \
+              --port 30000 \
+              --host 0.0.0.0 \
+              --enable-expert-distribution-metrics \
+              --tensor-parallel-size 1 \
+              --reasoning-parser openai_gptoss &> $RUN_DIR/server.log &
+            SERVER_PID=$!
+
+            echo "Waiting for server to be ready..."
+            until curl -s -f http://localhost:30000/health > /dev/null; do
+              echo -n "."
+              sleep 2
+            done
+            echo "Server is ready!"
+
+            # --- Run benchmark via chat-api ---
+            python3 -m moe_cap.runner.openai_api_profile \
+              --model_name unsloth/gpt-oss-120b \
+              --datasets gsm8k \
+              --num-samples 256 \
+              --api-url http://localhost:30000/v1/completions \
+              --backend vllm \
+              --use-chat-api \
+              --output_dir $RUN_DIR &> $RUN_DIR/client.log
+
+            echo "Benchmark run finished, shutting down server..."
+            kill $SERVER_PID
+            wait $SERVER_PID || true
+
+            # --- Save results ---
+            cd $RUN_DIR
+            cp unsloth/gpt-oss-120b/* . 2>/dev/null || true
+            rm -rf unsloth 2>/dev/null || true
+
+            RUN_OUTPUT_DIR=$TEAS_OUTPUT_DIR/TEAS_Development_Results_Private/moe/eidf/vllm/gpt-oss-120b/gsm8k_256samples_chatapi_hashhash/a100x1/batch-size-default/$timestamp
+            mkdir -p $RUN_OUTPUT_DIR
+            cp -R $RUN_DIR/* $RUN_OUTPUT_DIR/
+            exec &>> $RUN_OUTPUT_DIR/stdout_stderr.log
+            echo "Files copied to $RUN_OUTPUT_DIR"
+            echo "Done."
+        ports:
+          - containerPort: 30000
+        resources:
+          requests:
+            cpu: 10
+            memory: 100Gi
+          limits:
+            cpu: 10
+            memory: 100Gi
+            nvidia.com/gpu: 1
+        volumeMounts:
+          - mountPath: /mnt/develop
+            name: develop
+          - mountPath: /mnt/input
+            name: inputs
+          - mountPath: /dev/shm
+            name: dshm
+      restartPolicy: Never
+      volumes:
+        - name: inputs
+          persistentVolumeClaim:
+            claimName: inputs-pvc
+        - name: develop
+          persistentVolumeClaim:
+            claimName: develop-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB

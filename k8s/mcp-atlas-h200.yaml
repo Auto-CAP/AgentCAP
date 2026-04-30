@@ -14,7 +14,7 @@ spec:
       restartPolicy: Never
       nodeSelector:
         nvidia.com/gpu.present: "true"
-        nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB
+        nvidia.com/gpu.product: NVIDIA-H200
       securityContext:
         fsGroup: 2000
       volumes:
@@ -34,8 +34,12 @@ spec:
             - |
               # Fix httpx.TimeoutError removed in httpx>=0.28
               python3 -c "
-              import site, os, httpx
-              sc = os.path.join(site.getsitepackages()[0], 'sitecustomize.py')
+              import importlib, httpx, types
+              if not hasattr(httpx, 'TimeoutError'):
+                  httpx.TimeoutError = httpx.TimeoutException
+              # Write sitecustomize so all subprocesses get the fix
+              import site, os
+              sc = os.path.join(site.ENABLE_USER_SITE and site.getusersitepackages() or site.getsitepackages()[0], 'sitecustomize.py')
               os.makedirs(os.path.dirname(sc), exist_ok=True)
               with open(sc, 'w') as f:
                   f.write('import httpx\\nif not hasattr(httpx, \"TimeoutError\"): httpx.TimeoutError = httpx.TimeoutException\\n')
@@ -50,6 +54,8 @@ spec:
               value: "arxiv,brave-search,calculator,cli-mcp-server,clinicaltrialsgov-mcp-server,context7,ddg-search,desktop-commander,fetch,filesystem,git,github,mcp-code-executor,mcp-server-code-runner,memory,met-museum,open-library,osm-mcp-server,pubmed,weather,whois,wikipedia"
             - name: GITHUB_TOKEN
               value: "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"
+            - name: BRAVE_API_KEY
+              value: "BSAxkWQYJr7q_g1QJlH5Mxqn2luwLoS"
           resources:
             requests:
               cpu: "2"
@@ -64,7 +70,7 @@ spec:
           command: ["/bin/bash", "-lc"]
           args:
             - |
-              set -euo pipefail
+              set -uo pipefail
 
               echo "=== Setting up Python env ==="
               cd /workspace
@@ -87,8 +93,8 @@ spec:
                   --served-model-name openai/gpt-oss-120b \
                   --port 30002 \
                   --gpu-memory-utilization 0.92 \
+                  --kv-cache-dtype fp8_e4m3 \
                   --max-model-len 131072 \
-                  --tensor-parallel-size 2 \
                   --tool-call-parser openai \
                   > /workspace/vllm_smoke.log 2>&1 &
               VLLM_PID=$!
@@ -133,11 +139,13 @@ spec:
                   --base-url http://localhost:30002/v1 \
                   --mcp-server-url http://localhost:1984 \
                   --max-turns 15 \
-                  --num-tasks 60 \
-                  --output-dir /workspace/results/mcpatlas_a100_vllm_v4
-
+                  --num-tasks 63 \
+                  --output-dir /workspace/results/mcpatlas_h200_63free
+              RC=$?
+              echo "=== Runner exited with code: $RC ==="
+              echo "=== vLLM last logs ==="
+              tail -20 /workspace/vllm_smoke.log 2>/dev/null || true
               echo "=== Done! ==="
-              ls -la /workspace/results/mcpatlas_smoke/
 
               # Kill vLLM
               kill $VLLM_PID 2>/dev/null || true
@@ -161,11 +169,11 @@ spec:
             requests:
               cpu: "4"
               memory: 128Gi
-              nvidia.com/gpu: "2"
+              nvidia.com/gpu: "1"
             limits:
               cpu: "4"
               memory: 128Gi
-              nvidia.com/gpu: "2"
+              nvidia.com/gpu: "1"
           volumeMounts:
             - name: llm-cache
               mountPath: /workspace

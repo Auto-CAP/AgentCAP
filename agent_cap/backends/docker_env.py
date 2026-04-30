@@ -33,6 +33,9 @@ class DockerWorkspace:
         self.fail_to_pass = eval_config.get(
             "FAIL_TO_PASS", eval_config.get("fail_to_pass", "")
         )
+        self.pass_to_pass = eval_config.get("pass_to_pass", "")
+        self.before_repo_set_cmd = eval_config.get("before_repo_set_cmd", "")
+        self.selected_test_files = eval_config.get("selected_test_files_to_run", "")
         self.dockerhub_tag = eval_config.get("dockerhub_tag", "")
         self.docker_hub_user = docker_hub_user
         self.container_id: Optional[str] = None
@@ -114,62 +117,109 @@ class DockerWorkspace:
         return True
 
     def get_git_diff(self) -> str:
+        from agent_cap.backends.k8s_env import strip_binary_hunks
+        self._docker_exec("git add -A", timeout=10)
         proc = self._docker_exec("git diff HEAD", timeout=10)
         if proc and proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.strip()
+            return strip_binary_hunks(proc.stdout.strip())
+        proc = self._docker_exec("git diff --cached", timeout=10)
+        if proc and proc.returncode == 0 and proc.stdout.strip():
+            return strip_binary_hunks(proc.stdout.strip())
         proc = self._docker_exec("git diff", timeout=10)
-        return proc.stdout.strip() if proc and proc.returncode == 0 else ""
+        diff = proc.stdout.strip() if proc and proc.returncode == 0 else ""
+        return strip_binary_hunks(diff)
 
     def run_tests(self, timeout: int = 300) -> Dict[str, Any]:
-        if not self.fail_to_pass:
-            return {"passed": False, "reason": "no tests defined"}
+        """Run official evaluation — mirrors swe_bench_pro_eval.py exactly."""
+        import ast, os
+        from agent_cap.backends.k8s_env import _extract_env_cmds, SCRIPTS_DIR
+
+        env_cmds = _extract_env_cmds(self.instance_id)
+
+        before_cmd = ""
+        if self.before_repo_set_cmd:
+            before_cmd = self.before_repo_set_cmd.strip().split("\n")[-1]
 
         try:
-            tests = (
-                json.loads(self.fail_to_pass)
-                if isinstance(self.fail_to_pass, str)
-                else self.fail_to_pass
-            )
+            test_files = json.loads(self.selected_test_files) if self.selected_test_files else []
+        except (json.JSONDecodeError, TypeError):
+            test_files = []
+        selected_str = ",".join(test_files)
+
+        patch = self.get_git_diff()
+        if not patch:
+            return {"passed": False, "reason": "no patch to evaluate"}
+
+        # Copy scripts into container
+        scripts_base = os.path.join(SCRIPTS_DIR, self.instance_id)
+        run_script = os.path.join(scripts_base, "run_script.sh")
+        parser_py = os.path.join(scripts_base, "parser.py")
+
+        if not os.path.exists(run_script) or not os.path.exists(parser_py):
+            return {"passed": False, "reason": f"scripts missing for {self.instance_id}"}
+
+        self._docker_exec("mkdir -p /workspace", timeout=5)
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".diff", delete=False) as f:
+            f.write(patch)
+            patch_tmp = f.name
+        subprocess.run(["docker", "cp", patch_tmp, f"{self.container_id}:/workspace/patch.diff"],
+                       capture_output=True, timeout=30)
+        os.unlink(patch_tmp)
+        subprocess.run(["docker", "cp", run_script, f"{self.container_id}:/workspace/run_script.sh"],
+                       capture_output=True, timeout=30)
+        subprocess.run(["docker", "cp", parser_py, f"{self.container_id}:/workspace/parser.py"],
+                       capture_output=True, timeout=30)
+        self._docker_exec("chmod +x /workspace/run_script.sh", timeout=5)
+
+        # Build + run entry script (exact match of official)
+        entry_script = f"""
+{env_cmds}
+cd /app
+git reset --hard {self.base_commit}
+git checkout {self.base_commit}
+git apply -v /workspace/patch.diff
+{before_cmd}
+bash /workspace/run_script.sh {selected_str} > /workspace/stdout.log 2> /workspace/stderr.log
+python3 /workspace/parser.py /workspace/stdout.log /workspace/stderr.log /workspace/output.json
+"""
+        self._docker_exec(entry_script, timeout=timeout)
+
+        result_proc = self._docker_exec("cat /workspace/output.json", timeout=10)
+        output_json = result_proc.stdout.strip() if result_proc and result_proc.returncode == 0 else ""
+
+        try:
+            parsed = json.loads(output_json) if output_json else {}
         except json.JSONDecodeError:
-            tests = [self.fail_to_pass]
+            parsed = {}
 
-        test_files_str = ",".join(t.split(" | ")[0].strip() for t in tests)
+        passed_tests = {x["name"] for x in parsed.get("tests", []) if x["status"] == "PASSED"}
 
-        script_url = (
-            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
-            f"run_scripts/{self.instance_id}/run_script.sh"
-        )
-        parser_url = (
-            f"https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
-            f"run_scripts/{self.instance_id}/parser.py"
-        )
+        try:
+            f2p = set(json.loads(self.fail_to_pass)) if self.fail_to_pass else set()
+        except (json.JSONDecodeError, TypeError):
+            try:
+                f2p = set(ast.literal_eval(self.fail_to_pass)) if self.fail_to_pass else set()
+            except Exception:
+                f2p = set()
 
-        self._docker_exec(
-            f"curl -sL '{script_url}' -o /run_script.sh && chmod +x /run_script.sh",
-            timeout=30,
-        )
-        self._docker_exec(f"curl -sL '{parser_url}' -o /parser.py", timeout=30)
+        try:
+            p2p = set(json.loads(self.pass_to_pass)) if self.pass_to_pass else set()
+        except (json.JSONDecodeError, TypeError):
+            try:
+                p2p = set(ast.literal_eval(self.pass_to_pass)) if self.pass_to_pass else set()
+            except Exception:
+                p2p = set()
 
-        proc = self._docker_exec(
-            f"cd {self.workdir} && bash /run_script.sh {test_files_str} 2>&1",
-            timeout=timeout,
-        )
-        output = (proc.stdout + proc.stderr)[-2000:] if proc else ""
-
-        parse_proc = self._docker_exec(
-            f"cd {self.workdir} && python3 /parser.py --log '{output[-8000:]}' "
-            f"--expected '{json.dumps(tests)}' 2>/dev/null",
-            timeout=30,
-        )
-        parse_output = parse_proc.stdout if parse_proc else ""
-
-        ok = "PASS" in parse_output.upper() if parse_output else False
+        resolved = (f2p | p2p) <= passed_tests if (f2p or p2p) else False
 
         return {
-            "passed": ok,
-            "passed_count": 1 if ok else 0,
-            "total": len(tests),
-            "details": output,
+            "passed": resolved,
+            "f2p_total": len(f2p),
+            "p2p_total": len(p2p),
+            "passed_count": len(passed_tests),
+            "details": json.dumps(list(passed_tests)[:10]) if passed_tests else "[]",
         }
 
     def cleanup(self):

@@ -1,0 +1,81 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: vllm-gptoss-a100-
+  namespace: eidf230ns
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: vllm-gptoss-a100
+        kueue.x-k8s.io/queue-name: eidf230ns-user-queue
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+        nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB
+      securityContext:
+        fsGroup: 2000
+      volumes:
+        - name: llm-cache
+          persistentVolumeClaim:
+            claimName: llm-cache-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+      containers:
+        - name: vllm
+          image: ghcr.io/pytorch/pytorch:2.10.0-cuda12.9-cudnn9-devel
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              cd /workspace
+              . /workspace/venv_smoke/bin/activate
+              python -c "import vllm; print('vLLM', vllm.__version__)"
+              echo "=== Starting vLLM server ==="
+              exec vllm serve \
+                  /workspace/models/unsloth/gpt-oss-120b \
+                  --served-model-name openai/gpt-oss-120b \
+                  --host 0.0.0.0 \
+                  --port 8000 \
+                  --gpu-memory-utilization 0.92 \
+                  --max-model-len 131072 \
+                  --tensor-parallel-size 2 \
+                  --tool-call-parser openai
+          ports:
+            - containerPort: 8000
+          env:
+            - name: HF_HOME
+              value: /workspace/hf_cache
+            - name: HUGGINGFACE_HUB_CACHE
+              value: /workspace/hf_cache/hub
+          resources:
+            requests:
+              cpu: "4"
+              memory: 128Gi
+              nvidia.com/gpu: "2"
+            limits:
+              cpu: "4"
+              memory: 128Gi
+              nvidia.com/gpu: "2"
+          volumeMounts:
+            - name: llm-cache
+              mountPath: /workspace
+            - name: dshm
+              mountPath: /dev/shm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-gptoss-a100
+  namespace: eidf230ns
+spec:
+  selector:
+    app: vllm-gptoss-a100
+  ports:
+    - port: 30002
+      targetPort: 8000
+  type: ClusterIP

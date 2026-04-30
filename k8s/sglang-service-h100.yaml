@@ -1,0 +1,83 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: sglang-gptoss-h100-
+  namespace: eidf230ns
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: sglang-gptoss-h100
+        kueue.x-k8s.io/queue-name: eidf230ns-user-queue
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+        nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+      securityContext:
+        fsGroup: 2000
+      volumes:
+        - name: llm-cache
+          persistentVolumeClaim:
+            claimName: llm-cache-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+      containers:
+        - name: sglang
+          image: ghcr.io/pytorch/pytorch:2.10.0-cuda12.9-cudnn9-devel
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              apt-get update -qq && apt-get install -y -qq libnuma-dev > /dev/null 2>&1
+              cd /workspace
+              pip install --break-system-packages "sglang[all]==0.5.9" 2>&1 | tail -3
+              python3 -c "import sglang; print('SGLang', sglang.__version__)"
+              echo "=== Starting SGLang server ==="
+              exec python3 -m sglang.launch_server \
+                  --model-path /workspace/models/unsloth/gpt-oss-120b \
+                  --served-model-name openai/gpt-oss-120b \
+                  --host 0.0.0.0 \
+                  --port 8000 \
+                  --mem-fraction-static 0.85 \
+                  --context-length 131072 \
+                  --tp 2 \
+                  --kv-cache-dtype fp8_e4m3 \
+                  --enable-cache-report
+          ports:
+            - containerPort: 8000
+          env:
+            - name: HF_HOME
+              value: /workspace/hf_cache
+            - name: HUGGINGFACE_HUB_CACHE
+              value: /workspace/hf_cache/hub
+          resources:
+            requests:
+              cpu: "4"
+              memory: 128Gi
+              nvidia.com/gpu: "2"
+            limits:
+              cpu: "4"
+              memory: 128Gi
+              nvidia.com/gpu: "2"
+          volumeMounts:
+            - name: llm-cache
+              mountPath: /workspace
+            - name: dshm
+              mountPath: /dev/shm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-gptoss-h100
+  namespace: eidf230ns
+spec:
+  selector:
+    app: sglang-gptoss-h100
+  ports:
+    - port: 30002
+      targetPort: 8000
+  type: ClusterIP
