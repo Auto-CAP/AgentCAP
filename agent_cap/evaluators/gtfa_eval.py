@@ -163,7 +163,11 @@ Be rigorous but fair in your assessment. Focus on whether the response conveys t
             }
 
         coverage_outcome = str(parsed.get("coverage_outcome", "not_fulfilled")).strip()
-        if coverage_outcome not in {"fulfilled", "partially_fulfilled", "not_fulfilled"}:
+        if coverage_outcome not in {
+            "fulfilled",
+            "partially_fulfilled",
+            "not_fulfilled",
+        }:
             coverage_outcome = "not_fulfilled"
         return {
             "claim_text": str(parsed.get("claim_text", claim)),
@@ -211,13 +215,16 @@ Be rigorous but fair in your assessment. Focus on whether the response conveys t
                     "score": score,
                     "covered": covered,
                     "reasoning": result.get("justification", ""),
-                    "confidence_level": float(result.get("confidence_level", 0.5) or 0.5),
+                    "confidence_level": float(
+                        result.get("confidence_level", 0.5) or 0.5
+                    ),
                 }
             )
 
         coverage_score = round(total_score / len(claims), 3) if claims else 0.0
         avg_confidence = total_confidence / len(claims) if claims else 0.5
         return {
+            "evaluator": self.judge_model,
             "per_claim": per_claim,
             "coverage_score": coverage_score,
             "total_claims": len(claims),

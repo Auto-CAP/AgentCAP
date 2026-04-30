@@ -1,0 +1,289 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html;charset=UTF-8">
+    <meta name="robots" content="NOODP">
+    <meta name="description" content="AssaultCube is a FREE multiplayer first-person shooter game.
+    Taking place in realistic environments, with fast, arcade gameplay, it's addictive and fun!">
+    <meta name="author" content="Rabid Viper Productions">
+    <meta name="copyright" content="You may be able to redistribute this content under specific conditions.
+    Please read the licensing information, available @ https://assault.cubers.net/docs/license.html for the
+    conditions that would apply to what you may be redistributing.">
+    <meta name="google-site-verification" content="67b0O0ml57CxwYYIBLQv1Ec6GUNk5pIrfKIieXlRb2o">
+    <title>AssaultCube</title>
+    <link rel="stylesheet" type="text/css" href="docs/css/main.css">
+    <link rel="shortcut icon" type="image/x-icon" href="docs/images/favicon.ico">
+    <link rel="alternate" type="application/rss+xml" title="Development Blog News (RSS 2.0)" href="https://forum.cubers.net/syndication.php?fid=8&amp;limit=5">
+    <link rel="alternate" type="application/atom+xml" title="Development Blog News (Atom 1.0)" href="https://forum.cubers.net/syndication.php?fid=8&amp;limit=5&amp;type=atom1.0">
+    <!-- Start of head code for the feedreader -->
+    <script type="de14ca9c39badd244e5d49d5-text/javascript" src="https://rss2json.com/gfapi.js"></script>
+    <style type="text/css">
+      #feed {
+        width: 620px;
+        margin: auto auto;
+        font-size: 16px;
+        color: #909090;
+      }
+    </style>
+    <script type="de14ca9c39badd244e5d49d5-text/javascript">
+    google.load("feeds", "1");
+    function initialize() {
+      var feed = new google.feeds.Feed("https://forum.cubers.net/syndication.php?fid=8");
+      feed.setNumEntries(10);
+      feed.load(function(result) {
+        if (!result.error) {
+          var container = document.getElementById("feed");
+          var html = '';
+          for (var i = 0; i < result.feed.entries.length; i++) {
+            var entry = result.feed.entries[i];
+            html += '<p>' + entry.publishedDate.substr(0,10) + ': <a href=' + entry.link + '>' + entry.title + '</a>' + '</p>'; // + entry.content.substr(0, 500)
+          }
+          container.innerHTML = html;
+        }
+      });
+    }
+    google.setOnLoadCallback(initialize);
+    </script>
+    <!-- End of head code for the feedreader -->
+  </head>
+  <body>
+    <div id="container">
+      <!-- Start: Navigation box -->
+<!-- If you change this file, please check the code in the forums -->
+<!-- header template and ./SSI-HTML/docs/navigation_box_docs.html -->
+      <div id="logo">
+        <a href="https://assault.cubers.net/"><img src="/docs/images/aclogo.png"
+        alt="AssaultCube" width="193px" height="81px"></a>
+      </div>
+      <div id="menubar"><a href="https://assault.cubers.net/">Home/News</a>
+      | <a href="/download.html">Download</a>
+      | <a href="/media.html">Pics/Flicks</a>
+      | <a href="/docs">Docs</a>
+      | <a href="https://wiki.cubers.net/">Wiki</a>
+      | <a href="https://forum.cubers.net/">Forum</a>
+      | <a href="/irc.html">IRC</a>
+      | <a href="https://discord.me/assaultcube" target="https://discord.me/assaultcube">Discord</a>
+      | <a href="/community.html">Community</a>
+      | <a href="/docs/team.html">The Team</a>
+      | <a href="/search.html">Search</a>
+      </div>
+<!-- End: Navigation box -->
+<!-- Start: Google Analytics -->
+<script type="de14ca9c39badd244e5d49d5-text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-17402318-2']);
+  _gaq.push(['_setDomainName', '.cubers.net']);
+  _gaq.push(['_trackPageview']);
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+<!-- End: Google Analytics -->
+
+
+      <div id="main">
+      <h2>What is AssaultCube?</h2>
+      <p>
+        AssaultCube is a <b>FREE</b>, multiplayer, first-person shooter game, based on the <a href="http://cubeengine.com/cube.php4">CUBE engine</a>.
+      </p>
+      <p>
+        Taking place in <span title="Example: Abandoned mine shafts (not alien space ships!)"
+        class="titletext">realistic environments</span>, with fast, arcade gameplay, it's addictive and fun!
+      <p>
+        With efficient bandwidth usage, it's low-latency and can even run over a 56 Kbps connection.
+        <br>It's tiny too, weighing in at a lightweight about 50 MB package available for Windows, Mac and Linux.
+        <br>On the correct settings, it can even run on old hardware (Pentium III and above).
+      </p>
+      <div id="screenshot">
+        <a href="media.html">
+          <img src="screenshots/screenshot-table.jpg"
+          alt="Click here to see additional screenshots and media" title="Click here to see additional screenshots and media"
+          width="496px" height="268px">
+        </a>
+      </div>
+      <div style="padding-top: 20px; line-height: 0px;">Features in a nutshell:</div>
+        <ul id="nutshell">
+          <li>It's <b>FREE</b>.</li>
+          <li>Source code is available under a zlib-like open source license.</li>
+          <li>Low latency, it can even run across a 56 Kbps connection!</li>
+          <li>Lightweight size, only about 50 MB to download, plus additional maps average 20 KB each!</li>
+          <li>With the correct settings, it can run on old hardware (Pentium III and above).</li>
+          <li>
+            Officially runs on <span title="Supports: Windows 2000/XP/Vista/7/8/10/11, Linux, macOS 10.6+"
+            class="titletext"> most major systems</span>, and maybe even some
+            <a href="docs/getstarted.html">non-major ones</a>?
+          </li>
+          <li>
+            Has a built in, in-game map editor to help players create their own maps and
+            allows for <br>co-operative editmode in realtime with others!
+          </li>
+          <li>Features a single-player bot system.</li>
+          <li>Supports recording of your game by the "demo" system.</li>
+          <li>
+            Contains many multiplayer game modes, including: Deathmatch, Survivor, Capture the Flag, Hunt the Flag,
+            Keep the Flag, Pistol Frenzy, Last Swiss Standing &amp; One-Shot One-Kill (plus team versions of these modes).
+          </li>
+          <li>
+            Comes pre-packaged with several dozen different maps!
+          </li>
+        </ul>
+        <div class="dottedline"></div>
+        <h2 style="padding-bottom: 10px;">News from the development blog...</h2>
+        <div id="feed">Loading development blog...</div>
+      </div>
+      <!-- Start: Download box -->
+      <div id="download">
+        <h3>Download it here:</h3>
+        <table class="downloadlink">
+          <tr>
+            <td>
+              <a href="https://github.com/assaultcube/AC/releases/download/v1.3.0.2/AssaultCube_v1.3.0.2_LockdownEdition.exe">
+              <img src="docs/images/windows.png" alt="Windows" width="40px" height="40px" title="Supports Windows 2000/XP/Vista/7/8/10/11"></a>
+            </td>
+            <td>
+              <a href="https://github.com/assaultcube/AC/releases/download/v1.3.0.2/AssaultCube_v1.3.0.2_LockdownEdition.exe"
+              title="Supports Windows 2000/XP/Vista/7/8/10/11">Microsoft Windows</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="https://github.com/assaultcube/AC/releases/download/v1.3.0.2/AssaultCube_v1.3.0.2_LockdownEdition_RC1.tar.bz2">
+              <img src="docs/images/linux.png" alt="Linux" width="40px" height="40px" title="Linux"></a>
+            </td>
+            <td>
+              <a href="https://github.com/assaultcube/AC/releases/download/v1.3.0.2/AssaultCube_v1.3.0.2_LockdownEdition_RC1.tar.bz2"
+              title="Linux">Linux</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="https://github.com/assaultcube/AC/releases/download/v1.3.0.2/AssaultCube_v1.3.0.2_LockdownEdition.dmg">
+              <img src="docs/images/apple.png" alt="macOS" width="40px" height="40px" title="Supports macOS 10.6 (or higher)"></a>
+            </td>
+            <td>
+              <a href="https://github.com/assaultcube/AC/releases/download/v1.3.0.2/AssaultCube_v1.3.0.2_LockdownEdition.dmg"
+              title="Supports macOS 10.6 (or higher)">Apple Mac OS</a>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="2">
+              <a href='https://play.google.com/store/apps/details?id=net.cubers.assaultcube&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1'>
+              <!-- Google Play and the Google Play logo are trademarks of Google LLC. -->
+	      <!-- https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png -->
+              <img alt="Get it on Google Play" src="docs/images/android.google-playstore.png" title="Supports Android 7 (or higher)" style="max-width:100%"></a>
+            </td>
+          </tr>
+        </table>
+        <table class="downloadlink" style="margin-top: 0px;">
+          <tr>
+            <td>Size:</td>
+            <td>
+              <span title="Size depends on your operating system. Lowest size is 47.3MB. Biggest size is 54.3MB"
+              class="titletext">47 - 54MB</span>
+            </td>
+          </tr>
+          <tr>
+            <td>Version:</td>
+            <td>1.3.0.2</td>
+          </tr>
+          <tr>
+            <td>Released:</td>
+            <td>1st Apr 2022</td>
+          </tr>
+        </table>
+      </div>
+<!-- End: Download box -->
+
+      <!-- Start: Help box -->
+      <div id="howdoi">
+        <h3>Help! How do I?</h3>
+        <p>
+          If you need some help with anything at all, please first search through the <a href="/docs">official documentation</a>.
+        </p>
+        <p>
+          If you still can't find the answer you need, <a href="https://wiki.cubers.net/action/view/Special:Search">search the wiki</a>, and the
+          <a href="https://forum.cubers.net/search.php">forums</a>, and if you
+          still can't find the answer, post a thread on the forum explaining your situation. You can use this
+          <a href="/search.html">search engine</a> to search the whole lot in one go!
+        </p>
+        <p>
+          You may also try <a href="/irc.html">IRC</a> for a real-time response, but be patient (at least 30 min),
+          as people "idle" in IRC. You might get an instant response, or it may take a little bit of time.
+          Just hang out and see!
+        </p>
+      </div>
+<!-- End: Help box -->
+
+      <!-- Start: Hotlinks box -->
+      <div id="hotlinks">
+      <h3>Hot links</h3>
+        <ul>
+          <li><a href="https://forum.cubers.net/">Forum</a></li>
+          <li><a href="/irc.html">IRC</a></li>
+          <li><a href="https://wiki.cubers.net/">Wiki</a></li>
+          <li><a href="/docs">Official documentation</a></li>
+          <li><a href="https://www.paypal.com/donate/?hosted_button_id=B53CR9HGH7UH2">Donate to this project</a></li>
+          <li><a href="https://github.com/assaultcube/AC/issues">File a Bug Report!</a></li>
+        </ul>
+        <ul>
+          <li><a href="https://discord.me/assaultcube">AC @ Discord</a></li>
+          <li><a href="https://www.facebook.com/AssaultCube">AC @ Facebook</a></li>
+        </ul>
+        <ul>
+          <li><a href="http://quadropolis.us/taxonomy/term/24">AC Mods @ Quadropolis</a></li>
+        </ul>
+      </div>
+<!-- End: Hotlinks box -->
+
+      <!-- Start: Social Media box -->
+      <div id="socialmedia">
+        <h3>Social media</h3>
+        <div style="padding-top : 5px;">
+          <div id="fb-root"></div>
+          <script type="de14ca9c39badd244e5d49d5-text/javascript">
+            (function(d, s, id) {
+            var js, fjs = d.getElementsByTagName(s)[0];
+            if (d.getElementById(id)) return;
+            js = d.createElement(s); js.id = id;
+            js.src = "//connect.facebook.net/en_US/sdk.js#xfbml=1&version=v2.10";
+            fjs.parentNode.insertBefore(js, fjs);
+            }(document, 'script', 'facebook-jssdk'));
+          </script>
+          <div class="fb-like" data-href="https://www.facebook.com/AssaultCube" data-width="450" data-layout="button_count" data-action="like" data-size="small" data-show-faces="false" data-share="false"></div>
+        </div>
+        <div>
+          <a href="https://twitter.com/share" class="twitter-share-button" data-count="horizontal" data-dnt="true" data-lang="en" data-url="assault.cubers.net" data-text="#AssaultCube is an addictively fun #freetoplay multiplayer #FPS game! Only 50 Mb, #dialup &amp; #opensource! Download @ https://assault.cubers.net">Twitter</a>
+          <script type="de14ca9c39badd244e5d49d5-text/javascript">!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0];if(!d.getElementById(id)){js=d.createElement(s);js.id=id;js.src="https://platform.twitter.com/widgets.js";fjs.parentNode.insertBefore(js,fjs);}}(document,"script","twitter-wjs");</script>
+        </div>
+      </div>
+<!-- End: Social Media box -->
+
+      <!-- Start: Author box -->
+      <div id="author">
+        <a href="/docs/license.html">&copy; Copyright, Rabid Viper Productions</a>
+      </div>
+<!-- End: Author box -->
+
+      <!-- Start: Adsense box of 200x200 -->
+      <div class="adsense200x200">
+        <div class="sponsors">
+          Sponsored links
+        </div>
+<script type="de14ca9c39badd244e5d49d5-text/javascript"><!--
+google_ad_client = "ca-pub-3069642885780402";
+/* SSquare, 200x200 */
+google_ad_slot = "3572124575";
+google_ad_width = 728;
+google_ad_height = 90;
+//-->
+</script>
+<script type="de14ca9c39badd244e5d49d5-text/javascript" src="https://pagead2.googlesyndication.com/pagead/show_ads.js">
+</script>
+      </div>
+<!-- End: Adsense box of 200x200 -->
+
+    </div>
+  <script src="/cdn-cgi/scripts/7d0fa10a/cloudflare-static/rocket-loader.min.js" data-cf-settings="de14ca9c39badd244e5d49d5-|49" defer></script></body>
+</html>

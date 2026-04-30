@@ -1,0 +1,46 @@
+\section{Introduction}
+
+Recent LLM agent systems increasingly adopt heterogeneous model configurations, or \emph{agent teams}~\cite{TODO}, where multiple models assume distinct cognitive roles within a single workflow.
+Humans do not think equally hard about every step of a task: figuring out \emph{what} to do requires careful reasoning, but carrying out each step is often routine~\cite{kahneman}.
+Agent teams apply the same idea: one model decides the approach, another carries out the steps.
+This works because a detailed plan compensates for the executor's limited reasoning~\cite{vygotsky}, which is also reflected in our results: a 9B-parameter model achieves only 60\% accuracy under homogeneous plan-execute, but reaches 88\% when a 27B model plans for it.
+Examples in production include Claude Code's \texttt{opusplan} mode, OpenAI Codex, and open-source frameworks (OpenCode, Aider, Cursor) with configurable multi-model pipelines.
+Anthropic reports 11.9\% cost reduction per agentic task using such configurations~\cite{anthropic_advisor}; our best heterogeneous team achieves the highest accuracy at 8$\times$ lower cost than the best homogeneous baseline (Section~\ref{sec:results}).
+
+Why not just use a single model?
+Recent work argues that single agents can match or outperform multi-agent systems~\cite{TODO_single_better}, but our experiments show this only holds for the most capable models.
+A single agent solves 31\% of open-domain tool-use tasks; the same model in a plan-execute team reaches 72\%, while costing 41\% less per task.
+The accuracy gap stems from two failure modes we observe in single-agent trajectories: the model either \emph{refuses to act} (15\% of tasks: zero tool calls, outputs ``I don't have that tool'') or \emph{thrashes without progress} (23\% of tasks: hits the turn limit with no output).
+Plan-execute eliminates 89\% of refusal failures and 79\% of thrashing failures, because the plan tells the executor which tools to call and in what order.
+
+Configuring agent teams is difficult due to three structural properties that have no analogue in single-model evaluation.
+We illustrate with plan-execute, the most widely deployed architecture, though these properties generalize to other multi-role configurations.
+%
+\textbf{(i) Cross-role dependency.} The output of one role directly shapes the behavior of downstream roles. In plan-execute, plan quality affects the executor's turn count, token consumption, accuracy, and latency. Cost, accuracy, and system performance are therefore coupled across roles and cannot be evaluated or optimized independently.
+%
+\textbf{(ii) Role asymmetry.} The planner (one call, reasoning-heavy) and executor (many calls, tool-use-heavy) require fundamentally different model capabilities. A model's strength in one role does not predict its strength in the other.
+%
+\textbf{(iii) Task-dependent role sensitivity.} Which role is the bottleneck changes per domain: some task domains are executor-critical (swapping executors shifts accuracy by up to 45 points), others are planner-critical (swapping planners shifts accuracy by 30 points while executor choice barely matters). Without knowing which, practitioners cannot make informed model assignments.
+
+Despite these properties, no existing evaluation framework addresses them.
+%
+\textbf{(i)} Benchmarks such as MAESTRO~\cite{ma2026maestro} and HAL~\cite{kapoor2025hal} support heterogeneous model configurations, but focus on evaluating agent frameworks, not on how team composition interacts with cost and performance. None systematically vary role-model assignments to expose the coupling described above.
+%
+\textbf{(ii)} Existing cost tracking reports total cost per run, but does not decompose cost by role or model the dependency between plan quality and execution cost.
+%
+\textbf{(iii)} No method exists to determine, for a given task domain, whether upgrading the planner or the executor yields a larger gain.
+
+To address these gaps, this paper introduces AgentCAP, a benchmark for evaluating heterogeneous LLM agent teams.
+Our contributions are:
+
+\mypar{AgentCAP, the first benchmark that evaluates agent teams by systematically varying role-model assignments}
+We evaluate all pairwise planner-executor combinations across 5 API models and 5 self-hosted models on 3 domain-stratified benchmarks (open-domain tool-use, medicine, finance), with single-agent baselines for direct comparison.
+Every model serves as both planner and executor, directly exposing the cross-role dependencies that single-model benchmarks miss.
+
+\mypar{A role-decomposed cost model that captures cross-role dependency}
+We decompose per-task cost into plan cost and execution cost, modeling how plan quality affects executor turn count and token consumption.
+This unifies API per-token pricing with self-hosted GPU amortization and enables per-role cost-accuracy tradeoff analysis.
+
+\mypar{A swap-sensitivity method for measuring domain-dependent role criticality}
+We measure accuracy changes when swapping models between roles, classifying task domains as planner-critical or executor-critical without human annotation.
+This tells practitioners exactly where to invest model budget for a given task domain.

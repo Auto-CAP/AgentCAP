@@ -26,6 +26,7 @@ from agent_cap.runner.llm_client import (
     _SCHEMA_PATCHES,
 )
 from agent_cap.runner.tool_backends import (
+    MathPythonToolBackend,
     MedAgentBenchToolBackend,
     MCPToolBackend,
     SWEBenchToolBackend,
@@ -752,9 +753,29 @@ def compute_aggregated_metrics(
             "total_tool_calls": total_tool_calls,
         },
         "quality": {
-            "total_examples": total_examples,
-            "completed": completed_examples,
-            "errors": error_examples,
+            "acc": round(
+                sum(float(r.eval_score) for r in results if r.eval_score is not None)
+                / max(sum(1 for r in results if r.eval_score is not None), 1),
+                3,
+            )
+            if any(r.eval_score is not None for r in results)
+            else None,
+            "task_coverage": round(
+                sum(1 for r in results if r.eval_passed)
+                / max(sum(1 for r in results if r.eval_passed is not None), 1),
+                3,
+            )
+            if any(r.eval_passed is not None for r in results)
+            else None,
+            "evaluator": next(
+                (
+                    r.eval_details.get("evaluator")
+                    for r in results
+                    if isinstance(r.eval_details, dict)
+                    and r.eval_details.get("evaluator")
+                ),
+                None,
+            ),
         },
         "hardware": {
             "gpu_type": hw_info.get("gpu_type", "unknown"),
@@ -843,6 +864,8 @@ async def run_experiment(
                 backend = SWEBenchToolBackend(runtime="docker")
             elif backend_name in ("swebench-modal", "swe-bench-modal"):
                 backend = SWEBenchToolBackend(runtime="modal")
+            elif backend_name in ("math-python", "math_python"):
+                backend = MathPythonToolBackend()
             elif backend_name in ("swebench-k8s", "swe-bench-k8s"):
                 backend = SWEBenchToolBackend(runtime="k8s")
             elif backend_name == "none":
@@ -1673,9 +1696,74 @@ Question: {question}"""
             tasks = tasks[:limit]
         return tasks
 
+    if name in ("financebench", "finance-bench", "finance_bench"):
+        data_path = (
+            Path(__file__).parent.parent.parent
+            / "third_party"
+            / "financebench"
+            / "data"
+            / "financebench_open_source.jsonl"
+        )
+        if not data_path.exists():
+            raise FileNotFoundError(
+                f"FinanceBench data not found at {data_path}. "
+                "Download from https://github.com/patronus-ai/financebench"
+            )
+
+        FINANCEBENCH_EXECUTOR_PROMPT = """You are a financial analyst with access to SEC filing documents.
+
+You have the following tools:
+- search_document(doc_name, query): Search pre-extracted text from an SEC filing for relevant information.
+- calculate(expression): Evaluate a mathematical expression (e.g. "(1577 / 32136) * 100").
+
+Use these tools to find the information needed to answer the question. When you have the answer, output it clearly prefixed with "ANSWER:".
+
+Document: {doc_name}
+Company: {company}
+
+Question: {question}"""
+
+        tasks = []
+        with data_path.open("r", encoding="utf-8") as f:
+            for idx, line in enumerate(f):
+                item = json.loads(line)
+                fb_id = item.get("financebench_id", f"fb_{idx:04d}")
+                company = item.get("company", "")
+                doc_name = item.get("doc_name", "")
+                question = item.get("question", "")
+                answer = item.get("answer", "")
+                question_type = item.get("question_type", "")
+
+                executor_prompt = FINANCEBENCH_EXECUTOR_PROMPT.format(
+                    doc_name=doc_name,
+                    company=company,
+                    question=question,
+                )
+                tasks.append(
+                    UnifiedTask(
+                        task_id=fb_id,
+                        task_name=f"financebench_{fb_id}",
+                        messages=[{"role": "user", "content": executor_prompt}],
+                        eval_config={
+                            "type": "financebench",
+                            "financebench_id": fb_id,
+                            "company": company,
+                            "doc_name": doc_name,
+                            "question": question,
+                            "answer": answer,
+                            "question_type": question_type,
+                            "justification": item.get("justification", ""),
+                            "evidence": item.get("evidence", []),
+                        },
+                    )
+                )
+        if limit > 0:
+            tasks = tasks[:limit]
+        return tasks
+
     raise ValueError(
         "Unknown dataset: "
-        f"{dataset_name}. Supported: imo-answerbench, mcp-atlas, swe-bench-pro, swe-bench-lite, medagentbench, tau2-banking"
+        f"{dataset_name}. Supported: imo-answerbench, mcp-atlas, swe-bench-pro, swe-bench-lite, medagentbench, tau2-banking, financebench"
     )
 
 
@@ -1728,7 +1816,7 @@ Examples:
         "--backend",
         type=str,
         default="mcp",
-        help="Tool backend: 'mcp' or 'swebench-docker' or 'swebench-modal'",
+        help="Tool backend: 'mcp', 'math-python', 'swebench-docker', or 'swebench-modal'",
     )
     parser.add_argument(
         "--swebench-runtime",

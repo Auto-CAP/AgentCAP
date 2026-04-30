@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -201,18 +202,35 @@ class PlanExecuteStrategy(DelegationStrategy):
         "the exact arguments, and what to do with the result.\n"
         "- If a step has branching outcomes (success vs failure), specify what to do in each case.\n"
         "- Do NOT leave choices to the executor. Make all decisions yourself.\n"
-        "- Do NOT execute the task yourself. Only produce the plan."
+        "- Do NOT execute the task yourself. Only produce the plan.\n\n"
+        "Tool-availability rules (the executor has real, callable access to every listed tool):\n"
+        "- Every step MUST name an exact tool from the provided tool list (e.g., "
+        "`desktop-commander_list_directory`, `github_search_repositories`, `filesystem_read_file`). "
+        "Never describe a step as \"use a shell command\" or \"run `ls`\" without naming the MCP tool.\n"
+        "- Never ask the user for files, URLs, identifiers, or credentials. If the task references a "
+        "\"local project\" or \"my file\", plan steps that call `desktop-commander_list_directory`, "
+        "`desktop-commander_read_file`, or `desktop-commander_execute_command` on the server's working "
+        "directory (typically `/data` or `/agent-environment`). Never say \"the user should provide X\".\n"
+        "- Before concluding that information is missing, plan a discovery step using list/search tools "
+        "to surface the needed data from the server.\n"
+        "- Treat the plan as fully executable: do not include placeholders like \"(user provides X)\" "
+        "or prerequisites on user input."
     )
 
     EXEC_SYSTEM_PROMPT = (
-        "You are a focused task executor. You have been given a task and a plan "
-        "created by a planning agent.\n\n"
-        "Rules:\n"
-        "- Follow the plan precisely, step by step, using the available tools.\n"
-        "- Execute decisively. Do not second-guess the plan unless a step is impossible.\n"
-        "- If a step fails, attempt recovery based on the plan's branching instructions. "
-        "If no recovery path is specified, adapt minimally and continue.\n"
-        "- Report results clearly after completing all steps."
+        "You are a tool-using executor. A planning agent has decomposed the task into a plan; "
+        "your job is to carry it out using the tools you are given.\n\n"
+        "Critical rules:\n"
+        "- You have direct access to every tool the plan references. They are real and callable "
+        "from this turn onward. Never ask the user to provide files, URLs, credentials, or data that "
+        "a tool can fetch for you.\n"
+        "- If the plan says \"search X\" or \"fetch Y\", call the corresponding tool immediately. "
+        "Do not request the user's cooperation or clarification; complete the task autonomously.\n"
+        "- Follow the plan step by step. If a tool call fails, try an alternative tool or argument "
+        "rather than giving up. Persist until you produce a concrete answer.\n"
+        "- When a step requires a value the plan did not supply, derive it from prior tool outputs "
+        "or from a discovery tool (e.g., a list/search tool). Do not stop and ask.\n"
+        "- After all steps finish, emit a clear final answer that a grader can verify."
     )
 
     def required_roles(self) -> List[str]:
@@ -312,8 +330,19 @@ class PlanExecuteStrategy(DelegationStrategy):
         if task.messages:
             user_prompt = str(task.messages[-1].get("content", ""))
 
+        tool_names_str = ""
+        if tools:
+            tool_lines = []
+            for t in tools:
+                fn = t.get("function", {})
+                name = fn.get("name", "")
+                desc = fn.get("description", "")
+                if name:
+                    tool_lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+            tool_names_str = "\n\nAvailable tools:\n" + "\n".join(tool_lines)
+
         plan_messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": self.PLAN_SYSTEM_PROMPT},
+            {"role": "system", "content": self.PLAN_SYSTEM_PROMPT + tool_names_str},
             {"role": "user", "content": user_prompt},
         ]
 
@@ -1030,10 +1059,35 @@ class TeamRunner:
         if hasattr(backend, "agent_policy"):
             agent_policy = str(getattr(backend, "agent_policy") or "")
 
+        TAU2_AGENT_INSTRUCTION = (
+            "You are a customer service agent that helps the user according to "
+            "the <policy> provided below.\n"
+            "In each turn you can either:\n"
+            "- Send a message to the user.\n"
+            "- Make a tool call.\n"
+            "You cannot do both at the same time.\n\n"
+            "Try to be helpful and always follow the policy. "
+            "Always make sure you generate valid JSON only.\n\n"
+            "Typical workflow:\n"
+            "1. Use KB_search to look up policy/product info when needed\n"
+            "2. Use get_user_information_by_* to look up customer details\n"
+            "3. Use get_credit_card_accounts_by_user, "
+            "get_credit_card_transactions_by_user etc. to check account state\n"
+            "4. Use write tools (change_user_email, etc.) to fulfill requests\n"
+            "5. Use transfer_to_human_agents when beyond scope"
+        )
+        if agent_policy:
+            executor_system = (
+                f"<instructions>\n{TAU2_AGENT_INSTRUCTION}\n</instructions>\n"
+                f"<policy>\n{agent_policy}\n</policy>"
+            )
+        else:
+            executor_system = PlanExecuteStrategy.EXEC_SYSTEM_PROMPT
+
         messages: List[Dict[str, Any]] = [
             {
                 "role": "system",
-                "content": agent_policy or PlanExecuteStrategy.EXEC_SYSTEM_PROMPT,
+                "content": executor_system,
             },
             {
                 "role": "user",
@@ -1064,19 +1118,28 @@ class TeamRunner:
 
             tau2_plan_system = PlanExecuteStrategy.PLAN_SYSTEM_PROMPT
             if agent_policy:
+                tool_names = ", ".join(
+                    t.get("function", {}).get("name", "")
+                    for t in tools
+                    if t.get("function", {}).get("name")
+                )
                 tau2_plan_system = (
-                    "You are planning actions for a customer service agent with "
-                    "the following policy:\n\n"
-                    f"{agent_policy}\n\n"
-                    "Available tools: "
-                    + ", ".join(
-                        t.get("function", {}).get("name", "")
-                        for t in tools
-                        if t.get("function", {}).get("name")
-                    )
-                    + "\n\n"
-                    "Plan only the next step the agent should take. Be specific "
-                    "about which tools to use."
+                    "You are planning actions for a customer service agent.\n\n"
+                    f"<policy>\n{agent_policy}\n</policy>\n\n"
+                    f"Available tools: {tool_names}\n\n"
+                    "Typical workflow:\n"
+                    "1. Use KB_search to look up policy/product info when needed\n"
+                    "2. Use get_user_information_by_* to look up customer details\n"
+                    "3. Use get_credit_card_accounts_by_user, "
+                    "get_credit_card_transactions_by_user etc. to check account state\n"
+                    "4. Use write tools (change_user_email, apply_for_credit_card, "
+                    "etc.) to fulfill the customer's request\n"
+                    "5. Use transfer_to_human_agents when the request is beyond scope\n\n"
+                    "Plan only the next step. Be specific about which tool to call "
+                    "and with what arguments.\n"
+                    "IMPORTANT: When the user's request requires a state change, "
+                    "you MUST plan a tool call to execute it — do NOT just "
+                    "respond with text."
                 )
 
             plan_messages: List[Dict[str, Any]] = [
@@ -1826,10 +1889,14 @@ class TeamRunner:
                     )
 
                     backend = AsyncMathPythonBackend()
+                elif backend_name in ("financebench", "finance-bench", "finance_bench"):
+                    from agent_cap.runner.tool_backends import FinanceBenchToolBackend
+
+                    backend = FinanceBenchToolBackend()
                 else:
                     raise ValueError(
                         "Unknown backend: "
-                        f"{self.config.backend}. Supported: mcp, swebench-docker, swebench-modal, medagentbench, tau2, math-python"
+                        f"{self.config.backend}. Supported: mcp, swebench-docker, swebench-modal, medagentbench, tau2, math-python, financebench"
                     )
 
                 if backend_name == "mcp":
@@ -1905,7 +1972,11 @@ class TeamRunner:
                                         )
                                     except Exception:
                                         pass
-                                await backend.teardown()
+                                if backend_name in (
+                                    "swebench-docker",
+                                    "swebench-modal",
+                                ):
+                                    await backend.teardown()
                                 continue
                             shared_tools = await backend.list_tools()
 
@@ -2058,9 +2129,15 @@ class TeamRunner:
                                     fhir_api_base = getattr(
                                         backend, "fhir_api_base", ""
                                     )
+                                    import asyncio as _asyncio
+                                    import functools as _functools
+                                    _loop = _asyncio.get_event_loop()
                                     is_correct = bool(
-                                        medagent_eval(
-                                            task_data, results_obj, fhir_api_base
+                                        await asyncio.to_thread(
+                                            medagent_eval,
+                                            task_data,
+                                            results_obj,
+                                            fhir_api_base,
                                         )
                                     )
                                     result.eval_passed = is_correct
@@ -2072,6 +2149,62 @@ class TeamRunner:
                                         "fhir_api_base": fhir_api_base,
                                         "correct": is_correct,
                                         "finish_result": result.output_text,
+                                    }
+                                elif eval_type == "financebench":
+                                    import re as _re
+
+                                    gold = str(eval_config.get("answer", "")).strip()
+                                    pred = str(result.output_text or "").strip()
+
+                                    # Extract answer after "ANSWER:" marker if present
+                                    answer_match = _re.search(
+                                        r"ANSWER\s*:\s*(.+)", pred, _re.IGNORECASE | _re.DOTALL
+                                    )
+                                    if answer_match:
+                                        pred = answer_match.group(1).strip()
+
+                                    def _extract_number(text: str):
+                                        text = text.replace(",", "").replace("$", "").replace("%", "")
+                                        nums = _re.findall(r"-?\d+(?:\.\d+)?", text)
+                                        return float(nums[0]) if nums else None
+
+                                    gold_num = _extract_number(gold)
+                                    pred_num = _extract_number(pred)
+
+                                    is_correct = False
+                                    eval_method = "unknown"
+
+                                    if gold_num is not None and pred_num is not None:
+                                        # Numeric comparison with 2% tolerance
+                                        eval_method = "numeric_tolerance"
+                                        if abs(gold_num) < 1e-9:
+                                            is_correct = abs(pred_num) < 1e-6
+                                        else:
+                                            is_correct = abs(pred_num - gold_num) / abs(gold_num) <= 0.02
+                                    else:
+                                        # Text comparison: check if key terms from gold appear in pred
+                                        eval_method = "keyword_overlap"
+                                        gold_words = set(_re.findall(r"\w+", gold.lower()))
+                                        pred_words = set(_re.findall(r"\w+", pred.lower()))
+                                        stopwords = {"the", "a", "an", "is", "in", "of", "to", "and", "for", "that"}
+                                        gold_key = gold_words - stopwords
+                                        if gold_key:
+                                            overlap = len(gold_key & pred_words) / len(gold_key)
+                                            is_correct = overlap >= 0.5
+
+                                    result.eval_passed = is_correct
+                                    result.eval_score = 1.0 if is_correct else 0.0
+                                    result.eval_details = {
+                                        "evaluator": "financebench",
+                                        "eval_method": eval_method,
+                                        "gold_answer": gold,
+                                        "model_answer": pred,
+                                        "gold_num": gold_num,
+                                        "pred_num": pred_num,
+                                        "correct": is_correct,
+                                        "question_type": eval_config.get("question_type"),
+                                        "company": eval_config.get("company"),
+                                        "doc_name": eval_config.get("doc_name"),
                                     }
                                 elif eval_type == "math_verify":
                                     import importlib
@@ -2139,7 +2272,8 @@ class TeamRunner:
                                     result.eval_details = {"details": details}
                                 if not isinstance(result.eval_details, dict):
                                     result.eval_details = {}
-                                result.eval_details["evaluator"] = eval_type
+                                if "evaluator" not in result.eval_details:
+                                    result.eval_details["evaluator"] = eval_type
 
                             for req_row in result.per_request_details:
                                 req_row["example_index"] = i
@@ -2177,7 +2311,10 @@ class TeamRunner:
                                 except Exception:
                                     pass
                         finally:
-                            if backend_name != "mcp":
+                            if backend_name in (
+                                "swebench-docker",
+                                "swebench-modal",
+                            ):
                                 try:
                                     patch = await backend.get_patch()
                                     if patch:
