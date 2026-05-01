@@ -96,6 +96,9 @@ test_server.csv
 test_server_structured.csv
 scripts/test_persist.txt
 
+# Helper utility temp artifacts
+/readabilipy*/
+
 # Task workspace
 tasks/
 !third_party/MedAgentBench/src/server/tasks/
