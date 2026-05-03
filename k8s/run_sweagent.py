@@ -354,6 +354,10 @@ def main():
                     choices=["swe-bench-lite", "swe-bench-pro"])
     ap.add_argument("--num-tasks", type=int, default=100)
     ap.add_argument("--task-offset", type=int, default=0)
+    ap.add_argument("--task-indices", default=None,
+                    help="Path to JSON file with 'indices' or 'new_indices' key, "
+                         "or a comma-separated list of dataset row indices. "
+                         "When provided, --num-tasks/--task-offset are ignored.")
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--sweagent-dir", default="/tmp/swe_agent")
@@ -405,7 +409,15 @@ def main():
     else:
         deploy = DeployCls()
 
-    task_range = range(args.task_offset, min(args.task_offset + args.num_tasks, len(ds)))
+    if args.task_indices:
+        if args.task_indices.endswith(".json"):
+            spec = json.loads(Path(args.task_indices).read_text())
+            task_range = spec.get("indices") or spec.get("new_indices") or []
+            log(f"Loaded {len(task_range)} indices from {args.task_indices}")
+        else:
+            task_range = [int(x) for x in args.task_indices.split(",")]
+    else:
+        task_range = range(args.task_offset, min(args.task_offset + args.num_tasks, len(ds)))
     log(f"Running {len(task_range)} tasks  deployment={args.deployment}  concurrency={args.concurrency}")
 
     results = []
