@@ -191,7 +191,7 @@ python k8s/run_sweagent.py \
     --deployment modal \
     --dataset swe-bench-lite \
     --task-indices benchmarks/swe_bench_lite_curated_100.json \
-    --concurrency 20 \
+    --concurrency 3 \
     --vllm-url "$VLLM_URL" \
     --sweagent-dir /tmp/swe_agent \
     --output-dir results/swebench_lite_modal \
@@ -199,9 +199,16 @@ python k8s/run_sweagent.py \
 ```
 
 Notes:
-- `--concurrency 20`: Modal happily parallelizes; each container is
-  isolated. Limit by your model server's max-concurrent-requests, not
-  Modal's.
+- `--concurrency 3`: matches the k8s setup that produced the prior
+  reported numbers (verified from `results/run_curated_70.log`:
+  `Running 70 tasks with concurrency 3`). Modal can parallelize much
+  higher, but bumping concurrency changes per-task GPU contention on
+  the shared model server and **changes the latency/throughput
+  numbers** (acc is roughly stable, but TTFT/TPOT/decode-time are not).
+  Stay at 3 to match prior reports.
+- mcp-atlas runs sequentially (concurrency=1) — that's how
+  `unified_runner` works for `--dataset mcp-atlas`. Don't try to
+  parallelize without changing the runner.
 - `--vllm-url`: must be reachable from the Modal containers if you set
   `--env.deployment.host` to that URL. In practice the agent process
   runs locally and forwards HTTP to your endpoint, so as long as
