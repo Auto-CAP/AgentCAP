@@ -130,7 +130,7 @@ def infer_model_precision(model_path: str) -> str:
 
 def collect_hardware_info_rocm_fallback() -> Dict[str, Any]:
     try:
-        hw_info = collect_hardware_info_rocm_fallback()
+        hw_info = collect_hardware_info()
         if hw_info.get("gpu_type") not in (None, "", "unknown"):
             return hw_info
     except Exception:
@@ -1220,7 +1220,7 @@ def sglang_generate_with_ids(
 
     return text, output_ids, meta_info, elapsed_s
 
-def sglang_generate_with_ids_streaming(
+def sglang_generate_with_ids_streaming_deprecated(
     *,
     native_base_url: str,
     prompt_ids: List[int],
@@ -1348,6 +1348,308 @@ def sglang_generate_with_ids_streaming(
     return final_text, output_ids, meta_info, ttft_s, elapsed_s
 
 
+def _encode_completion_text_for_harmony(encoding: Any, text: str) -> List[int]:
+    """
+    Best-effort re-tokenization for the OpenAI-compatible /v1/completions fallback.
+
+    Native /generate is better because it returns output_ids directly.
+    This fallback is only used when /generate is unavailable.
+    """
+    if not text:
+        return []
+
+    # openai_harmony encoding may expose encode directly.
+    if hasattr(encoding, "encode"):
+        try:
+            return list(map(int, encoding.encode(text)))
+        except TypeError:
+            pass
+        except Exception:
+            pass
+
+    # Some wrappers expose the underlying tokenizer/encoding.
+    for attr in ("_encoding", "encoding", "tokenizer"):
+        inner = getattr(encoding, attr, None)
+        if inner is None:
+            continue
+
+        if hasattr(inner, "encode"):
+            try:
+                return list(map(int, inner.encode(text, allowed_special="all")))
+            except TypeError:
+                try:
+                    return list(map(int, inner.encode(text)))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+    raise RuntimeError(
+        "Could not re-tokenize /v1/completions text with the Harmony encoding. "
+        "Native /generate returned 404, and fallback tokenization failed."
+    )
+
+
+def sglang_generate_with_ids_streaming_native(
+    *,
+    native_base_url: str,
+    prompt_ids: List[int],
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    stop_token_ids: List[int],
+    timeout_s: float = 600.0,
+) -> tuple[str, List[int], Dict[str, Any], float, float]:
+    """
+    Original SGLang native /generate implementation.
+
+    This is preferred because it can return raw output_ids, which your Harmony
+    parser needs for tool-call/final-channel parsing.
+    """
+    payload = {
+        "input_ids": list(map(int, prompt_ids)),
+        "rid": str(uuid.uuid4()),
+        "sampling_params": {
+            "max_new_tokens": int(max_new_tokens),
+            "temperature": float(temperature),
+            "top_p": float(top_p),
+            "stop_token_ids": list(map(int, stop_token_ids)),
+
+            # Important for Harmony parsing/debugging.
+            "skip_special_tokens": False,
+            "spaces_between_special_tokens": False,
+            "no_stop_trim": True,
+        },
+        "stream": True,
+    }
+
+    t0 = time.time()
+    first_chunk_time: Optional[float] = None
+
+    final_text = ""
+    output_ids: List[int] = []
+    meta_info: Dict[str, Any] = {}
+
+    response = requests.post(
+        f"{native_base_url.rstrip('/')}/generate",
+        json=payload,
+        timeout=timeout_s,
+        stream=True,
+    )
+
+    elapsed_s = 0.0
+
+    try:
+        if response.status_code >= 400:
+            raise requests.HTTPError(
+                f"{response.status_code} Error for native /generate: {response.text}",
+                response=response,
+            )
+
+        for raw_line in response.iter_lines(decode_unicode=False):
+            if not raw_line:
+                continue
+
+            line = raw_line.decode("utf-8", errors="replace").strip()
+
+            if not line.startswith("data:"):
+                continue
+
+            data_str = line[len("data:") :].strip()
+
+            if data_str == "[DONE]":
+                break
+
+            if first_chunk_time is None:
+                first_chunk_time = time.time()
+
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(data.get("text"), str):
+                final_text = data["text"]
+
+            maybe_output_ids = data.get("output_ids")
+            if maybe_output_ids:
+                output_ids = list(map(int, maybe_output_ids))
+
+            maybe_meta = data.get("meta_info")
+            if isinstance(maybe_meta, dict):
+                meta_info = maybe_meta
+
+        elapsed_s = time.time() - t0
+
+    finally:
+        with contextlib.suppress(Exception):
+            response.close()
+
+    ttft_s = 0.0 if first_chunk_time is None else max(0.0, first_chunk_time - t0)
+
+    if not output_ids:
+        raise RuntimeError(
+            "SGLang native /generate returned no output_ids. "
+            f"final_text_len={len(final_text)}, meta_info={meta_info!r}"
+        )
+
+    completion_tokens = meta_info.get("completion_tokens")
+    if isinstance(completion_tokens, int) and completion_tokens > 0:
+        output_ids = output_ids[-completion_tokens:]
+    elif len(output_ids) > len(prompt_ids) and output_ids[: len(prompt_ids)] == prompt_ids:
+        output_ids = output_ids[len(prompt_ids) :]
+
+    return final_text, output_ids, meta_info, ttft_s, elapsed_s
+
+
+def sglang_generate_with_ids_openai_fallback(
+    *,
+    native_base_url: str,
+    prompt_ids: List[int],
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    encoding: Any,
+    model: str = "gpt-oss",
+    timeout_s: float = 600.0,
+) -> tuple[str, List[int], Dict[str, Any], float, float]:
+    """
+    Fallback for SGLang images where native /generate is unavailable.
+
+    Uses OpenAI-compatible /v1/completions. This is less ideal than /generate
+    because it may not preserve all Harmony special tokens/tool-call structure.
+    """
+    url = f"{native_base_url.rstrip('/')}/v1/completions"
+
+    payload = {
+        "model": model,
+        "prompt": list(map(int, prompt_ids)),
+        "max_tokens": int(max_new_tokens),
+        "temperature": float(temperature),
+        "top_p": float(top_p),
+        "stream": False,
+        "echo": False,
+
+        # SGLang often accepts extra sampling params even on OpenAI-compatible routes.
+        # If this route rejects them in your build, remove these three lines.
+        "skip_special_tokens": False,
+        "spaces_between_special_tokens": False,
+        "no_stop_trim": True,
+    }
+
+    t0 = time.time()
+    response = requests.post(url, json=payload, timeout=timeout_s)
+    elapsed_s = time.time() - t0
+
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"SGLang OpenAI fallback /v1/completions returned {response.status_code}.\n"
+            f"URL: {url}\n"
+            f"Response text:\n{response.text}\n"
+            f"len(input_ids)={len(prompt_ids)}"
+        )
+
+    data = response.json()
+    choice = data["choices"][0]
+    text = choice.get("text", "")
+
+    if not isinstance(text, str) or not text:
+        raise RuntimeError(
+            "SGLang OpenAI fallback returned empty text. "
+            f"Response: {json.dumps(data)[:2000]}"
+        )
+
+    output_ids = _encode_completion_text_for_harmony(encoding, text)
+
+    meta_info = {
+        "api_fallback": "openai_v1_completions",
+        "raw_response": data,
+        "prompt_tokens": len(prompt_ids),
+        "completion_tokens": len(output_ids),
+    }
+
+    # Non-streaming fallback cannot measure true TTFT.
+    ttft_s = elapsed_s
+
+    return text, output_ids, meta_info, ttft_s, elapsed_s
+
+
+def sglang_generate_with_ids_streaming(
+    *,
+    native_base_url: str,
+    prompt_ids: List[int],
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    stop_token_ids: List[int],
+    encoding: Any,
+    model: str = "gpt-oss",
+    timeout_s: float = 600.0,
+) -> tuple[str, List[int], Dict[str, Any], float, float]:
+    """
+    Try old native SGLang /generate first.
+    If it is unavailable, fall back to OpenAI-compatible /v1/completions.
+    """
+    try:
+        return sglang_generate_with_ids_streaming_native(
+            native_base_url=native_base_url,
+            prompt_ids=prompt_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop_token_ids=stop_token_ids,
+            timeout_s=timeout_s,
+        )
+
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+
+        if status_code != 404:
+            raise
+
+        print(
+            "[SGLang] Native /generate returned 404. "
+            "Falling back to /v1/completions.",
+            flush=True,
+        )
+
+        return sglang_generate_with_ids_openai_fallback(
+            native_base_url=native_base_url,
+            prompt_ids=prompt_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            encoding=encoding,
+            model=model,
+            timeout_s=timeout_s,
+        )
+
+    except RuntimeError as exc:
+        message = str(exc)
+
+        # Optional: also fall back if the route exists but does not provide output_ids.
+        # This is less common, but useful for mixed SGLang builds.
+        if "returned no output_ids" not in message:
+            raise
+
+        print(
+            "[SGLang] Native /generate did not return output_ids. "
+            "Falling back to /v1/completions.",
+            flush=True,
+        )
+
+        return sglang_generate_with_ids_openai_fallback(
+            native_base_url=native_base_url,
+            prompt_ids=prompt_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            encoding=encoding,
+            model=model,
+            timeout_s=timeout_s,
+        )
+
+
 
 def run_harmony_attempt(
     *,
@@ -1447,6 +1749,8 @@ def run_harmony_attempt(
                         temperature=temperature,
                         top_p=top_p,
                         stop_token_ids=stop_token_ids,
+                        encoding=encoding,
+                        model=model,
                         timeout_s=600.0,
                     )
                 )

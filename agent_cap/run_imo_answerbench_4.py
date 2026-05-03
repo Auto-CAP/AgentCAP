@@ -129,7 +129,7 @@ def infer_model_precision(model_path: str) -> str:
 
 def collect_hardware_info_rocm_fallback() -> Dict[str, Any]:
     try:
-        hw_info = collect_hardware_info_rocm_fallback()
+        hw_info = collect_hardware_info()
         if hw_info.get("gpu_type") not in (None, "", "unknown"):
             return hw_info
     except Exception:
