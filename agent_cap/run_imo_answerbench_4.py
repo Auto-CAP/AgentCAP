@@ -139,7 +139,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     number_of_gpus = int(hw_info.get("num_gpus", 0))
 
     results_dir = (
-        Path("/develop-pvc/outputs/TEAS_Development_Results_Private/agentic_results/eidf/vllm")
+        Path("/develop-pvc/outputs/TEAS_Development_Results_Private/agentic_results/amd/vllm")
         / model_name
         / dataset_name
         / f"{gpu_shortform}-x-{number_of_gpus}"
@@ -1148,15 +1148,19 @@ def run_harmony_attempt(
 
             num_requests += 1
 
-            stream = client.completions.create(
-                model=model,
-                prompt=prompt_ids,
-                max_tokens=remaining_ctx,
-                temperature=temperature,
-                seed=seed,
-                stream=True,
-                extra_body=extra,
-            )
+            try:
+                stream = client.completions.create(
+                    model=model,
+                    prompt=prompt_ids,
+                    max_tokens=remaining_ctx,
+                    temperature=temperature,
+                    seed=seed,
+                    stream=True,
+                    extra_body=extra,
+                )
+            except Exception as exc:
+                errors.append(f"Completion request failed: {type(exc).__name__}: {exc}")
+                break
 
             cached_tokens_this_request = 0
 
@@ -1177,8 +1181,6 @@ def run_harmony_attempt(
                     if new_text:
                         text_chunks.append(new_text)
 
-                    # Best-effort extraction of cached tokens if vLLM/OpenAI-compatible
-                    # usage metadata is present on the streamed chunk.
                     usage = getattr(chunk, "usage", None)
                     if usage is not None:
                         prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
@@ -1188,6 +1190,13 @@ def run_harmony_attempt(
                                 cached_tokens_this_request = int(maybe_cached)
 
                 stream_end = time.time()
+
+            except Exception as exc:
+                stream_end = time.time()
+                errors.append(f"Streaming/API failed: {type(exc).__name__}: {exc}")
+                response_text = "".join(text_chunks)
+                final_answer = _scan_for_answer(response_text)
+                break
 
             finally:
                 with contextlib.suppress(Exception):
