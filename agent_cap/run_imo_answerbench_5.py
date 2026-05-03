@@ -128,19 +128,87 @@ def infer_model_precision(model_path: str) -> str:
 
     return "unknown"
 
+def collect_hardware_info_rocm_fallback() -> Dict[str, Any]:
+    try:
+        hw_info = collect_hardware_info_rocm_fallback()
+        if hw_info.get("gpu_type") not in (None, "", "unknown"):
+            return hw_info
+    except Exception:
+        hw_info = {}
+
+    rocr_visible = os.getenv("ROCR_VISIBLE_DEVICES", "")
+    hip_visible = os.getenv("HIP_VISIBLE_DEVICES", "")
+
+    gpu_type = "unknown"
+    num_gpus = 0
+
+    try:
+        proc = subprocess.run(
+            ["rocminfo"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=20,
+        )
+        text = proc.stdout
+
+        # Common on MI350/MI355 systems: gfx950.
+        if "gfx950" in text:
+            gpu_type = "AMD Instinct MI35x / gfx950"
+        elif "gfx942" in text:
+            gpu_type = "AMD Instinct MI300/MI325 / gfx942"
+        elif "AMD Instinct" in text:
+            gpu_type = "AMD Instinct"
+
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.run(
+            ["python", "-c", "import torch; print(torch.cuda.device_count())"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=20,
+        )
+        num_gpus = int(proc.stdout.strip().splitlines()[-1])
+    except Exception:
+        if rocr_visible:
+            num_gpus = len([x for x in rocr_visible.split(",") if x.strip()])
+        else:
+            num_gpus = 0
+
+    hw_info.update(
+        {
+            "gpu_type": hw_info.get("gpu_type") or gpu_type,
+            "num_gpus": hw_info.get("num_gpus") or num_gpus,
+            "rocr_visible_devices": rocr_visible,
+            "hip_visible_devices": hip_visible,
+        }
+    )
+
+    return hw_info
+
 
 def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    hw_info = collect_hardware_info()
+    hw_info = collect_hardware_info_rocm_fallback()
 
     model_name = Path(args.model_path).name
     dataset_name = "imo_answerbench"
     gpu_shortform = str(hw_info.get("gpu_type", "unknown")).replace(" ", "-")
     number_of_gpus = int(hw_info.get("num_gpus", 0))
 
+    output_root = Path(
+        _env_str(
+            "OUTPUT_ROOT",
+            "/workspace/outputs/TEAS_Development_Results_Private/agentic_results/amd/sglang",
+        )
+    )
+
     results_dir = (
-        Path("/develop-pvc/outputs/TEAS_Development_Results_Private/agentic_results/eidf/sglang")
+        output_root
         / model_name
         / dataset_name
         / f"{gpu_shortform}-x-{number_of_gpus}"
@@ -681,8 +749,8 @@ def resolve_model_path(model_path: str, local_model_root: Optional[str] = None) 
     Otherwise, treat it as a Hugging Face repo id and download it locally.
 
     Examples:
-      - /workspace/models/unsloth/gpt-oss-120b   -> use as-is if it exists
-      - openai/gpt-oss-120b                      -> download from HF
+      - /workspace/models/unsloth/gpt-oss-120b -> use as-is if it exists
+      - unsloth/gpt-oss-120b                  -> download to /workspace/models/unsloth/gpt-oss-120b
     """
     path_obj = Path(model_path)
     if path_obj.is_dir():
@@ -690,11 +758,10 @@ def resolve_model_path(model_path: str, local_model_root: Optional[str] = None) 
         print(f"Using local model directory: {resolved}", flush=True)
         return resolved
 
-    # Choose a stable local destination for downloaded models
     if local_model_root is None:
         local_model_root = os.getenv("HF_LOCAL_MODEL_ROOT", "/workspace/models")
 
-    target_dir = Path(local_model_root) / model_path.split("/")[-1]
+    target_dir = Path(local_model_root) / model_path
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
     hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
