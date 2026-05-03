@@ -86,6 +86,7 @@ ENV/
 # Runtime outputs
 results/
 server_sglang_*.log
+*.out
 
 # Experiment temp artifacts
 df_contents.txt
