@@ -130,7 +130,7 @@ def infer_model_precision(model_path: str) -> str:
 
 def collect_hardware_info_rocm_fallback() -> Dict[str, Any]:
     try:
-        hw_info = collect_hardware_info_rocm_fallback()
+        hw_info = collect_hardware_info()
         if hw_info.get("gpu_type") not in (None, "", "unknown"):
             return hw_info
     except Exception:
@@ -193,8 +193,9 @@ def collect_hardware_info_rocm_fallback() -> Dict[str, Any]:
 def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    print('collecting hardware info...', flush=True)
     hw_info = collect_hardware_info_rocm_fallback()
-
+    print('successfully collected hardware info.', flush=True)
     model_name = Path(args.model_path).name
     dataset_name = "imo_answerbench"
     gpu_shortform = str(hw_info.get("gpu_type", "unknown")).replace(" ", "-")
@@ -825,7 +826,7 @@ class SGLangInfraGPTOSS:
                 f"Resolved model path does not exist or is not a directory: {self.cfg.model_path}"
             )
 
-        print(f"Loading model weights from {self.cfg.model_path} into OS Page Cache...")
+        print(f"Loading model weights from {self.cfg.model_path} into OS Page Cache...", flush=True)
         start_time = time.time()
 
         files_to_load: List[str] = []
