@@ -139,7 +139,8 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     number_of_gpus = int(hw_info.get("num_gpus", 0))
 
     results_dir = (
-        Path("/develop-pvc/outputs/TEAS_Development_Results_Private/agentic_results/amd/vllm")
+        # Path("/develop-pvc/outputs/TEAS_Development_Results_Private/agentic_results/eidf/vllm")
+        Path("/home/amd/yufan/outputs/TEAS_Development_Results_Private/agentic_results/eidf/vllm")
         / model_name
         / dataset_name
         / f"{gpu_shortform}-x-{number_of_gpus}"
