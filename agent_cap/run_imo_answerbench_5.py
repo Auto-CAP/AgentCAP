@@ -1390,9 +1390,10 @@ def _encode_completion_text_for_harmony(encoding: Any, text: str) -> List[int]:
     )
 
 
-def sglang_generate_with_ids_streaming_native(
+def sglang_generate_with_ids_streaming_native_on_path(
     *,
     native_base_url: str,
+    endpoint_path: str,
     prompt_ids: List[int],
     max_new_tokens: int,
     temperature: float,
@@ -1400,12 +1401,6 @@ def sglang_generate_with_ids_streaming_native(
     stop_token_ids: List[int],
     timeout_s: float = 600.0,
 ) -> tuple[str, List[int], Dict[str, Any], float, float]:
-    """
-    Original SGLang native /generate implementation.
-
-    This is preferred because it can return raw output_ids, which your Harmony
-    parser needs for tool-call/final-channel parsing.
-    """
     payload = {
         "input_ids": list(map(int, prompt_ids)),
         "rid": str(uuid.uuid4()),
@@ -1414,14 +1409,14 @@ def sglang_generate_with_ids_streaming_native(
             "temperature": float(temperature),
             "top_p": float(top_p),
             "stop_token_ids": list(map(int, stop_token_ids)),
-
-            # Important for Harmony parsing/debugging.
             "skip_special_tokens": False,
             "spaces_between_special_tokens": False,
             "no_stop_trim": True,
         },
         "stream": True,
     }
+
+    url = f"{native_base_url.rstrip('/')}{endpoint_path}"
 
     t0 = time.time()
     first_chunk_time: Optional[float] = None
@@ -1431,7 +1426,7 @@ def sglang_generate_with_ids_streaming_native(
     meta_info: Dict[str, Any] = {}
 
     response = requests.post(
-        f"{native_base_url.rstrip('/')}/generate",
+        url,
         json=payload,
         timeout=timeout_s,
         stream=True,
@@ -1442,7 +1437,7 @@ def sglang_generate_with_ids_streaming_native(
     try:
         if response.status_code >= 400:
             raise requests.HTTPError(
-                f"{response.status_code} Error for native /generate: {response.text}",
+                f"{response.status_code} Error for {endpoint_path}: {response.text}",
                 response=response,
             )
 
@@ -1452,10 +1447,12 @@ def sglang_generate_with_ids_streaming_native(
 
             line = raw_line.decode("utf-8", errors="replace").strip()
 
-            if not line.startswith("data:"):
-                continue
-
-            data_str = line[len("data:") :].strip()
+            # SGLang native streaming is usually SSE-style: data: {...}
+            # But keep a plain JSON fallback just in case this endpoint changed format.
+            if line.startswith("data:"):
+                data_str = line[len("data:") :].strip()
+            else:
+                data_str = line
 
             if data_str == "[DONE]":
                 break
@@ -1489,7 +1486,7 @@ def sglang_generate_with_ids_streaming_native(
 
     if not output_ids:
         raise RuntimeError(
-            "SGLang native /generate returned no output_ids. "
+            f"SGLang native endpoint {endpoint_path} returned no output_ids. "
             f"final_text_len={len(final_text)}, meta_info={meta_info!r}"
         )
 
@@ -1587,32 +1584,74 @@ def sglang_generate_with_ids_streaming(
     timeout_s: float = 600.0,
 ) -> tuple[str, List[int], Dict[str, Any], float, float]:
     """
-    Try old native SGLang /generate first.
-    If it is unavailable, fall back to OpenAI-compatible /v1/completions.
+    Try SGLang native endpoints first.
+
+    SGLang 0.5.7 used:
+        /generate
+
+    This ROCm 0.5.10 image exposes:
+        /inference/v1/generate
+
+    If both native endpoints fail, fall back to:
+        /v1/completions
     """
+    native_endpoint_paths = [
+        "/generate",
+        "/inference/v1/generate",
+    ]
+
+    last_native_error: Optional[Exception] = None
+
+    for endpoint_path in native_endpoint_paths:
+        try:
+            print(f"[SGLang] Trying native endpoint: {endpoint_path}", flush=True)
+
+            return sglang_generate_with_ids_streaming_native_on_path(
+                native_base_url=native_base_url,
+                endpoint_path=endpoint_path,
+                prompt_ids=prompt_ids,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop_token_ids=stop_token_ids,
+                timeout_s=timeout_s,
+            )
+
+        except requests.HTTPError as exc:
+            last_native_error = exc
+            status_code = exc.response.status_code if exc.response is not None else None
+
+            print(
+                f"[SGLang] Native endpoint {endpoint_path} failed with HTTP {status_code}.",
+                flush=True,
+            )
+
+            # 404 means this endpoint path is absent; try the next native endpoint.
+            if status_code == 404:
+                continue
+
+            # Other HTTP errors mean route exists but payload/schema may be wrong.
+            # Still try the next endpoint before giving up.
+            continue
+
+        except RuntimeError as exc:
+            last_native_error = exc
+
+            print(
+                f"[SGLang] Native endpoint {endpoint_path} failed: {exc}",
+                flush=True,
+            )
+
+            # If endpoint exists but does not return output_ids, try the next path.
+            continue
+
+    print(
+        "[SGLang] All native endpoints failed. "
+        "Falling back to /v1/completions.",
+        flush=True,
+    )
+
     try:
-        return sglang_generate_with_ids_streaming_native(
-            native_base_url=native_base_url,
-            prompt_ids=prompt_ids,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            stop_token_ids=stop_token_ids,
-            timeout_s=timeout_s,
-        )
-
-    except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else None
-
-        if status_code != 404:
-            raise
-
-        print(
-            "[SGLang] Native /generate returned 404. "
-            "Falling back to /v1/completions.",
-            flush=True,
-        )
-
         return sglang_generate_with_ids_openai_fallback(
             native_base_url=native_base_url,
             prompt_ids=prompt_ids,
@@ -1623,32 +1662,12 @@ def sglang_generate_with_ids_streaming(
             model=model,
             timeout_s=timeout_s,
         )
-
-    except RuntimeError as exc:
-        message = str(exc)
-
-        # Optional: also fall back if the route exists but does not provide output_ids.
-        # This is less common, but useful for mixed SGLang builds.
-        if "returned no output_ids" not in message:
-            raise
-
-        print(
-            "[SGLang] Native /generate did not return output_ids. "
-            "Falling back to /v1/completions.",
-            flush=True,
+    except Exception as fallback_exc:
+        raise RuntimeError(
+            "All SGLang generation endpoints failed. "
+            f"Last native error: {type(last_native_error).__name__}: {last_native_error}. "
+            f"OpenAI fallback error: {type(fallback_exc).__name__}: {fallback_exc}"
         )
-
-        return sglang_generate_with_ids_openai_fallback(
-            native_base_url=native_base_url,
-            prompt_ids=prompt_ids,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            encoding=encoding,
-            model=model,
-            timeout_s=timeout_s,
-        )
-
 
 
 def run_harmony_attempt(
@@ -2023,6 +2042,112 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
         for ans, cnt in answer_counter.most_common(10):
             print(f"  {ans}: {cnt}")
 
+def probe_sglang_endpoints(base_url: str) -> None:
+    """
+    Probe the live SGLang server and print available/likely endpoints.
+
+    This is intended for debugging SGLang version/API differences.
+    It does not run the benchmark.
+    """
+    base_url = base_url.rstrip("/")
+
+    print("\n" + "=" * 100, flush=True)
+    print("SGLang endpoint probe", flush=True)
+    print("=" * 100, flush=True)
+    print(f"Base URL: {base_url}", flush=True)
+
+    def _preview(text: str, limit: int = 800) -> str:
+        text = text.replace("\n", "\\n")
+        if len(text) > limit:
+            return text[:limit] + "..."
+        return text
+
+    def _request(method: str, path: str, json_body: Optional[Dict[str, Any]] = None) -> None:
+        url = f"{base_url}{path}"
+        try:
+            response = requests.request(
+                method,
+                url,
+                json=json_body,
+                timeout=10,
+            )
+            content_type = response.headers.get("content-type", "")
+            print(
+                f"{method:7s} {path:30s} -> "
+                f"{response.status_code} {response.reason} "
+                f"content-type={content_type}",
+                flush=True,
+            )
+
+            body = response.text or ""
+            if body:
+                print(f"    body: {_preview(body)}", flush=True)
+
+        except Exception as exc:
+            print(
+                f"{method:7s} {path:30s} -> "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+    print("\n--- Basic GET probes ---", flush=True)
+    for path in [
+        "/",
+        "/health",
+        "/health_generate",
+        "/v1/models",
+        "/get_model_info",
+        "/docs",
+        "/openapi.json",
+    ]:
+        _request("GET", path)
+
+    print("\n--- OPTIONS probes for likely generation routes ---", flush=True)
+    for path in [
+        "/generate",
+        "/v1/completions",
+        "/v1/chat/completions",
+        "/v1/responses",
+    ]:
+        _request("OPTIONS", path)
+
+    print("\n--- Empty POST probes for likely generation routes ---", flush=True)
+    print(
+        "Note: 400/422 usually means the route exists but the payload is invalid; "
+        "404 means the route is probably absent.",
+        flush=True,
+    )
+    for path in [
+        "/generate",
+        "/v1/completions",
+        "/v1/chat/completions",
+        "/v1/responses",
+    ]:
+        _request("POST", path, json_body={})
+
+    print("\n--- Parsed OpenAPI paths, if available ---", flush=True)
+    try:
+        response = requests.get(f"{base_url}/openapi.json", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            paths = sorted(data.get("paths", {}).keys())
+            if paths:
+                print("Available paths from /openapi.json:", flush=True)
+                for path in paths:
+                    methods = sorted(data.get("paths", {}).get(path, {}).keys())
+                    print(f"  {path}    methods={methods}", flush=True)
+            else:
+                print("/openapi.json exists but contains no paths.", flush=True)
+        else:
+            print(
+                f"/openapi.json unavailable: {response.status_code} {response.reason}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"Could not parse /openapi.json: {type(exc).__name__}: {exc}", flush=True)
+
+    print("=" * 100 + "\n", flush=True)
+
 
 async def async_main(
     args: argparse.Namespace,
@@ -2106,6 +2231,8 @@ def main() -> None:
     parser.add_argument("--enable-torch-compile", action="store_true")
     parser.add_argument("--allow-auto-truncate", action="store_true", default=True)
 
+    parser.add_argument("--probe-sglang-endpoints-and-exit", action="store_true")
+
     args = parser.parse_args()
     if args.mem_fraction_static is None:
         # Reuse the old vLLM knob as the default SGLang memory fraction.
@@ -2139,6 +2266,11 @@ def main() -> None:
     infra = SGLangInfraGPTOSS(runtime_cfg)
     try:
         infra.start()
+
+        if args.probe_sglang_endpoints_and_exit:
+            probe_sglang_endpoints(f"http://127.0.0.1:{args.port}") 
+            return
+
         results = asyncio.run(async_main(args, output_paths))
     finally:
         infra.stop()
@@ -2146,7 +2278,6 @@ def main() -> None:
     wall_time_s = time.time() - t0
     print_summary(results, wall_time_s)
     write_metrics_file(results, wall_time_s, output_paths, args)
-
 
 if __name__ == "__main__":
     main()

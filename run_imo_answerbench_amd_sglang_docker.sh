@@ -155,5 +155,6 @@ python -m agent_cap.run_imo_answerbench_5 \
   --tensor-parallel-size 1 \
   --server-timeout 3600 \
   --preload-workers 8 \
-  --judge-model google/gemini-3.1-flash-lite-preview
+  --judge-model google/gemini-3.1-flash-lite-preview \
+  --probe-sglang-endpoints-and-exit
 '
