@@ -1390,6 +1390,51 @@ def _encode_completion_text_for_harmony(encoding: Any, text: str) -> List[int]:
     )
 
 
+def _extract_text_and_ids_from_generate_chunk(
+    data: Dict[str, Any],
+) -> tuple[Optional[str], Optional[List[int]], Dict[str, Any]]:
+    """
+    Supports multiple generate response formats:
+      - old SGLang: {"text": ..., "output_ids": ..., "meta_info": ...}
+      - newer inference route: {"outputs": [{"text": ..., "token_ids": ...}], ...}
+    """
+    text: Optional[str] = None
+    output_ids: Optional[List[int]] = None
+    meta_info: Dict[str, Any] = {}
+
+    if isinstance(data.get("text"), str):
+        text = data["text"]
+
+    for key in ("output_ids", "token_ids", "output_token_ids"):
+        maybe_ids = data.get(key)
+        if maybe_ids:
+            output_ids = list(map(int, maybe_ids))
+            break
+
+    maybe_meta = data.get("meta_info")
+    if isinstance(maybe_meta, dict):
+        meta_info.update(maybe_meta)
+
+    outputs = data.get("outputs")
+    if isinstance(outputs, list) and outputs:
+        first = outputs[0]
+        if isinstance(first, dict):
+            if isinstance(first.get("text"), str):
+                text = first["text"]
+
+            for key in ("token_ids", "output_ids", "output_token_ids"):
+                maybe_ids = first.get(key)
+                if maybe_ids:
+                    output_ids = list(map(int, maybe_ids))
+                    break
+
+            if "finish_reason" in first:
+                meta_info["finish_reason"] = first.get("finish_reason")
+            if "stop_reason" in first:
+                meta_info["stop_reason"] = first.get("stop_reason")
+
+    return text, output_ids, meta_info
+
 def sglang_generate_with_ids_streaming_native_on_path(
     *,
     native_base_url: str,
@@ -1401,20 +1446,35 @@ def sglang_generate_with_ids_streaming_native_on_path(
     stop_token_ids: List[int],
     timeout_s: float = 600.0,
 ) -> tuple[str, List[int], Dict[str, Any], float, float]:
-    payload = {
-        "input_ids": list(map(int, prompt_ids)),
-        "rid": str(uuid.uuid4()),
-        "sampling_params": {
-            "max_new_tokens": int(max_new_tokens),
-            "temperature": float(temperature),
-            "top_p": float(top_p),
-            "stop_token_ids": list(map(int, stop_token_ids)),
-            "skip_special_tokens": False,
-            "spaces_between_special_tokens": False,
-            "no_stop_trim": True,
-        },
-        "stream": True,
+
+    sampling_params = {
+        "max_new_tokens": int(max_new_tokens),
+        "max_tokens": int(max_new_tokens),
+        "temperature": float(temperature),
+        "top_p": float(top_p),
+        "stop_token_ids": list(map(int, stop_token_ids)),
+        "skip_special_tokens": False,
+        "spaces_between_special_tokens": False,
+        "no_stop_trim": True,
     }
+
+    if endpoint_path == "/inference/v1/generate":
+        payload = {
+            # This is the key change.
+            # /inference/v1/generate expects token_ids, not input_ids.
+            "token_ids": list(map(int, prompt_ids)),
+            "request_id": str(uuid.uuid4()),
+            "sampling_params": sampling_params,
+            "stream": True,
+        }
+    else:
+        payload = {
+            # Legacy SGLang /generate endpoint.
+            "input_ids": list(map(int, prompt_ids)),
+            "rid": str(uuid.uuid4()),
+            "sampling_params": sampling_params,
+            "stream": True,
+        }
 
     url = f"{native_base_url.rstrip('/')}{endpoint_path}"
 
@@ -1447,8 +1507,6 @@ def sglang_generate_with_ids_streaming_native_on_path(
 
             line = raw_line.decode("utf-8", errors="replace").strip()
 
-            # SGLang native streaming is usually SSE-style: data: {...}
-            # But keep a plain JSON fallback just in case this endpoint changed format.
             if line.startswith("data:"):
                 data_str = line[len("data:") :].strip()
             else:
@@ -1465,16 +1523,16 @@ def sglang_generate_with_ids_streaming_native_on_path(
             except json.JSONDecodeError:
                 continue
 
-            if isinstance(data.get("text"), str):
-                final_text = data["text"]
+            maybe_text, maybe_ids, maybe_meta = _extract_text_and_ids_from_generate_chunk(data)
 
-            maybe_output_ids = data.get("output_ids")
-            if maybe_output_ids:
-                output_ids = list(map(int, maybe_output_ids))
+            if isinstance(maybe_text, str):
+                final_text = maybe_text
 
-            maybe_meta = data.get("meta_info")
-            if isinstance(maybe_meta, dict):
-                meta_info = maybe_meta
+            if maybe_ids:
+                output_ids = maybe_ids
+
+            if maybe_meta:
+                meta_info.update(maybe_meta)
 
         elapsed_s = time.time() - t0
 
@@ -1486,7 +1544,7 @@ def sglang_generate_with_ids_streaming_native_on_path(
 
     if not output_ids:
         raise RuntimeError(
-            f"SGLang native endpoint {endpoint_path} returned no output_ids. "
+            f"SGLang native endpoint {endpoint_path} returned no token IDs. "
             f"final_text_len={len(final_text)}, meta_info={meta_info!r}"
         )
 
@@ -1583,21 +1641,11 @@ def sglang_generate_with_ids_streaming(
     model: str = "gpt-oss",
     timeout_s: float = 600.0,
 ) -> tuple[str, List[int], Dict[str, Any], float, float]:
-    """
-    Try SGLang native endpoints first.
 
-    SGLang 0.5.7 used:
-        /generate
-
-    This ROCm 0.5.10 image exposes:
-        /inference/v1/generate
-
-    If both native endpoints fail, fall back to:
-        /v1/completions
-    """
     native_endpoint_paths = [
         "/generate",
         "/inference/v1/generate",
+
     ]
 
     last_native_error: Optional[Exception] = None
@@ -1626,12 +1674,6 @@ def sglang_generate_with_ids_streaming(
                 flush=True,
             )
 
-            # 404 means this endpoint path is absent; try the next native endpoint.
-            if status_code == 404:
-                continue
-
-            # Other HTTP errors mean route exists but payload/schema may be wrong.
-            # Still try the next endpoint before giving up.
             continue
 
         except RuntimeError as exc:
@@ -1642,12 +1684,10 @@ def sglang_generate_with_ids_streaming(
                 flush=True,
             )
 
-            # If endpoint exists but does not return output_ids, try the next path.
             continue
 
     print(
-        "[SGLang] All native endpoints failed. "
-        "Falling back to /v1/completions.",
+        "[SGLang] All native endpoints failed. Falling back to /v1/completions.",
         flush=True,
     )
 
@@ -1745,7 +1785,8 @@ def run_harmony_attempt(
             prompt_ids = encoding.render_conversation_for_completion(conversation, Role.ASSISTANT)
             total_input_tokens += len(prompt_ids)
 
-            remaining_ctx = min(max_tokens, 131072) - len(prompt_ids)
+            # remaining_ctx = min(max_tokens, 131072) - len(prompt_ids)
+            remaining_ctx = min(max_tokens, 120000) - len(prompt_ids)
             if remaining_ctx <= 0:
                 errors.append("No remaining token budget.")
                 break
