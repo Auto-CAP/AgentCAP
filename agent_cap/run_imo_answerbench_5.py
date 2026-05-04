@@ -1221,7 +1221,7 @@ def sglang_generate_with_ids(
 
     return text, output_ids, meta_info, elapsed_s
 
-def sglang_generate_with_ids_streaming(
+def sglang_generate_with_ids_streaming_deprecated(
     *,
     native_base_url: str,
     prompt_ids: List[int],
@@ -1349,6 +1349,327 @@ def sglang_generate_with_ids_streaming(
     return final_text, output_ids, meta_info, ttft_s, elapsed_s
 
 
+def _encode_completion_text_for_harmony(encoding: Any, text: str) -> List[int]:
+    """
+    Best-effort re-tokenization for the OpenAI-compatible /v1/completions fallback.
+
+    Native /generate is better because it returns output_ids directly.
+    This fallback is only used when /generate is unavailable.
+    """
+    if not text:
+        return []
+
+    # openai_harmony encoding may expose encode directly.
+    if hasattr(encoding, "encode"):
+        try:
+            return list(map(int, encoding.encode(text)))
+        except TypeError:
+            pass
+        except Exception:
+            pass
+
+    # Some wrappers expose the underlying tokenizer/encoding.
+    for attr in ("_encoding", "encoding", "tokenizer"):
+        inner = getattr(encoding, attr, None)
+        if inner is None:
+            continue
+
+        if hasattr(inner, "encode"):
+            try:
+                return list(map(int, inner.encode(text, allowed_special="all")))
+            except TypeError:
+                try:
+                    return list(map(int, inner.encode(text)))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+    raise RuntimeError(
+        "Could not re-tokenize /v1/completions text with the Harmony encoding. "
+        "Native /generate returned 404, and fallback tokenization failed."
+    )
+
+
+def sglang_generate_with_ids_streaming_native_on_path(
+    *,
+    native_base_url: str,
+    endpoint_path: str,
+    prompt_ids: List[int],
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    stop_token_ids: List[int],
+    timeout_s: float = 600.0,
+) -> tuple[str, List[int], Dict[str, Any], float, float]:
+    payload = {
+        "input_ids": list(map(int, prompt_ids)),
+        "rid": str(uuid.uuid4()),
+        "sampling_params": {
+            "max_new_tokens": int(max_new_tokens),
+            "temperature": float(temperature),
+            "top_p": float(top_p),
+            "stop_token_ids": list(map(int, stop_token_ids)),
+            "skip_special_tokens": False,
+            "spaces_between_special_tokens": False,
+            "no_stop_trim": True,
+        },
+        "stream": True,
+    }
+
+    url = f"{native_base_url.rstrip('/')}{endpoint_path}"
+
+    t0 = time.time()
+    first_chunk_time: Optional[float] = None
+
+    final_text = ""
+    output_ids: List[int] = []
+    meta_info: Dict[str, Any] = {}
+
+    response = requests.post(
+        url,
+        json=payload,
+        timeout=timeout_s,
+        stream=True,
+    )
+
+    elapsed_s = 0.0
+
+    try:
+        if response.status_code >= 400:
+            raise requests.HTTPError(
+                f"{response.status_code} Error for {endpoint_path}: {response.text}",
+                response=response,
+            )
+
+        for raw_line in response.iter_lines(decode_unicode=False):
+            if not raw_line:
+                continue
+
+            line = raw_line.decode("utf-8", errors="replace").strip()
+
+            # SGLang native streaming is usually SSE-style: data: {...}
+            # But keep a plain JSON fallback just in case this endpoint changed format.
+            if line.startswith("data:"):
+                data_str = line[len("data:") :].strip()
+            else:
+                data_str = line
+
+            if data_str == "[DONE]":
+                break
+
+            if first_chunk_time is None:
+                first_chunk_time = time.time()
+
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(data.get("text"), str):
+                final_text = data["text"]
+
+            maybe_output_ids = data.get("output_ids")
+            if maybe_output_ids:
+                output_ids = list(map(int, maybe_output_ids))
+
+            maybe_meta = data.get("meta_info")
+            if isinstance(maybe_meta, dict):
+                meta_info = maybe_meta
+
+        elapsed_s = time.time() - t0
+
+    finally:
+        with contextlib.suppress(Exception):
+            response.close()
+
+    ttft_s = 0.0 if first_chunk_time is None else max(0.0, first_chunk_time - t0)
+
+    if not output_ids:
+        raise RuntimeError(
+            f"SGLang native endpoint {endpoint_path} returned no output_ids. "
+            f"final_text_len={len(final_text)}, meta_info={meta_info!r}"
+        )
+
+    completion_tokens = meta_info.get("completion_tokens")
+    if isinstance(completion_tokens, int) and completion_tokens > 0:
+        output_ids = output_ids[-completion_tokens:]
+    elif len(output_ids) > len(prompt_ids) and output_ids[: len(prompt_ids)] == prompt_ids:
+        output_ids = output_ids[len(prompt_ids) :]
+
+    return final_text, output_ids, meta_info, ttft_s, elapsed_s
+
+
+def sglang_generate_with_ids_openai_fallback(
+    *,
+    native_base_url: str,
+    prompt_ids: List[int],
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    encoding: Any,
+    model: str = "gpt-oss",
+    timeout_s: float = 600.0,
+) -> tuple[str, List[int], Dict[str, Any], float, float]:
+    """
+    Fallback for SGLang images where native /generate is unavailable.
+
+    Uses OpenAI-compatible /v1/completions. This is less ideal than /generate
+    because it may not preserve all Harmony special tokens/tool-call structure.
+    """
+    url = f"{native_base_url.rstrip('/')}/v1/completions"
+
+    payload = {
+        "model": model,
+        "prompt": list(map(int, prompt_ids)),
+        "max_tokens": int(max_new_tokens),
+        "temperature": float(temperature),
+        "top_p": float(top_p),
+        "stream": False,
+        "echo": False,
+
+        # SGLang often accepts extra sampling params even on OpenAI-compatible routes.
+        # If this route rejects them in your build, remove these three lines.
+        "skip_special_tokens": False,
+        "spaces_between_special_tokens": False,
+        "no_stop_trim": True,
+    }
+
+    t0 = time.time()
+    response = requests.post(url, json=payload, timeout=timeout_s)
+    elapsed_s = time.time() - t0
+
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"SGLang OpenAI fallback /v1/completions returned {response.status_code}.\n"
+            f"URL: {url}\n"
+            f"Response text:\n{response.text}\n"
+            f"len(input_ids)={len(prompt_ids)}"
+        )
+
+    data = response.json()
+    choice = data["choices"][0]
+    text = choice.get("text", "")
+
+    if not isinstance(text, str) or not text:
+        raise RuntimeError(
+            "SGLang OpenAI fallback returned empty text. "
+            f"Response: {json.dumps(data)[:2000]}"
+        )
+
+    output_ids = _encode_completion_text_for_harmony(encoding, text)
+
+    meta_info = {
+        "api_fallback": "openai_v1_completions",
+        "raw_response": data,
+        "prompt_tokens": len(prompt_ids),
+        "completion_tokens": len(output_ids),
+    }
+
+    # Non-streaming fallback cannot measure true TTFT.
+    ttft_s = elapsed_s
+
+    return text, output_ids, meta_info, ttft_s, elapsed_s
+
+
+def sglang_generate_with_ids_streaming(
+    *,
+    native_base_url: str,
+    prompt_ids: List[int],
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    stop_token_ids: List[int],
+    encoding: Any,
+    model: str = "gpt-oss",
+    timeout_s: float = 600.0,
+) -> tuple[str, List[int], Dict[str, Any], float, float]:
+    """
+    Try SGLang native endpoints first.
+
+    SGLang 0.5.7 used:
+        /generate
+
+    This ROCm 0.5.10 image exposes:
+        /inference/v1/generate
+
+    If both native endpoints fail, fall back to:
+        /v1/completions
+    """
+    native_endpoint_paths = [
+        "/generate",
+        "/inference/v1/generate",
+    ]
+
+    last_native_error: Optional[Exception] = None
+
+    for endpoint_path in native_endpoint_paths:
+        try:
+            print(f"[SGLang] Trying native endpoint: {endpoint_path}", flush=True)
+
+            return sglang_generate_with_ids_streaming_native_on_path(
+                native_base_url=native_base_url,
+                endpoint_path=endpoint_path,
+                prompt_ids=prompt_ids,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop_token_ids=stop_token_ids,
+                timeout_s=timeout_s,
+            )
+
+        except requests.HTTPError as exc:
+            last_native_error = exc
+            status_code = exc.response.status_code if exc.response is not None else None
+
+            print(
+                f"[SGLang] Native endpoint {endpoint_path} failed with HTTP {status_code}.",
+                flush=True,
+            )
+
+            # 404 means this endpoint path is absent; try the next native endpoint.
+            if status_code == 404:
+                continue
+
+            # Other HTTP errors mean route exists but payload/schema may be wrong.
+            # Still try the next endpoint before giving up.
+            continue
+
+        except RuntimeError as exc:
+            last_native_error = exc
+
+            print(
+                f"[SGLang] Native endpoint {endpoint_path} failed: {exc}",
+                flush=True,
+            )
+
+            # If endpoint exists but does not return output_ids, try the next path.
+            continue
+
+    print(
+        "[SGLang] All native endpoints failed. "
+        "Falling back to /v1/completions.",
+        flush=True,
+    )
+
+    try:
+        return sglang_generate_with_ids_openai_fallback(
+            native_base_url=native_base_url,
+            prompt_ids=prompt_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            encoding=encoding,
+            model=model,
+            timeout_s=timeout_s,
+        )
+    except Exception as fallback_exc:
+        raise RuntimeError(
+            "All SGLang generation endpoints failed. "
+            f"Last native error: {type(last_native_error).__name__}: {last_native_error}. "
+            f"OpenAI fallback error: {type(fallback_exc).__name__}: {fallback_exc}"
+        )
+
 
 def run_harmony_attempt(
     *,
@@ -1448,6 +1769,8 @@ def run_harmony_attempt(
                         temperature=temperature,
                         top_p=top_p,
                         stop_token_ids=stop_token_ids,
+                        encoding=encoding,
+                        model=model,
                         timeout_s=600.0,
                     )
                 )
@@ -1720,6 +2043,112 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
         for ans, cnt in answer_counter.most_common(10):
             print(f"  {ans}: {cnt}")
 
+def probe_sglang_endpoints(base_url: str) -> None:
+    """
+    Probe the live SGLang server and print available/likely endpoints.
+
+    This is intended for debugging SGLang version/API differences.
+    It does not run the benchmark.
+    """
+    base_url = base_url.rstrip("/")
+
+    print("\n" + "=" * 100, flush=True)
+    print("SGLang endpoint probe", flush=True)
+    print("=" * 100, flush=True)
+    print(f"Base URL: {base_url}", flush=True)
+
+    def _preview(text: str, limit: int = 800) -> str:
+        text = text.replace("\n", "\\n")
+        if len(text) > limit:
+            return text[:limit] + "..."
+        return text
+
+    def _request(method: str, path: str, json_body: Optional[Dict[str, Any]] = None) -> None:
+        url = f"{base_url}{path}"
+        try:
+            response = requests.request(
+                method,
+                url,
+                json=json_body,
+                timeout=10,
+            )
+            content_type = response.headers.get("content-type", "")
+            print(
+                f"{method:7s} {path:30s} -> "
+                f"{response.status_code} {response.reason} "
+                f"content-type={content_type}",
+                flush=True,
+            )
+
+            body = response.text or ""
+            if body:
+                print(f"    body: {_preview(body)}", flush=True)
+
+        except Exception as exc:
+            print(
+                f"{method:7s} {path:30s} -> "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+    print("\n--- Basic GET probes ---", flush=True)
+    for path in [
+        "/",
+        "/health",
+        "/health_generate",
+        "/v1/models",
+        "/get_model_info",
+        "/docs",
+        "/openapi.json",
+    ]:
+        _request("GET", path)
+
+    print("\n--- OPTIONS probes for likely generation routes ---", flush=True)
+    for path in [
+        "/generate",
+        "/v1/completions",
+        "/v1/chat/completions",
+        "/v1/responses",
+    ]:
+        _request("OPTIONS", path)
+
+    print("\n--- Empty POST probes for likely generation routes ---", flush=True)
+    print(
+        "Note: 400/422 usually means the route exists but the payload is invalid; "
+        "404 means the route is probably absent.",
+        flush=True,
+    )
+    for path in [
+        "/generate",
+        "/v1/completions",
+        "/v1/chat/completions",
+        "/v1/responses",
+    ]:
+        _request("POST", path, json_body={})
+
+    print("\n--- Parsed OpenAPI paths, if available ---", flush=True)
+    try:
+        response = requests.get(f"{base_url}/openapi.json", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            paths = sorted(data.get("paths", {}).keys())
+            if paths:
+                print("Available paths from /openapi.json:", flush=True)
+                for path in paths:
+                    methods = sorted(data.get("paths", {}).get(path, {}).keys())
+                    print(f"  {path}    methods={methods}", flush=True)
+            else:
+                print("/openapi.json exists but contains no paths.", flush=True)
+        else:
+            print(
+                f"/openapi.json unavailable: {response.status_code} {response.reason}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"Could not parse /openapi.json: {type(exc).__name__}: {exc}", flush=True)
+
+    print("=" * 100 + "\n", flush=True)
+
 
 async def async_main(
     args: argparse.Namespace,
@@ -1803,6 +2232,8 @@ def main() -> None:
     parser.add_argument("--enable-torch-compile", action="store_true")
     parser.add_argument("--allow-auto-truncate", action="store_true", default=True)
 
+    parser.add_argument("--probe-sglang-endpoints-and-exit", action="store_true")
+
     args = parser.parse_args()
     if args.mem_fraction_static is None:
         # Reuse the old vLLM knob as the default SGLang memory fraction.
@@ -1836,6 +2267,11 @@ def main() -> None:
     infra = SGLangInfraGPTOSS(runtime_cfg)
     try:
         infra.start()
+
+        if args.probe_sglang_endpoints_and_exit:
+            probe_sglang_endpoints(f"http://127.0.0.1:{args.port}") 
+            return
+
         results = asyncio.run(async_main(args, output_paths))
     finally:
         infra.stop()
@@ -1843,7 +2279,6 @@ def main() -> None:
     wall_time_s = time.time() - t0
     print_summary(results, wall_time_s)
     write_metrics_file(results, wall_time_s, output_paths, args)
-
 
 if __name__ == "__main__":
     main()

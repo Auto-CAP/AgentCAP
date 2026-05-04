@@ -190,7 +190,7 @@ cd /path/to/AgentCAP
 python k8s/run_sweagent.py \
     --deployment modal \
     --dataset swe-bench-lite \
-    --num-tasks 100 \
+    --task-indices benchmarks/swe_bench_lite_curated_100.json \
     --concurrency 20 \
     --vllm-url "$VLLM_URL" \
     --sweagent-dir /tmp/swe_agent \
@@ -282,9 +282,40 @@ For each completed run, sanity-check:
   process is local; it talks to vLLM locally. The Modal container only
   needs to talk to *the agent over HTTP via swerex*, not to vLLM.
 - **mcp-atlas dataset filter**: the public `ScaleAI/mcp-atlas` dataset
-  has more than 60 rows. The 60-task benchmark uses `--num-tasks 60`,
-  which takes the first 60 after `dataset.shuffle(seed=42)`. Don't
-  reshuffle.
+  has hundreds of rows but ~85 of them require **paid** MCP tools
+  (firecrawl, etc.). `unified_runner` keeps only tasks whose
+  `ENABLED_TOOLS` are all inside a 22-server free subset
+  (arxiv, brave-search, calculator, ..., wikipedia — see
+  `_FREE_SERVERS` in `unified_runner.py:1222`). After that filter,
+  `--num-tasks 60` takes the first 60 in HF dataset order. **No
+  shuffle**, so the 60 tasks are deterministic across runs. Don't
+  add a shuffle.
+
+- **swe-bench-lite is a *curated* 100-task subset, not first-100**.
+  The 100 tasks used in prior reports were hand-balanced across the
+  12 repos in SWE-bench_Lite:
+    - 6 astropy
+    - 18 django (drawn from previously-passing tasks)
+    - 6 django (drawn from previously-failing tasks)
+    - 70 uniformly sampled across the other 10 repos (matplotlib,
+      sympy, scikit-learn, sphinx-doc, pytest-dev, requests/psf,
+      xarray/pydata, pylint-dev, seaborn/mwaskom, ...)
+  The exact indices and instance_ids live in
+  `benchmarks/swe_bench_lite_curated_100.json` (committed to this
+  branch). Pass it via `--task-indices`:
+
+  ```bash
+  python k8s/run_sweagent.py --deployment modal \
+      --dataset swe-bench-lite \
+      --task-indices benchmarks/swe_bench_lite_curated_100.json \
+      --vllm-url "$VLLM_URL" \
+      --output-dir results/swebench_lite_modal
+  ```
+
+  The runner reads either `new_indices` or `indices` from that JSON
+  and ignores `--num-tasks` when `--task-indices` is given. Without
+  `--task-indices` you get rows `[0:N]` of HF dataset order — a
+  *different* benchmark, not comparable to prior numbers.
 - **GPU non-determinism**: even with `temperature=0`, the same run can
   shift ±5pp on accuracy run-to-run (cuBLAS reduction order). For real
   comparisons, run 3+ seeds and take the mean.
