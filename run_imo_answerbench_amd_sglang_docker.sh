@@ -4,7 +4,8 @@ set -euo pipefail
 # ==========
 # Host config
 # ==========
-IMAGE="lmsysorg/sglang:v0.5.9-rocm700-mi35x"
+IMAGE_2="lmsysorg/sglang:v0.5.9-rocm700-mi35x"
+IMAGE="ghcr.io/yufan196884/sglang:v0.5.7-rocm700-mi35x-agentcap-imo-answerbench"
 
 HOST_ROOT="/home/amd/yufan"
 HOST_REPO_DIR="${HOST_ROOT}/AgentCAP"
@@ -137,7 +138,7 @@ PY
 echo "===== Running benchmark ====="
 python -m agent_cap.run_imo_answerbench_5 \
   --model gpt-oss \
-  --num-tasks 25 \
+  --num-tasks 1 \
   --max-turns 128 \
   --max-tokens 131072 \
   --temperature 1.0 \
@@ -149,12 +150,13 @@ python -m agent_cap.run_imo_answerbench_5 \
   --served-model-name gpt-oss \
   --model-path /workspace/models/gpt-oss-120b \
   --dtype auto \
-  --kv-cache-dtype fp8_e4m3 \
+  --kv-cache-dtype auto \
   --context-tokens 131072 \
   --mem-fraction-static 0.85 \
   --tensor-parallel-size 1 \
   --server-timeout 3600 \
   --preload-workers 8 \
-  --judge-model google/gemini-3.1-flash-lite-preview \
-  --probe-sglang-endpoints-and-exit
+  --judge-model google/gemini-3.1-flash-lite-preview
 '
+
+#   --probe-sglang-endpoints-and-exit
