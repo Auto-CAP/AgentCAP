@@ -1632,12 +1632,12 @@ def run_deepseek32_attempt(
                         tool_output = backend.execute_tool(function_name, tool_args)
                     except Exception as exc:
                         tool_output = f"[ERROR] Tool execution failed: {type(exc).__name__}: {exc}"
-                        _print_python_tool_error_debug(
-                            function_name=function_name,
-                            tool_args=tool_args,
-                            arguments_str=arguments_str,
-                            tool_output=tool_output,
-                        )
+                        # _print_python_tool_error_debug(
+                        #     function_name=function_name,
+                        #     tool_args=tool_args,
+                        #     arguments_str=arguments_str,
+                        #     tool_output=tool_output,
+                        # )
 
                     tool_call_count += 1
 
@@ -1649,24 +1649,24 @@ def run_deepseek32_attempt(
 
                     if "[ERROR] Execution timed out" in tool_output:
                         errors.append("Python tool timeout")
-                        _print_python_tool_error_debug(
-                            function_name=function_name,
-                            tool_args=tool_args,
-                            arguments_str=arguments_str,
-                            tool_output=tool_output,
-                        )
+                        # _print_python_tool_error_debug(
+                        #     function_name=function_name,
+                        #     tool_args=tool_args,
+                        #     arguments_str=arguments_str,
+                        #     tool_output=tool_output,
+                        # )
                     elif (
                         tool_output.startswith("[ERROR]")
                         or "Traceback" in tool_output
                         or "Error:" in tool_output
                     ):
                         errors.append("Python tool error")
-                        _print_python_tool_error_debug(
-                            function_name=function_name,
-                            tool_args=tool_args,
-                            arguments_str=arguments_str,
-                            tool_output=tool_output,
-                        )
+                        # _print_python_tool_error_debug(
+                        #     function_name=function_name,
+                        #     tool_args=tool_args,
+                        #     arguments_str=arguments_str,
+                        #     tool_output=tool_output,
+                        # )
 
                     messages.append(
                         {
