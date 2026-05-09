@@ -1822,6 +1822,7 @@ def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
         f"TPOT(avg): {result['tpot_ms_avg']:.1f} ms | "
         f"Python calls: {result['tool_calls']} | "
         f"finish_reason: {result.get('finish_reason')}"
+    )
     if result["errors"]:
         print(f"Errors: {result['errors']}")
     print("\nResponse preview:")
