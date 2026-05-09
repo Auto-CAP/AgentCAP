@@ -537,6 +537,103 @@ def _clamp_max_tokens_for_context(
 
     return int(effective_max_tokens)
 
+_DSML_TOKEN = "｜DSML｜"
+
+
+def _coerce_dsml_param(value: str, string_attr: Optional[str]) -> Any:
+    if string_attr == "true":
+        return value
+
+    value_stripped = value.strip()
+
+    if string_attr == "false":
+        try:
+            return json.loads(value_stripped)
+        except Exception:
+            pass
+
+        lowered = value_stripped.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        if lowered == "null":
+            return None
+
+        try:
+            return int(value_stripped)
+        except Exception:
+            pass
+
+        try:
+            return float(value_stripped)
+        except Exception:
+            pass
+
+    return value
+
+
+def parse_raw_deepseek32_dsml_tool_calls(text: str) -> List[Dict[str, Any]]:
+    """
+    Recover DeepSeek-V3.2 DSML tool calls when vLLM leaks them into content/reasoning
+    instead of returning structured tool_calls.
+    """
+    if not text:
+        return []
+
+    dsml = re.escape(_DSML_TOKEN)
+
+    invoke_re = re.compile(
+        rf"<(?:{dsml})?invoke\s+name=[\"']([^\"']+)[\"']\s*>\s*(.*?)\s*</(?:{dsml})?invoke>",
+        re.DOTALL,
+    )
+
+    param_re = re.compile(
+        rf"<(?:{dsml})?parameter\s+name=[\"']([^\"']+)[\"'](?:\s+string=[\"'](true|false)[\"'])?\s*>\s*(.*?)\s*</(?:{dsml})?parameter>",
+        re.DOTALL,
+    )
+
+    recovered: List[Dict[str, Any]] = []
+
+    for idx, invoke_match in enumerate(invoke_re.finditer(text)):
+        function_name = invoke_match.group(1).strip()
+        invoke_body = invoke_match.group(2)
+
+        args: Dict[str, Any] = {}
+        for param_match in param_re.finditer(invoke_body):
+            param_name = param_match.group(1).strip()
+            string_attr = param_match.group(2)
+            param_value = param_match.group(3)
+            args[param_name] = _coerce_dsml_param(param_value, string_attr)
+
+        recovered.append(
+            {
+                "id": f"call_raw_dsml_{idx}",
+                "type": "function",
+                "function": {
+                    "name": function_name,
+                    "arguments": json.dumps(args, ensure_ascii=False),
+                },
+            }
+        )
+
+    return recovered
+
+
+def strip_raw_deepseek32_dsml_blocks(text: str) -> str:
+    if not text:
+        return text
+
+    dsml = re.escape(_DSML_TOKEN)
+
+    pattern = re.compile(
+        rf"<(?:{dsml})?function_calls>\s*.*?\s*</(?:{dsml})?function_calls>",
+        re.DOTALL,
+    )
+
+    return pattern.sub("", text).strip()
+
+
 class SyncMathPythonBackend:
     """
     Thin synchronous wrapper around MathPythonBackend so the custom Harmony loop
@@ -1562,6 +1659,25 @@ def run_deepseek32_attempt(
             finish_reason = request_result.get("finish_reason")
             last_finish_reason = finish_reason
             combined_text = "\n".join(x for x in [reasoning, content] if x)
+
+            if not tool_calls and _looks_like_unparsed_deepseek_tool_call(combined_text):
+                recovered_tool_calls = parse_raw_deepseek32_dsml_tool_calls(combined_text)
+
+                if recovered_tool_calls:
+                    errors.append(
+                        "Recovered raw DeepSeek-V3.2 DSML tool call after vLLM returned tool_calls=[]."
+                    )
+                    print(
+                        f"[raw DSML recovery] recovered {len(recovered_tool_calls)} tool call(s)",
+                        flush=True,
+                    )
+                    tool_calls = recovered_tool_calls
+                    content = strip_raw_deepseek32_dsml_blocks(content or "") or None
+                else:
+                    errors.append(
+                        "Raw DeepSeek-V3.2 DSML/tool-call tags appeared, but fallback parser failed."
+                    )
+
 
             input_tokens_this_request = int(request_result["prompt_tokens"])
             output_tokens_this_request = int(request_result["completion_tokens"])
