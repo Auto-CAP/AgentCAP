@@ -25,7 +25,8 @@ from math_verify import parse, verify
 from openai import OpenAI, BadRequestError
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
-
+import copy
+import importlib.util
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
 from agent_cap.runner.unified_runner import collect_hardware_info
@@ -340,6 +341,81 @@ def append_detailed_result_rows(
         for row in detailed_rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+_DSV32_ENCODER_MODULE = None
+
+
+def _load_dsv32_encoder(tokenizer: Any):
+    global _DSV32_ENCODER_MODULE
+
+    if _DSV32_ENCODER_MODULE is not None:
+        return _DSV32_ENCODER_MODULE
+
+    model_path = (
+        getattr(tokenizer, "_agentcap_model_path", None)
+        or getattr(tokenizer, "name_or_path", "")
+    )
+    encoder_path = Path(model_path) / "encoding" / "encoding_dsv32.py"
+
+    if not encoder_path.is_file():
+        return None
+
+    spec = importlib.util.spec_from_file_location(
+        "agentcap_encoding_dsv32",
+        str(encoder_path),
+    )
+    if spec is None or spec.loader is None:
+        return None
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    _DSV32_ENCODER_MODULE = module
+    return module
+
+
+def _count_prompt_tokens_with_dsv32_encoder(
+    *,
+    tokenizer: Any,
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    enable_thinking: bool,
+) -> Optional[int]:
+    encoder = _load_dsv32_encoder(tokenizer)
+    if encoder is None:
+        return None
+
+    messages_for_encoding = copy.deepcopy(messages)
+
+    # The official encoder renders tools when they are attached to a message.
+    # The usual place is the system message.
+    if tools:
+        system_message = None
+        for message in messages_for_encoding:
+            if message.get("role") == "system":
+                system_message = message
+                break
+
+        if system_message is None:
+            messages_for_encoding.insert(
+                0,
+                {
+                    "role": "system",
+                    "content": "",
+                    "tools": tools,
+                },
+            )
+        else:
+            system_message["tools"] = tools
+
+    prompt = encoder.encode_messages(
+        messages_for_encoding,
+        thinking_mode="thinking" if enable_thinking else "chat",
+        drop_thinking=True,
+        add_default_bos_token=True,
+    )
+
+    return len(tokenizer.encode(prompt, add_special_tokens=False))
+
 def _count_prompt_tokens_with_tokenizer(
     *,
     tokenizer: Any,
@@ -348,11 +424,35 @@ def _count_prompt_tokens_with_tokenizer(
     enable_thinking: bool,
 ) -> int:
     """
-    Count prompt tokens using the model tokenizer and chat template.
+    Count prompt tokens.
 
-    This should be much closer to vLLM's server-side prompt token count than
-    chars_per_token estimation.
+    DeepSeek-V3.2 does not ship a normal Hugging Face/Jinja chat_template,
+    so tokenizer.apply_chat_template(...) fails. For DeepSeek-V3.2, use the
+    official encoding/encoding_dsv32.py encoder when available.
     """
+
+    if not getattr(tokenizer, "chat_template", None):
+        dsv32_count = _count_prompt_tokens_with_dsv32_encoder(
+            tokenizer=tokenizer,
+            messages=messages,
+            tools=tools,
+            enable_thinking=enable_thinking,
+        )
+        if dsv32_count is not None:
+            return dsv32_count
+
+        # Last-resort conservative fallback. This is less exact, but avoids
+        # crashing before the request is sent.
+        raw = json.dumps(
+            {
+                "messages": messages,
+                "tools": tools,
+                "thinking": enable_thinking,
+            },
+            ensure_ascii=False,
+        )
+        return len(tokenizer.encode(raw, add_special_tokens=False)) + 2048
+
     try:
         token_ids = tokenizer.apply_chat_template(
             messages,
@@ -361,18 +461,7 @@ def _count_prompt_tokens_with_tokenizer(
             add_generation_prompt=True,
             thinking=enable_thinking,
         )
-
-        # Some tokenizers return a list[int]; some can return nested/batched output.
-        if hasattr(token_ids, "shape"):
-            return int(token_ids.shape[-1])
-
-        if token_ids and isinstance(token_ids[0], list):
-            return len(token_ids[0])
-
-        return len(token_ids)
-
     except TypeError:
-        # Some chat templates/tokenizers may not accept `thinking`.
         token_ids = tokenizer.apply_chat_template(
             messages,
             tools=tools if tools else None,
@@ -380,13 +469,13 @@ def _count_prompt_tokens_with_tokenizer(
             add_generation_prompt=True,
         )
 
-        if hasattr(token_ids, "shape"):
-            return int(token_ids.shape[-1])
+    if hasattr(token_ids, "shape"):
+        return int(token_ids.shape[-1])
 
-        if token_ids and isinstance(token_ids[0], list):
-            return len(token_ids[0])
+    if token_ids and isinstance(token_ids[0], list):
+        return len(token_ids[0])
 
-        return len(token_ids)
+    return len(token_ids)
 
 
 def _clamp_max_tokens_for_context(
@@ -1767,6 +1856,7 @@ def main() -> None:
         args.model_path,
         trust_remote_code=True,
     )
+    setattr(tokenizer, "_agentcap_model_path", args.model_path)
     output_paths = initialize_output_files(args)
     t0 = time.time()
 
