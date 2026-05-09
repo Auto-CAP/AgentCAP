@@ -22,8 +22,9 @@ import requests
 import aiohttp
 # from google import genai
 from math_verify import parse, verify
-from openai import OpenAI
+from openai import OpenAI, BadRequestError
 from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer
 
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
@@ -339,7 +340,93 @@ def append_detailed_result_rows(
         for row in detailed_rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+def _count_prompt_tokens_with_tokenizer(
+    *,
+    tokenizer: Any,
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    enable_thinking: bool,
+) -> int:
+    """
+    Count prompt tokens using the model tokenizer and chat template.
 
+    This should be much closer to vLLM's server-side prompt token count than
+    chars_per_token estimation.
+    """
+    try:
+        token_ids = tokenizer.apply_chat_template(
+            messages,
+            tools=tools if tools else None,
+            tokenize=True,
+            add_generation_prompt=True,
+            thinking=enable_thinking,
+        )
+
+        # Some tokenizers return a list[int]; some can return nested/batched output.
+        if hasattr(token_ids, "shape"):
+            return int(token_ids.shape[-1])
+
+        if token_ids and isinstance(token_ids[0], list):
+            return len(token_ids[0])
+
+        return len(token_ids)
+
+    except TypeError:
+        # Some chat templates/tokenizers may not accept `thinking`.
+        token_ids = tokenizer.apply_chat_template(
+            messages,
+            tools=tools if tools else None,
+            tokenize=True,
+            add_generation_prompt=True,
+        )
+
+        if hasattr(token_ids, "shape"):
+            return int(token_ids.shape[-1])
+
+        if token_ids and isinstance(token_ids[0], list):
+            return len(token_ids[0])
+
+        return len(token_ids)
+
+
+def _clamp_max_tokens_for_context(
+    *,
+    requested_max_tokens: int,
+    context_tokens: int,
+    tokenizer: Any,
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    enable_thinking: bool,
+    safety_margin_tokens: int = 1024,
+) -> int:
+    prompt_tokens = _count_prompt_tokens_with_tokenizer(
+        tokenizer=tokenizer,
+        messages=messages,
+        tools=tools,
+        enable_thinking=enable_thinking,
+    )
+
+    available_for_output = context_tokens - prompt_tokens - safety_margin_tokens
+    effective_max_tokens = min(requested_max_tokens, available_for_output)
+
+    if effective_max_tokens < 1:
+        raise ValueError(
+            f"Prompt is too long for context window. "
+            f"context_tokens={context_tokens}, "
+            f"estimated_prompt_tokens={prompt_tokens}, "
+            f"safety_margin_tokens={safety_margin_tokens}"
+        )
+
+    if effective_max_tokens != requested_max_tokens:
+        print(
+            f"[max_tokens clamp] requested={requested_max_tokens}, "
+            f"prompt_tokens={prompt_tokens}, "
+            f"context_tokens={context_tokens}, "
+            f"effective={effective_max_tokens}",
+            flush=True,
+        )
+
+    return int(effective_max_tokens)
 
 class SyncMathPythonBackend:
     """
@@ -1074,6 +1161,8 @@ def stream_deepseek32_chat_completion(
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
     max_tokens: int,
+    context_tokens: int,
+    tokenizer: Any,
     temperature: float,
     seed: int,
     enable_thinking: bool,
@@ -1087,10 +1176,19 @@ def stream_deepseek32_chat_completion(
       - TTFT / decode timing
     """
 
+    effective_max_tokens = _clamp_max_tokens_for_context(
+        requested_max_tokens=max_tokens,
+        context_tokens=context_tokens,
+        tokenizer=tokenizer,
+        messages=messages,
+        tools=tools,
+        enable_thinking=enable_thinking,
+    )
+
     request_kwargs = {
         "model": model,
         "messages": messages,
-        "max_tokens": max_tokens,
+        "max_tokens": effective_max_tokens,
         "temperature": temperature,
         "seed": seed,
         "stream": True,
@@ -1240,6 +1338,8 @@ def run_deepseek32_attempt(
     client: OpenAI,
     model: str,
     max_turns: int,
+    context_tokens: int,
+    tokenizer: Any,
     max_tokens: int,
     temperature: float,
     startup_timeout: float,
@@ -1293,6 +1393,8 @@ def run_deepseek32_attempt(
                 messages=messages,
                 tools=tools,
                 max_tokens=max_tokens,
+                context_tokens=context_tokens,
+                tokenizer=tokenizer,
                 temperature=temperature,
                 seed=seed,
                 enable_thinking=enable_thinking,
@@ -1458,6 +1560,8 @@ async def solve_one_task(
     base_url: str,
     max_turns: int,
     max_tokens: int,
+    context_tokens: int,
+    tokenizer: Any,
     temperature: float,
     startup_timeout: float,
     exec_timeout: float,
@@ -1481,6 +1585,8 @@ async def solve_one_task(
         model=model,
         max_turns=max_turns,
         max_tokens=max_tokens,
+        context_tokens=context_tokens,
+        tokenizer=tokenizer,
         temperature=temperature,
         startup_timeout=startup_timeout,
         exec_timeout=exec_timeout,
@@ -1550,6 +1656,7 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
 async def async_main(
     args: argparse.Namespace,
     output_paths: Dict[str, str],
+    tokenizer: Any,
 ) -> List[Dict[str, Any]]:
     judge = OpenRouterEquivalenceJudge(model_name=args.judge_model)
 
@@ -1565,6 +1672,8 @@ async def async_main(
             base_url=f"http://127.0.0.1:{args.port}/v1",
             max_turns=args.max_turns,
             max_tokens=args.max_tokens,
+            context_tokens=args.context_tokens,
+            tokenizer=tokenizer,
             temperature=args.temperature,
             startup_timeout=args.startup_timeout,
             exec_timeout=args.exec_timeout,
@@ -1654,6 +1763,10 @@ def main() -> None:
 
     args = parser.parse_args()
     args.model_path = resolve_model_path(args.model_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_path,
+        trust_remote_code=True,
+    )
     output_paths = initialize_output_files(args)
     t0 = time.time()
 
@@ -1683,7 +1796,7 @@ def main() -> None:
     infra = VLLMInfraDeepSeek32(runtime_cfg)
     try:
         infra.start()
-        results = asyncio.run(async_main(args, output_paths))
+        results = asyncio.run(async_main(args, output_paths, tokenizer))
     finally:
         infra.stop()
 
