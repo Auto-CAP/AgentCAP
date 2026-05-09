@@ -322,6 +322,7 @@ def append_output_data_row(
         "output_tokens": result["output_tokens"],
         "tool_call_count": result["tool_calls"],
         "num_requests": result["num_requests"],
+        "finish_reason": result.get("finish_reason"),
         "e2e_latency_s": float(result["latency_ms"]) / 1000.0,
         "output_text": result["response"],
         "errors": result["errors"],
@@ -372,6 +373,25 @@ def _load_dsv32_encoder(tokenizer: Any):
     _DSV32_ENCODER_MODULE = module
     return module
 
+def _looks_like_unparsed_deepseek_tool_call(text: str) -> bool:
+    """
+    Detect cases where DeepSeek-V3.2 emitted raw DSML/tool-call markup,
+    but vLLM did not parse it into structured tool_calls.
+    """
+    if not text:
+        return False
+
+    markers = [
+        "<｜DSML｜function_calls>",
+        "<｜DSML｜invoke",
+        "<｜DSML｜channel",
+        "<｜DSML｜tool",
+        "<function_calls>",
+        "</function_calls>",
+        "<tool_call>",
+        "</tool_call>",
+    ]
+    return any(marker in text for marker in markers)
 
 def _count_prompt_tokens_with_dsv32_encoder(
     *,
@@ -1104,6 +1124,15 @@ def compute_score(
     """
     predicted = _scan_for_answer(solution_str)
 
+    if predicted is None:
+        print("\n" + "=" * 100, flush=True)
+        print("[ANSWER EXTRACTION DEBUG]", flush=True)
+        print("_scan_for_answer returned None.", flush=True)
+        print("-" * 100, flush=True)
+        print("solution_str passed into _scan_for_answer:", flush=True)
+        print(solution_str, flush=True)
+        print("=" * 100 + "\n", flush=True)
+
     if predicted is None or ground_truth is None:
         return 0.0, predicted, {
             "equivalent": False,
@@ -1140,7 +1169,7 @@ def compute_score_math_verify(solution_str: str, ground_truth: str) -> float:
 
 def _scan_for_answer(text: str) -> Optional[str]:
     """
-    Your AIMO3-style answer scan, but returning string content rather than forcing int,
+    Your previous answer scan, but returning string content rather than forcing int,
     because IMO AnswerBench answers can be non-integers.
     """
     boxed_content = extract_last_boxed_content(text)
@@ -1182,6 +1211,42 @@ def _safe_json_loads_arguments(arguments: Optional[str]) -> Dict[str, Any]:
         return {"value": parsed}
     except Exception:
         return {"code": arguments}
+
+def _extract_tool_code_for_debug(function_name: str, tool_args: Dict[str, Any], arguments_str: str) -> str:
+    """
+    Best-effort extraction of the code sent to the Python tool.
+    """
+    if isinstance(tool_args, dict):
+        code = tool_args.get("code")
+        if code is not None:
+            return str(code)
+
+    # Fallback: print raw tool-call arguments if there is no "code" field.
+    return arguments_str or ""
+
+
+def _print_python_tool_error_debug(
+    *,
+    function_name: str,
+    tool_args: Dict[str, Any],
+    arguments_str: str,
+    tool_output: str,
+) -> None:
+    """
+    Print the Python code that caused a tool execution error.
+    """
+    code = _extract_tool_code_for_debug(function_name, tool_args, arguments_str)
+
+    print("\n" + "=" * 100, flush=True)
+    print("[PYTHON TOOL ERROR DEBUG]", flush=True)
+    print(f"function_name: {function_name}", flush=True)
+    print("-" * 100, flush=True)
+    print("Code / raw arguments sent to tool:", flush=True)
+    print(code, flush=True)
+    print("-" * 100, flush=True)
+    print("Tool output:", flush=True)
+    print(tool_output, flush=True)
+    print("=" * 100 + "\n", flush=True)
 
 
 def _get_usage_int(usage: Any, name: str, default: int = 0) -> int:
@@ -1458,6 +1523,7 @@ def run_deepseek32_attempt(
     response_text = ""
     num_requests = 0
     detailed_rows: List[Dict[str, Any]] = []
+    last_finish_reason = None
 
     backend.setup(task.eval_config or {})
 
@@ -1492,6 +1558,10 @@ def run_deepseek32_attempt(
             content = request_result["content"]
             reasoning = request_result["reasoning"]
             tool_calls = request_result["tool_calls"]
+
+            finish_reason = request_result.get("finish_reason")
+            last_finish_reason = finish_reason
+            combined_text = "\n".join(x for x in [reasoning, content] if x)
 
             input_tokens_this_request = int(request_result["prompt_tokens"])
             output_tokens_this_request = int(request_result["completion_tokens"])
@@ -1534,11 +1604,15 @@ def run_deepseek32_attempt(
                     "output_throughput_tok_s": output_throughput_tok_s_this_request,
                     "has_tool_calls": has_tool_calls_this_request,
                     "num_tool_calls": num_tool_calls_this_request,
+                    "finish_reason": finish_reason,
                 }
             )
 
             if not content and not reasoning and not tool_calls:
-                errors.append("Model returned no streamed content, reasoning, or tool calls.")
+                errors.append(
+                    f"Model returned no streamed content, reasoning, or tool calls. "
+                    f"finish_reason={finish_reason!r}"
+                )
                 break
 
             if tool_calls:
@@ -1558,6 +1632,12 @@ def run_deepseek32_attempt(
                         tool_output = backend.execute_tool(function_name, tool_args)
                     except Exception as exc:
                         tool_output = f"[ERROR] Tool execution failed: {type(exc).__name__}: {exc}"
+                        _print_python_tool_error_debug(
+                            function_name=function_name,
+                            tool_args=tool_args,
+                            arguments_str=arguments_str,
+                            tool_output=tool_output,
+                        )
 
                     tool_call_count += 1
 
@@ -1569,12 +1649,24 @@ def run_deepseek32_attempt(
 
                     if "[ERROR] Execution timed out" in tool_output:
                         errors.append("Python tool timeout")
+                        _print_python_tool_error_debug(
+                            function_name=function_name,
+                            tool_args=tool_args,
+                            arguments_str=arguments_str,
+                            tool_output=tool_output,
+                        )
                     elif (
                         tool_output.startswith("[ERROR]")
                         or "Traceback" in tool_output
                         or "Error:" in tool_output
                     ):
                         errors.append("Python tool error")
+                        _print_python_tool_error_debug(
+                            function_name=function_name,
+                            tool_args=tool_args,
+                            arguments_str=arguments_str,
+                            tool_output=tool_output,
+                        )
 
                     messages.append(
                         {
@@ -1586,11 +1678,38 @@ def run_deepseek32_attempt(
 
                 continue
 
-            # No tool calls means final answer according to the vLLM DeepSeek tool-call recipe.
+            # In the vLLM DeepSeek-V3.2 recipe, `tool_calls == []` means there are
+            # no parsed tool calls to execute, so the agent loop should stop and treat
+            # the returned content as this turn's final response.
+            #
+            # However, this does not guarantee the response is complete or well-formed:
+            # it may have stopped due to length, or raw DSML tool-call tags may have
+            # leaked into reasoning/content without being parsed.
+            if _looks_like_unparsed_deepseek_tool_call(combined_text):
+                errors.append(
+                    "Possible DeepSeek-V3.2 tool-call parser failure: raw DSML/tool-call "
+                    "tags appeared in reasoning/content while structured tool_calls was empty."
+                )
+
+            if finish_reason == "length":
+                errors.append("Model stopped because max_tokens/context limit was reached.")
+            elif finish_reason == "content_filter":
+                errors.append("Model output was stopped by content filtering.")
+            elif finish_reason == "function_call":
+                errors.append("Model used deprecated function_call finish_reason.")
+            elif finish_reason not in {None, "stop", "tool_calls"}:
+                errors.append(f"Unexpected finish_reason={finish_reason!r}")
+
             response_text = content or ""
 
             if not response_text and reasoning:
                 response_text = reasoning
+
+            if not response_text:
+                errors.append(
+                    f"No parsed tool calls, but also no final response text. "
+                    f"finish_reason={finish_reason!r}"
+                )
 
             break
 
@@ -1633,6 +1752,7 @@ def run_deepseek32_attempt(
             "judge_attempts": 1,
             "detailed_rows": detailed_rows,
             "total_cached_tokens": total_cached_tokens,
+            "finish_reason": last_finish_reason,
         }
 
     finally:
@@ -1700,8 +1820,8 @@ def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
         f"Latency: {result['latency_ms']:.1f} ms | "
         f"TTFT: {result['ttft_ms']:.1f} ms | "
         f"TPOT(avg): {result['tpot_ms_avg']:.1f} ms | "
-        f"Python calls: {result['tool_calls']}"
-    )
+        f"Python calls: {result['tool_calls']} | "
+        f"finish_reason: {result.get('finish_reason')}"
     if result["errors"]:
         print(f"Errors: {result['errors']}")
     print("\nResponse preview:")
@@ -1857,6 +1977,10 @@ def main() -> None:
         trust_remote_code=True,
     )
     setattr(tokenizer, "_agentcap_model_path", args.model_path)
+    encoder_path = Path(args.model_path) / "encoding" / "encoding_dsv32.py"
+    print(f"[DeepSeek-V3.2 encoder] path={encoder_path}", flush=True)
+    print(f"[DeepSeek-V3.2 encoder] exists={encoder_path.is_file()}", flush=True)
+    print(f"[DeepSeek-V3.2 tokenizer] chat_template is None={tokenizer.chat_template is None}", flush=True)
     output_paths = initialize_output_files(args)
     t0 = time.time()
 
