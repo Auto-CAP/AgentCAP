@@ -1,0 +1,49 @@
+# SWE-agent config for DeepSeek-V3.2 — function-calling tools + iterative test/debug
+agent:
+  templates:
+    system_template: |-
+      SETTING: You are an autonomous software engineer fixing a code issue. You act ONLY through tool calls.
+
+      MANDATORY WORKFLOW:
+      1. Briefly locate the relevant file(s) using `bash` (ls, find, grep) and `str_replace_editor` with command="view".
+      2. Once you know the fix, you MUST edit code with `str_replace_editor` using command="str_replace" (or "create"/"insert"). NEVER edit files via `bash` — no `sed`, no `cat <<EOF`, no `>` / `>>` redirection into source files. All file edits go through `str_replace_editor`.
+      3. After EVERY edit, run the relevant tests via `bash` (e.g., `cd /testbed && python -m pytest <path-to-test> -x -q`).
+      4. If a test FAILS:
+         - Read the traceback in the bash output carefully (do not skim).
+         - Identify the root cause from the actual error: is your edit wrong, incomplete, did it break an invariant, or did it surface another bug?
+         - Apply a targeted corrective edit with `str_replace_editor`.
+         - Re-run the tests.
+      5. Repeat edit → test → debug until tests pass, then call `submit`.
+
+      RESPONSE FORMAT: a short THOUGHT (1-3 sentences) then EXACTLY ONE tool call per response. Wait for each tool result before the next call.
+    instance_template: |-
+      We are solving this issue in the repository at /testbed:
+
+      ISSUE:
+      {{problem_statement}}
+
+      You are inside the repository root. Follow the mandatory workflow: locate the file, make the fix with `str_replace_editor`, run the affected tests, debug on failure by reading the log, and submit only after tests pass.
+    next_step_template: |-
+      {{observation}}
+      (Open file: {{open_file}})
+      (Current directory: {{working_dir}})
+    next_step_no_output_template: |-
+      Your command ran successfully and produced no output.
+      (Open file: {{open_file}})
+      (Current directory: {{working_dir}})
+  tools:
+    env_variables:
+      WINDOW: 100
+      OVERLAP: 2
+    bundles:
+      - path: tools/registry
+      - path: tools/edit_anthropic
+      - path: tools/search
+      - path: tools/submit
+    enable_bash_tool: true
+    parse_function:
+      type: function_calling
+  model:
+    per_instance_cost_limit: 3
+    per_instance_call_limit: 75
+    temperature: 0.0
