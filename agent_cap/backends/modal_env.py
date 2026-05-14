@@ -67,16 +67,22 @@ class ModalWorkspace:
             with ThreadPoolExecutor(max_workers=1) as pool:
                 self._sandbox = pool.submit(_create_sandbox).result(timeout=120)
 
+            # Init git first, then apply test_patch, then commit baseline
+            self._exec(
+                "git init 2>/dev/null; "
+                "git add -A 2>/dev/null; "
+                "git -c user.email=bench@test -c user.name=bench commit -m pre-test-patch --allow-empty 2>/dev/null"
+            )
+
             if self.test_patch:
                 self._exec(
                     f"echo {json.dumps(self.test_patch)} | "
                     'python3 -c "import sys,json; '
                     "open('/tmp/test.patch','w').write(json.loads(sys.stdin.read()))\" "
-                    "&& git apply /tmp/test.patch"
+                    "&& cd /testbed && git apply --allow-empty /tmp/test.patch"
                 )
 
             self._exec(
-                "git init 2>/dev/null; "
                 "git add -A 2>/dev/null; "
                 "git -c user.email=bench@test -c user.name=bench commit -m baseline --allow-empty 2>/dev/null"
             )
