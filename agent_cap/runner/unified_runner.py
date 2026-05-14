@@ -313,9 +313,20 @@ async def run_single_example(
     executed_turns = 0
     no_tool_retries = 0
     submit_count = 0
+    has_source_edit = False
 
     for turn_index in range(max_turns):
         executed_turns = turn_index + 1
+        # Nudge model if it hasn't edited source code by turn 20 or 35
+        if not has_source_edit and turn_index in (20, 35):
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"REMINDER: You have used {turn_index} out of {max_turns} turns but have NOT yet edited any source code. "
+                    "You MUST use str_replace_editor with str_replace command to fix the code NOW. "
+                    "Stop exploring and make your edit immediately, then run tests, then call submit."
+                ),
+            })
         if task_dir is not None:
             request_data = {
                 "turn": turn_index,
@@ -466,6 +477,16 @@ async def run_single_example(
 
         tool_calls_log: List[Dict[str, Any]] = []
         tool_results_log: List[Dict[str, Any]] = []
+        # Track if model edited source code this turn
+        for _tc in tool_calls:
+            _fn = (_tc.get("function") or {})
+            if _fn.get("name") == "str_replace_editor":
+                try:
+                    _args = json.loads(_fn.get("arguments", "{}"))
+                    if _args.get("command") == "str_replace" and not _args.get("path", "").endswith((".sh", ".txt")):
+                        has_source_edit = True
+                except (json.JSONDecodeError, TypeError):
+                    pass
         for tc in tool_calls:
             function = tc.get("function") or {}
             name = str(function.get("name", ""))
