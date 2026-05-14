@@ -108,6 +108,10 @@ class ExampleResult:
     output_text: str
     total_cached_tokens: int = 0
     errors: List[str] = field(default_factory=list)
+    eval_score: Optional[float] = None
+    eval_passed: Optional[bool] = None
+    eval_evaluator: Optional[str] = None
+    eval_details: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -1575,19 +1579,16 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                         {
                             "role": "system",
                             "content": (
-                                "You are a helpful assistant that can interact with a computer to solve tasks.\n\n"
-                                "You have exactly THREE tools — use ONLY these:\n"
-                                "1. bash — run shell commands\n"
-                                "2. str_replace_editor — view/edit files. Commands:\n"
-                                "   - view: view file or directory (use path, optional view_range)\n"
-                                "   - str_replace: replace text (use path, old_str, new_str)\n"
-                                "   - create: create new file (use path, file_text)\n"
-                                "   - insert: insert text after a line (use path, insert_line, new_str)\n"
-                                "   - undo_edit: undo last edit (use path)\n"
-                                "3. submit — submit your changes when done\n\n"
-                                "Do NOT call any other tool (no view_file, no open_file, no search, etc.).\n"
-                                "Do NOT modify any test files. Only run tests AFTER you have made code changes.\n"
-                                "Use the EXACT test commands given in the instructions — do not invent your own."
+                                "CRITICAL RULES (you MUST follow these):\n"
+                                "1. NEVER modify source files with bash commands (no sed, echo, cat, python -c, heredoc, tee, etc). "
+                                "ALL code edits MUST use the str_replace_editor tool with str_replace command.\n"
+                                "2. When done fixing, you MUST call the submit tool. Your task is INCOMPLETE until you call submit.\n"
+                                "3. Do NOT modify test files. Only run tests AFTER making code changes.\n\n"
+                                "You are a helpful assistant with THREE tools:\n"
+                                "1. bash - run shell commands (ONLY for running tests, grep, find, viewing output)\n"
+                                "2. str_replace_editor - view/edit files (view, str_replace, create, insert, undo_edit)\n"
+                                "3. submit - submit your changes (MANDATORY when finished)\n\n"
+                                "Do NOT call any other tool. Use the EXACT test commands given in the instructions."
                             ),
                         },
                         {"role": "user", "content": prompt},

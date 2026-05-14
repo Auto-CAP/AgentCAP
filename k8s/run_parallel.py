@@ -16,10 +16,11 @@ def run_one(task_idx, total, base_url, output_dir, model_name="openai/gpt-oss-12
         sys.executable, "-m", "agent_cap.runner.unified_runner",
         "--model-name", model_name,
         "--dataset", dataset,
-        "--backend", "swebench-k8s",
+        "--backend", os.environ.get("AGENTCAP_BACKEND", "swebench-modal"),
         "--serving-engine", serving_engine,
         "--base-url", base_url,
         "--max-turns", "50",
+        "--max-tokens", "16384",
         "--num-tasks", "1",
         "--task-offset", str(task_idx),
         "--output-dir", str(Path(output_dir) / f"task_{task_idx:03d}"),
@@ -29,7 +30,7 @@ def run_one(task_idx, total, base_url, output_dir, model_name="openai/gpt-oss-12
     env = os.environ.copy()
     if api_key:
         env["OPENAI_API_KEY"] = api_key
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=43200,
                        cwd=str(Path(__file__).resolve().parent.parent), env=env)
     # Extract result from stdout
     has_patch = "patch saved" in r.stdout
@@ -211,10 +212,10 @@ def merge_results(output_dir, total, passes, patches, args):
     metadata = {
         "model_name": args.model_name,
         "dataset": dataset_name,
-        "backend": "swebench-k8s",
+        "backend": os.environ.get("AGENTCAP_BACKEND", "swebench-modal"),
         "serving_engine": args.serving_engine,
         "max_turns": 50,
-        "max_tokens": 8192,
+        "max_tokens": 16384,
         "temperature": 0.0,
         "num_tasks": total,
         "timestamp": timestamp,

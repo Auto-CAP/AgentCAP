@@ -231,6 +231,12 @@ async def chat_completion(
         }
     if is_gpt_oss:
         payload.update(_get_gpt_oss_extra())
+    # Enable thinking for DeepSeek-V3.2
+    if "deepseek" in model.lower():
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
+    # Enable thinking for DeepSeek-V3.2
+    if "deepseek" in model.lower():
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
 
     async with session.post(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -297,6 +303,9 @@ async def chat_completion_streaming(
         }
     if is_gpt_oss:
         payload.update(_get_gpt_oss_extra())
+    # Enable thinking for DeepSeek-V3.2
+    if "deepseek" in model.lower():
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
 
     t_start = time.perf_counter()
     t_first_token: Optional[float] = None

@@ -141,6 +141,11 @@ class SWEBenchToolBackend(ToolBackend):
             return self._backend.get_patch()
         return ""
 
+    def run_tests(self, timeout: int = 300) -> Dict[str, Any]:
+        if self._backend:
+            return self._backend.run_tests(timeout=timeout)
+        return {"passed": False, "reason": "no backend"}
+
 
 class MathPythonToolBackend(ToolBackend):
     def __init__(

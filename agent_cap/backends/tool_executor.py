@@ -309,55 +309,85 @@ class ToolExecutor:
     _EDITOR_SCRIPT = "/opt/swe_agent_tools/str_replace_editor"
 
     def _str_replace_editor(self, args: Dict[str, Any]) -> str:
-        """Call the official SWE-agent str_replace_editor script in the container."""
+        """Pure-bash str_replace_editor (no external script needed)."""
+        import base64 as _b64
         command = args.get("command", "")
         path = args.get("path", "")
         if not command or not path:
             return "ERROR: 'command' and 'path' are required."
 
-        # Build CLI args matching the script's argparse
-        cmd_parts = [
-            f"PYTHONPATH=/opt/swe_agent_tools python3 {self._EDITOR_SCRIPT}",
-            command,
-            path,
-        ]
-        # For create/str_replace/insert, write args to temp files to avoid
-        # kubectl exec URI length limits, then pass via CLI
-        write_needed = {}
-        if args.get("file_text") is not None:
-            write_needed["file_text"] = args["file_text"]
-        if args.get("old_str") is not None:
-            write_needed["old_str"] = args["old_str"]
-        if args.get("new_str") is not None:
-            write_needed["new_str"] = args["new_str"]
-
-        # Write large string args via write_file_fn (kubectl cp) to avoid URI limits
-        for arg_name, arg_val in write_needed.items():
-            tmp_path = f"/tmp/_swe_arg_{arg_name}"
-            if self.write_file_fn:
-                self.write_file_fn(tmp_path, arg_val)
+        if command == "view":
+            vr = args.get("view_range")
+            if vr and isinstance(vr, list) and len(vr) == 2:
+                proc = self._exec(f"cat -n '{path}' | sed -n '{vr[0]},{vr[1]}p'")
             else:
-                # Docker/local: direct write via exec
-                b64 = base64.b64encode(arg_val.encode()).decode()
-                self._exec(
-                    f'python3 -c "import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))" '
-                    f"<<'__B64EOF__' > {tmp_path}\n{b64}\n__B64EOF__"
-                )
-            cmd_parts.append(f"--{arg_name} \"$(cat {tmp_path})\"")
+                proc = self._exec(f"test -d '{path}' && find '{path}' -maxdepth 2 -not -path '*/.*' | head -100 || cat -n '{path}'")
+            if proc.returncode != 0:
+                return proc.stderr or f"ERROR: Could not view {path}"
+            out = proc.stdout or ""
+            if len(out) > 16000:
+                out = out[:16000] + "\n<response clipped>"
+            return out or f"File {path} is empty."
 
-        if args.get("view_range") is not None:
-            vr = args["view_range"]
-            if isinstance(vr, list) and len(vr) == 2:
-                cmd_parts.append(f"--view_range {vr[0]} {vr[1]}")
-        if args.get("insert_line") is not None:
-            cmd_parts.append(f"--insert_line {args['insert_line']}")
+        elif command == "create":
+            file_text = args.get("file_text", "")
+            b64 = _b64.b64encode(file_text.encode()).decode()
+            proc = self._exec(f"test -f '{path}' && echo 'ERROR: File already exists.' && exit 1 || mkdir -p $(dirname '{path}') && echo '{b64}' | base64 -d > '{path}' && echo 'File created at {path}.'")
+            return proc.stdout if proc.returncode == 0 else (proc.stderr or f"ERROR creating {path}")
 
-        full_cmd = " ".join(cmd_parts)
-        proc = self._exec(full_cmd)
-        if proc.returncode == 0:
-            return proc.stdout if proc.stdout else "Your command ran successfully and did not produce any output."
-        # Script uses sys.exit(N) for errors — stdout has the error message
-        output = proc.stdout.strip() if proc.stdout else ""
-        if proc.stderr:
-            output += f"\n{proc.stderr.strip()}" if output else proc.stderr.strip()
-        return output if output else f"Command failed with exit code {proc.returncode}"
+        elif command == "str_replace":
+            old_str = args.get("old_str", "")
+            new_str = args.get("new_str", "")
+            if not old_str:
+                return "ERROR: 'old_str' is required for str_replace."
+            b64_old = _b64.b64encode(old_str.encode()).decode()
+            b64_new = _b64.b64encode((new_str or "").encode()).decode()
+            script = (
+                "import sys\n"
+                "old = open('/tmp/_old_str','rb').read().decode()\n"
+                "new = open('/tmp/_new_str','rb').read().decode()\n"
+                f"content = open('{path}').read()\n"
+                "count = content.count(old)\n"
+                "if count == 0:\n"
+                "    print('ERROR: old_str not found in file.')\n"
+                "    sys.exit(1)\n"
+                "if count > 1:\n"
+                "    print(f'ERROR: old_str found {{count}} times. Must be unique.')\n"
+                "    sys.exit(1)\n"
+                f"open('{path}','w').write(content.replace(old, new, 1))\n"
+                "print('The file has been edited successfully.')\n"
+            )
+            proc = self._exec(
+                f"echo '{b64_old}' | base64 -d > /tmp/_old_str && "
+                f"echo '{b64_new}' | base64 -d > /tmp/_new_str && "
+                f"python3 -c \"$'{script}'\" "
+            )
+            if proc.returncode == 0:
+                view_proc = self._exec(f"cat -n '{path}' | tail -50")
+                return (proc.stdout or "") + "\n" + (view_proc.stdout or "")
+            return proc.stdout or proc.stderr or "ERROR: str_replace failed"
+
+        elif command == "insert":
+            new_str = args.get("new_str", "")
+            insert_line = args.get("insert_line", 0)
+            if not new_str:
+                return "ERROR: 'new_str' is required for insert."
+            b64_new = _b64.b64encode(new_str.encode()).decode()
+            proc = self._exec(
+                f"echo '{b64_new}' | base64 -d > /tmp/_insert_str && "
+                f"python3 -c \"$'"
+                f"lines = open(\'{path}\').readlines()\n"
+                f"ins = open(\'/tmp/_insert_str\').read()\n"
+                f"lines.insert({insert_line}, ins + chr(10))\n"
+                f"open(\'{path}\',\'w\').writelines(lines)\n"
+                f"print(\'Insert successful.\')\n"
+                f"'\" "
+            )
+            return proc.stdout if proc.returncode == 0 else (proc.stderr or "ERROR: insert failed")
+
+        elif command == "undo_edit":
+            proc = self._exec(f"cd $(dirname '{path}') && git checkout -- '{path}' 2>/dev/null && echo 'Edit undone.' || echo 'ERROR: Could not undo.'")
+            return proc.stdout
+
+        return f"ERROR: Unknown command '{command}'"
+

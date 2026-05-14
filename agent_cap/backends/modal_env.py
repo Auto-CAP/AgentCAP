@@ -28,7 +28,7 @@ class ModalWorkspace:
             "FAIL_TO_PASS", eval_config.get("fail_to_pass", "")
         )
         self.dockerhub_tag = eval_config.get("dockerhub_tag", "")
-        self.workdir = "/app"
+        self.workdir = "/testbed"
         self.ready = False
         self._sandbox = None
         self._app = None
@@ -48,10 +48,8 @@ class ModalWorkspace:
             logger.error("modal not installed. Run: pip install modal && modal setup")
             return False
 
-        if self.dockerhub_tag:
-            image_ref = f"jefzda/sweap-images:{self.dockerhub_tag}"
-        else:
-            image_ref = f"sweb.eval.x86_64.{self.instance_id}:latest"
+        # Always use public GHCR images (Epoch AI) with instance_id
+        image_ref = f"ghcr.io/epoch-research/swe-bench.eval.x86_64.{self.instance_id}:latest"
 
         logger.info(
             "[%s] Starting Modal sandbox from %s", self.instance_id[:30], image_ref
@@ -107,61 +105,60 @@ class ModalWorkspace:
         except json.JSONDecodeError:
             tests = [self.fail_to_pass]
 
-        test_files = [t.split(" | ")[0].strip() for t in tests]
+        # Build test command based on repo type
+        test_args = " ".join(f'"{t}"' for t in tests)
+        instance = self.instance_id.lower()
 
-        base_url = (
-            "https://raw.githubusercontent.com/scaleapi/SWE-bench_Pro-os/main/"
-            f"run_scripts/{self.instance_id}"
-        )
-        self._exec(
-            f"(curl -sL '{base_url}/run_script.sh' || wget -qO- '{base_url}/run_script.sh') > /run_script.sh 2>/dev/null; "
-            f"(curl -sL '{base_url}/parser.py' || wget -qO- '{base_url}/parser.py') > /parser.py 2>/dev/null; "
-            "chmod +x /run_script.sh"
-        )
+        if "django" in instance:
+            # Django uses its own test runner
+            modules = sorted(set(
+                t.split("(")[-1].rstrip(")").rsplit(".", 1)[0]
+                for t in tests if "(" in t
+            ))
+            if not modules:
+                modules = [t.split("::")[0].replace("/", ".").replace(".py", "") for t in tests]
+            test_directive = " ".join(modules)
+            test_cmd = (
+                "source /opt/miniconda3/bin/activate testbed 2>/dev/null; "
+                f"cd {self.workdir} && python tests/runtests.py --settings=test_sqlite --parallel 1 {test_directive}"
+            )
+        elif "sympy" in instance:
+            # sympy uses bin/test
+            test_cmd = (
+                "source /opt/miniconda3/bin/activate testbed 2>/dev/null; "
+                f"cd {self.workdir} && PYTHONWARNINGS=\'ignore::UserWarning\' bin/test -C --verbose {test_args}"
+            )
+        elif "sphinx" in instance:
+            # sphinx uses tox
+            test_cmd = (
+                "source /opt/miniconda3/bin/activate testbed 2>/dev/null; "
+                f"cd {self.workdir} && tox --current-env -epy39 -v -- {test_args}"
+            )
+        else:
+            # Default: pytest
+            test_cmd = (
+                "source /opt/miniconda3/bin/activate testbed 2>/dev/null; "
+                f"cd {self.workdir} && python -m pytest -x --tb=short {test_args}"
+            )
 
         try:
             process = self._sandbox.exec(
-                "bash",
-                "-c",
-                f"cd {self.workdir} && bash /run_script.sh {','.join(test_files)} "
-                "> /test_stdout.txt 2> /test_stderr.txt; echo $?",
+                "bash", "-c",
+                f"{test_cmd} > /test_stdout.txt 2>&1; echo EXIT_CODE=$?",
             )
             process.wait()
 
-            parse_process = self._sandbox.exec(
-                "python3",
-                "/parser.py",
-                "/test_stdout.txt",
-                "/test_stderr.txt",
-                "/test_results.json",
-            )
-            parse_process.wait()
-
-            cat_process = self._sandbox.exec("cat", "/test_results.json")
+            cat_process = self._sandbox.exec("cat", "/test_stdout.txt")
             cat_process.wait()
-            results_json = cat_process.stdout.read()
+            output = cat_process.stdout.read()
 
-            tail_process = self._sandbox.exec("tail", "-30", "/test_stdout.txt")
-            tail_process.wait()
-            output = tail_process.stdout.read()[-500:]
-
-            ok = False
-            try:
-                parsed = json.loads(results_json)
-                test_results = parsed.get("tests", [])
-                fail_to_pass_names = set()
-                for t in tests:
-                    fail_to_pass_names.add(t.strip())
-                    fail_to_pass_names.add(t.split(" | ")[0].strip())
-
-                for tr in test_results:
-                    if tr["status"] == "PASSED":
-                        for ftp in fail_to_pass_names:
-                            if ftp in tr["name"]:
-                                ok = True
-                                break
-            except (json.JSONDecodeError, KeyError):
-                pass
+            # Parse pytest output
+            ok = "passed" in output and "failed" not in output and "error" not in output.lower().split("passed")[0]
+            # More robust: check exit code
+            if "EXIT_CODE=0" in output:
+                ok = True
+            elif "EXIT_CODE=" in output:
+                ok = False
 
         except Exception as exc:
             output = str(exc)
@@ -170,12 +167,12 @@ class ModalWorkspace:
         return {
             "passed": ok,
             "passed_count": 1 if ok else 0,
-            "total": 1,
+            "total": len(tests),
             "details": [
                 {
-                    "test": ",".join(test_files)[:100],
+                    "test": ", ".join(tests)[:100],
                     "passed": ok,
-                    "output": output[-500:],
+                    "output": output[-500:] if output else "",
                 }
             ],
         }
