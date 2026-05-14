@@ -112,7 +112,10 @@ class ModalWorkspace:
             tests = [self.fail_to_pass]
 
         # Build test command based on repo type
+        # Extract file paths and test functions for pytest
+        test_files = sorted(set(t.split("::")[0] for t in tests))
         test_args = " ".join(f'"{t}"' for t in tests)
+        test_file_args = " ".join(f'"{f}"' for f in test_files)
         instance = self.instance_id.lower()
 
         if "django" in instance:
@@ -144,7 +147,7 @@ class ModalWorkspace:
             # Default: pytest
             test_cmd = (
                 "source /opt/miniconda3/bin/activate testbed 2>/dev/null; "
-                f"cd {self.workdir} && python -m pytest -x --tb=short {test_args}"
+                f"cd {self.workdir} && python -m pytest -x --tb=short {test_file_args}"
             )
 
         try:
