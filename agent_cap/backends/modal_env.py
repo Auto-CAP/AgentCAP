@@ -161,8 +161,11 @@ class ModalWorkspace:
             cat_process.wait()
             output = cat_process.stdout.read()
 
-            # Parse pytest output
-            ok = "passed" in output and "failed" not in output and "error" not in output.lower().split("passed")[0]
+            # Parse test output (pytest: "passed", django: "OK", sympy: "OK")
+            out_lower = output.lower()
+            has_pass = "passed" in output or "\nOK\n" in output or "\nOK " in output or output.strip().endswith("OK")
+            has_fail = "failed" in out_lower or "error" in out_lower.split("ok")[0] if "ok" in out_lower else "error" in out_lower
+            ok = has_pass and not has_fail
             # More robust: check exit code
             if "EXIT_CODE=0" in output:
                 ok = True
