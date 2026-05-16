@@ -327,6 +327,15 @@ async def run_single_example(
                     "Stop exploring and make your edit immediately, then run tests, then call submit."
                 ),
             })
+        # Force final text answer when near max_turns (for MCP-ATLAS type tasks)
+        if turn_index == max_turns - 2:
+            messages.append({
+                "role": "user",
+                "content": (
+                    "IMPORTANT: You have only 2 turns remaining. You MUST provide your final answer NOW as a text response. "
+                    "Do NOT make any more tool calls. Summarize what you found and give your complete answer."
+                ),
+            })
         if task_dir is not None:
             request_data = {
                 "turn": turn_index,
