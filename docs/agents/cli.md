@@ -34,6 +34,38 @@ command line:
 | `--role ROLE=AGENT`    | yes | Bind strategy role to a pool key. Lets two roles share one endpoint. |
 | `--share-state ROLE1,ROLE2` | yes | Roles in the group share one Agent instance (conversation history). |
 
+### Single-agent shortcuts
+
+For the common case of "one agent named `agent`", these flags build the role
+directly without `--agent ROLE=k=v,k=v` syntax. They are ignored if an `agent`
+role already exists (from `--config`, `--agent`, `--agents-file`).
+
+| Flag | Endpoint field |
+|---|---|
+| `--model NAME` | `name` |
+| `--base-url URL` | `base_url` |
+| `--api-key KEY` | `api_key` |
+| `--max-tokens N` | `max_tokens` |
+| `--temperature T` | `temperature` |
+| `--top-p P` | `top_p` |
+| `--seed N` | `seed` |
+| `--engine NAME` | `engine` (e.g. vllm, sglang) |
+| `--protocol NAME` | `protocol` (openai, harmony, mock) |
+| `--system-prompt TEXT` | `system_prompt` |
+| `--use-streaming` | `use_streaming=true` |
+
+Example without any YAML:
+
+```bash
+python -m agent_cap.agents --strategy single \
+  --model gpt-oss-120b --base-url http://localhost:30000 --api-key EMPTY \
+  --engine sglang --max-tokens 131072 --top-p 1.0 --seed 42 \
+  --dataset imo-answerbench --num-tasks 5 --max-turns 128 \
+  --tool-backend math-python --evaluator imo \
+  --judge "name=openrouter/elephant-alpha,base_url=https://openrouter.ai/api/v1,api_key=$OPENROUTER_API_KEY" \
+  --output-dir results/imo_gptoss_sglang --resume
+```
+
 Supported keys inside `--agent` and `--role` values:
 
 ```

@@ -74,6 +74,27 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    metavar="ROLE=k=v,k=v",
                    help="Inline agent spec. Repeatable. "
                         "Example: planner=name=gpt-4o,base_url=...,api_key=...")
+
+    quick = p.add_argument_group(
+        "single-agent shortcuts",
+        "Convenience flags that build one agent role named 'agent' when "
+        "--agent / --role / --config do not already define it. Anything set "
+        "via --agent overrides these.",
+    )
+    quick.add_argument("--model", default=None, help="Model name (alias for name=)")
+    quick.add_argument("--base-url", default=None, help="OpenAI-compatible base URL")
+    quick.add_argument("--api-key", default=None, help="Bearer API key (use EMPTY for self-hosted)")
+    quick.add_argument("--max-tokens", type=int, default=None, help="Per-agent max_tokens")
+    quick.add_argument("--temperature", type=float, default=None, help="Per-agent temperature")
+    quick.add_argument("--top-p", type=float, default=None, help="Per-agent top_p")
+    quick.add_argument("--seed", type=int, default=None, help="Per-agent sampling seed (harmony only)")
+    quick.add_argument("--engine", default=None,
+                       help="Per-agent serving engine variant (harmony: vllm | sglang)")
+    quick.add_argument("--protocol", default=None,
+                       help="Per-agent LLM protocol override (openai | harmony | mock | ...)")
+    quick.add_argument("--system-prompt", default=None, help="Per-agent system prompt")
+    quick.add_argument("--use-streaming", action="store_true", default=None,
+                       help="Enable streaming on the per-agent client (sticky)")
     p.add_argument("--agents-file", action="append", default=[],
                    metavar="PATH",
                    help="YAML file containing only `agents:` (+ optional "
@@ -171,6 +192,32 @@ def _expand_env(value: Any) -> Any:
     return value
 
 
+def _collect_quick_agent_fields(args: argparse.Namespace) -> Dict[str, Any]:
+    """Build per-agent fields from single-agent shortcut flags."""
+    mapping = [
+        ("model", "name"),
+        ("base_url", "base_url"),
+        ("api_key", "api_key"),
+        ("max_tokens", "max_tokens"),
+        ("temperature", "temperature"),
+        ("top_p", "top_p"),
+        ("seed", "seed"),
+        ("engine", "engine"),
+        ("protocol", "protocol"),
+        ("system_prompt", "system_prompt"),
+        ("use_streaming", "use_streaming"),
+    ]
+    fields: Dict[str, Any] = {}
+    for cli_attr, endpoint_key in mapping:
+        v = getattr(args, cli_attr, None)
+        if v is None:
+            continue
+        if endpoint_key == "base_url" or endpoint_key == "api_key" or endpoint_key == "name":
+            v = os.path.expandvars(str(v))
+        fields[endpoint_key] = v
+    return fields
+
+
 def _build_agent_specs(args: argparse.Namespace) -> Tuple[Dict[str, AgentSpec], List[List[str]]]:
     """Return (role -> AgentSpec, sharing_groups).
 
@@ -209,6 +256,14 @@ def _build_agent_specs(args: argparse.Namespace) -> Tuple[Dict[str, AgentSpec], 
         role, fields = _parse_agent_spec(raw_spec)
         pool[role] = fields
         roles_map[role] = role
+
+    quick_fields = _collect_quick_agent_fields(args)
+    if quick_fields and "agent" not in pool:
+        pool["agent"] = quick_fields
+        roles_map.setdefault("agent", "agent")
+    elif quick_fields and "agent" in pool:
+        for k, v in quick_fields.items():
+            pool["agent"].setdefault(k, v)
 
     for raw in args.role:
         role, sep, agent_name = raw.partition("=")
