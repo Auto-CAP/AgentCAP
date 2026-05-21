@@ -96,8 +96,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Single user prompt. Use --task-file for batch JSONL.")
     p.add_argument("--task-file", type=str, default=None,
                    help="JSONL file of tasks. Each line: {task_id, user_prompt, ...}")
-    p.add_argument("--max-turns", type=int, default=8,
-                   help="Max tool-use turns per agent run (default 8)")
+    p.add_argument("--max-turns", type=int, default=None,
+                   help="Max tool-use turns per agent run (default: YAML "
+                        "`max_turns` or 8 if absent)")
     p.add_argument("--sequence", type=str, default=None,
                    help="For --strategy sequential: comma-separated role order")
     p.add_argument("--mock", action="store_true",
@@ -399,7 +400,7 @@ async def _run_async(args: argparse.Namespace) -> int:
             return 2
 
     strategy = _instantiate_strategy(args)
-    strategy.max_turns = args.max_turns
+    strategy.max_turns = int(args.max_turns if args.max_turns is not None else config_data.get("max_turns", 8))
     tasks = _load_tasks(args, config_data)
 
     evaluator_name = args.evaluator or config_data.get("evaluator")
@@ -412,7 +413,8 @@ async def _run_async(args: argparse.Namespace) -> int:
               f"Available: {list_evaluators()}", file=sys.stderr)
         return 2
 
-    out_dir = Path(args.output_dir).resolve() if args.output_dir else None
+    out_dir_value = args.output_dir or config_data.get("output_dir")
+    out_dir = Path(out_dir_value).resolve() if out_dir_value else None
     done: Dict[str, Dict[str, Any]] = {}
     results_path: Optional[Path] = None
     output_data_path: Optional[Path] = None

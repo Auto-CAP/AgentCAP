@@ -1,0 +1,22 @@
+strategy: single
+dataset: imo-answerbench
+num_tasks: 5
+max_turns: 128
+tool_backend: math-python
+evaluator: imo
+
+agents:
+  agent:
+    name: gpt-oss
+    base_url: http://127.0.0.1:30000
+    api_key: EMPTY
+    engine: sglang
+    max_tokens: 131072
+    temperature: 0.0
+
+judge:
+  name: openrouter/elephant-alpha
+  base_url: https://openrouter.ai/api/v1
+  api_key: ${OPENROUTER_API_KEY}
+
+output_dir: results/imo_gptoss_sglang
