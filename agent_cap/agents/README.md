@@ -66,7 +66,20 @@ python -m agent_cap.agents --strategy single \
   --judge "name=gpt-4o,base_url=https://api.openai.com/v1,api_key=$OPENAI_API_KEY"
 ```
 
-### 5. 100-worker swarm from a YAML
+### 5. gpt-oss on sglang (harmony protocol, native /generate)
+
+```bash
+python -m agent_cap.agents --strategy single \
+  --agent agent=name=gpt-oss-120b,base_url=http://localhost:30000,api_key=EMPTY,engine=sglang \
+  --dataset imo-answerbench --num-tasks 5 \
+  --tool-backend math-python --evaluator imo \
+  --output-dir results/imo_gptoss_sglang
+```
+
+Drop `engine=sglang` (or set `engine=vllm`) to hit vLLM's `/v1/completions`
+instead. Same CLI either way.
+
+### 6. 100-worker swarm from a YAML
 
 ```yaml
 strategy: supervisor

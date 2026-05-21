@@ -110,12 +110,45 @@ encoding your protocol uses on the wire is hidden inside the client.
 ## Notes on harmony
 
 - The harmony client uses `openai_harmony` to encode/decode at the token
-  level. It calls `/v1/completions` (not `/v1/chat/completions`), sending
-  `prompt=<list of token ids>`.
+  level. The wire format depends on the serving engine.
 - Tool calls in the harmony return path are detected by inspecting
   `last_message.recipient` for `"python"`. Adapt the heuristic in
   `harmony_client.py` if you want richer tool routing.
 - Streaming is not used. Streaming + harmony adds complexity that
-  `run_imo_answerbench_4.py` handles directly; the framework client favors
+  `run_imo_answerbench_4/5.py` handles directly; the framework client favors
   simplicity. Enable it later by switching the POST to a streaming call and
   accumulating token ids.
+
+### Engine: vLLM vs sglang
+
+Both vLLM and sglang can serve gpt-oss with harmony, but their native HTTP
+shapes differ. Pick via `endpoint.engine`:
+
+| Engine | Endpoint | Payload | Response |
+|---|---|---|---|
+| `vllm` (default) | `<base_url>/completions` | `{model, prompt: [token_ids], max_tokens, temperature, stop_token_ids}` | OpenAI-style `{choices: [{text, token_ids?}], usage}` |
+| `sglang` | `<base_url>/generate` | `{input_ids: [...], rid, sampling_params: {max_new_tokens, temperature, top_p, stop_token_ids, skip_special_tokens: false, ...}, stream: false}` | `{text, output_ids, meta_info}` |
+
+CLI:
+
+```bash
+# vLLM (default — no engine field needed)
+--agent agent=name=gpt-oss-120b,base_url=http://localhost:8000/v1,api_key=EMPTY
+
+# sglang — base_url WITHOUT /v1
+--agent agent=name=gpt-oss-120b,base_url=http://localhost:30000,api_key=EMPTY,engine=sglang
+```
+
+YAML:
+
+```yaml
+agents:
+  agent:
+    name: gpt-oss-120b
+    base_url: http://localhost:30000
+    api_key: EMPTY
+    engine: sglang
+```
+
+These mirror `run_imo_answerbench_4.py` (vLLM path) and
+`run_imo_answerbench_5.py::sglang_generate_with_ids` (sglang path) respectively.

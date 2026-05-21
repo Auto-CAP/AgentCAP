@@ -44,6 +44,7 @@ max_tokens     int, default 4096
 temperature    float, default 0.0
 use_streaming  bool, default false
 protocol       explicit override: openai | harmony | mock | ...
+engine         serving-engine variant for the protocol (e.g. vllm | sglang for harmony)
 system_prompt  optional system message
 ```
 

@@ -18,6 +18,7 @@ class ModelEndpoint:
     use_streaming: bool = False
     openrouter_provider: str = ""
     protocol: str = ""
+    engine: str = ""
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelEndpoint":
@@ -30,6 +31,7 @@ class ModelEndpoint:
             use_streaming=bool(data.get("use_streaming", False)),
             openrouter_provider=str(data.get("openrouter_provider", "")),
             protocol=str(data.get("protocol", "")),
+            engine=str(data.get("engine", "")),
         )
 
 
@@ -53,7 +55,7 @@ class AgentSpec:
             can_call_tools=bool(data.get("can_call_tools", True)),
             extra={k: v for k, v in data.items() if k not in {
                 "name", "model", "base_url", "api_key", "max_tokens", "temperature",
-                "use_streaming", "openrouter_provider", "protocol",
+                "use_streaming", "openrouter_provider", "protocol", "engine",
                 "system_prompt", "can_call_tools",
             }},
         )

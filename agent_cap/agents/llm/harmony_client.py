@@ -1,16 +1,28 @@
 """OpenAI Harmony protocol client for gpt-oss family models.
 
-Models like `gpt-oss-120b` / `gpt-oss-20b` use the Harmony chat template, which
-encodes/decodes conversations at the token level via `openai_harmony`. They
-expose only the `/v1/completions` endpoint (NOT `/v1/chat/completions`).
+Models like `gpt-oss-120b` / `gpt-oss-20b` use the Harmony chat template,
+which encodes/decodes conversations at the token level via `openai_harmony`.
+
+Two serving engines are supported via `endpoint.engine`:
+
+  engine="vllm" or "" (default)
+    POST `<base_url>/completions` with payload {model, prompt: [token_ids],
+    max_tokens, temperature, stop_token_ids}. Mirrors run_imo_answerbench_4.py.
+
+  engine="sglang"
+    POST `<base_url>/generate` with payload {input_ids: [token_ids], rid,
+    sampling_params: {max_new_tokens, temperature, top_p, stop_token_ids,
+    skip_special_tokens: false, ...}, stream: false}. Mirrors
+    run_imo_answerbench_5.py::sglang_generate_with_ids. base_url should NOT
+    include /v1 (sglang's native endpoint is at the root).
 
 This client converts OpenAI-style messages+tools to Harmony Messages, renders
-them to token ids, calls the vLLM/sglang `/v1/completions` endpoint with
-`prompt=<token_ids>`, then decodes the response back into OpenAI-style
-`tool_calls` so the rest of the framework can stay protocol-agnostic.
+them to token ids, calls the chosen engine, then decodes the response back
+into OpenAI-style `tool_calls` so the rest of the framework stays
+protocol-agnostic.
 
 Auto-routes on model names matching `(?i)gpt-?oss`. Override with
-`--agent ...,protocol=harmony` or `,protocol=openai`.
+`--agent ...,protocol=harmony,engine=sglang` etc.
 """
 
 from __future__ import annotations
@@ -117,37 +129,19 @@ class HarmonyClient:
             conversation, Role.ASSISTANT
         )
 
-        completions_url = endpoint.base_url.rstrip("/") + "/completions"
-        payload = {
-            "model": endpoint.name,
-            "prompt": prompt_ids,
-            "max_tokens": max(1, int(endpoint.max_tokens) - len(prompt_ids)),
-            "temperature": float(endpoint.temperature),
-            "stop_token_ids": list(self._stop_token_ids),
-        }
-        headers = {"Content-Type": "application/json"}
-        if endpoint.api_key:
-            headers["Authorization"] = f"Bearer {endpoint.api_key}"
-
+        engine = (endpoint.engine or "").strip().lower() or "vllm"
         t0 = time.perf_counter()
-        async with self._session.post(
-            completions_url, json=payload, headers=headers
-        ) as resp:
-            text = await resp.text()
-            if resp.status >= 400:
-                raise RuntimeError(
-                    f"Harmony completions failed ({resp.status}): {text[:500]}"
-                )
-            raw = json.loads(text)
-        elapsed = time.perf_counter() - t0
 
-        choices = raw.get("choices") or []
-        token_ids = (
-            (choices[0].get("token_ids") if choices else None)
-            or (choices[0].get("logprobs", {}).get("tokens") if choices else None)
-            or []
-        )
-        completion_text = (choices[0].get("text", "") if choices else "") or ""
+        if engine == "sglang":
+            token_ids, completion_text, raw, usage_in, usage_out = await self._call_sglang(
+                endpoint=endpoint, prompt_ids=prompt_ids,
+            )
+        else:
+            token_ids, completion_text, raw, usage_in, usage_out = await self._call_vllm(
+                endpoint=endpoint, prompt_ids=prompt_ids,
+            )
+
+        elapsed = time.perf_counter() - t0
 
         assistant = _decode_harmony_response(
             encoding=encoding,
@@ -158,14 +152,84 @@ class HarmonyClient:
 
         usage_raw = raw.get("usage") or {}
         usage = Usage(
-            input_tokens=int(usage_raw.get("prompt_tokens", len(prompt_ids)) or len(prompt_ids)),
-            output_tokens=int(usage_raw.get("completion_tokens", len(token_ids) if token_ids else 0) or 0),
+            input_tokens=int(usage_raw.get("prompt_tokens", usage_in) or usage_in),
+            output_tokens=int(usage_raw.get("completion_tokens", usage_out) or usage_out),
             cached_tokens=int(
                 (usage_raw.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
             ),
             requests=1,
         )
         return LLMReply(assistant=assistant, usage=usage, latency_s=elapsed, raw=raw)
+
+    async def _call_vllm(
+        self, *, endpoint: ModelEndpoint, prompt_ids: List[int],
+    ):
+        url = endpoint.base_url.rstrip("/") + "/completions"
+        payload: Dict[str, Any] = {
+            "model": endpoint.name,
+            "prompt": prompt_ids,
+            "max_tokens": max(1, int(endpoint.max_tokens) - len(prompt_ids)),
+            "temperature": float(endpoint.temperature),
+            "stop_token_ids": list(self._stop_token_ids),
+        }
+        raw = await self._post_json(url, payload, endpoint.api_key, "vLLM /completions")
+        choices = raw.get("choices") or []
+        token_ids = (
+            (choices[0].get("token_ids") if choices else None)
+            or (choices[0].get("logprobs", {}).get("tokens") if choices else None)
+            or []
+        )
+        completion_text = (choices[0].get("text", "") if choices else "") or ""
+        return token_ids, completion_text, raw, len(prompt_ids), len(token_ids or [])
+
+    async def _call_sglang(
+        self, *, endpoint: ModelEndpoint, prompt_ids: List[int],
+    ):
+        import uuid as _uuid
+
+        url = endpoint.base_url.rstrip("/") + "/generate"
+        max_new = max(1, int(endpoint.max_tokens) - len(prompt_ids))
+        payload: Dict[str, Any] = {
+            "input_ids": [int(t) for t in prompt_ids],
+            "rid": str(_uuid.uuid4()),
+            "sampling_params": {
+                "max_new_tokens": max_new,
+                "temperature": float(endpoint.temperature),
+                "top_p": 1.0,
+                "stop_token_ids": list(self._stop_token_ids),
+                "skip_special_tokens": False,
+                "spaces_between_special_tokens": False,
+                "no_stop_trim": True,
+            },
+            "stream": False,
+        }
+        raw = await self._post_json(url, payload, endpoint.api_key, "sglang /generate")
+
+        text = raw.get("text", "") or ""
+        output_ids = raw.get("output_ids") or []
+        output_ids = [int(t) for t in output_ids]
+
+        if len(output_ids) > len(prompt_ids) and output_ids[: len(prompt_ids)] == list(prompt_ids):
+            output_ids = output_ids[len(prompt_ids):]
+
+        meta = raw.get("meta_info") or {}
+        usage_in = int(meta.get("prompt_tokens", len(prompt_ids)) or len(prompt_ids))
+        usage_out = int(meta.get("completion_tokens", len(output_ids)) or len(output_ids))
+        return output_ids, text, raw, usage_in, usage_out
+
+    async def _post_json(
+        self, url: str, payload: Dict[str, Any], api_key: str, label: str,
+    ) -> Dict[str, Any]:
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if self._session is None:
+            raise RuntimeError("HarmonyClient: no aiohttp session")
+        async with self._session.post(url, json=payload, headers=headers) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(f"{label} failed ({resp.status}): {text[:500]}")
+            return json.loads(text)
 
 
 def _harmony_tool_config(tools: List[Dict[str, Any]], ToolNamespaceConfig: Any) -> Any:
