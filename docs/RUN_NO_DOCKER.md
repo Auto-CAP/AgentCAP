@@ -16,10 +16,11 @@ covers a host that **does not have Docker** but does have:
 - A separate machine (or remote endpoint) actually serving `gpt-oss-120b`
   via vLLM/SGLang. **You are not expected to run the model on this host.**
 
-The agent code lives in **AgentCAP**, branch `sicheng/k8s-benchmark-pipeline`,
-which has the gpt-oss tool-use fixes that any reproduction depends on.
+The agent code lives in **AgentCAP**, branch `v1_beta`, which has the
+gpt-oss tool-use fixes and the unified `agent_cap.agents` runtime that
+any reproduction depends on.
 
-> ⚠️ Critical: do NOT run on a branch that lacks commit `787114f`
+> ⚠️ Critical: do NOT run on a branch that lacks commit `2ef0163`
 > ("Fix gpt-oss tool-use on vLLM/SGLang without server-side parser").
 > Without that fix the model rambles for thousands of tokens per turn and
 > tool-call recovery silently fails.
@@ -61,7 +62,7 @@ You should see `"id": "openai/gpt-oss-120b"` (or your `--served-model-name`).
 ```bash
 git clone https://github.com/Auto-CAP/AgentCAP.git
 cd AgentCAP
-git checkout sicheng/k8s-benchmark-pipeline
+git checkout v1_beta
 git submodule update --init --recursive   # pulls third_party/mcp-atlas
 pip install -e .
 pip install 'swe-rex>=1.4.0'              # SWE-bench harness
@@ -193,7 +194,7 @@ ls /tmp/swe_agent/config/bash_only.yaml
 
 ### 3c. Run the batch
 
-The unified script `k8s/run_sweagent.py` (commit `bf3edc5` on this
+The unified script `k8s/run_sweagent.py` (commit `dfcf2d7` on this
 branch) supports `--deployment {k8s,docker,local,modal}`.
 
 ```bash
@@ -260,7 +261,7 @@ For each completed run, sanity-check:
 1. **Tool-call recovery**: in the trajectory / detailed-results files,
    `tool_calls` should be non-empty for the majority of turns. If
    essentially all are `[]`, the gpt-oss `<|call|>` stop-token recovery
-   is broken — verify you are on the branch with commit `787114f`.
+   is broken — verify you are on the branch with commit `2ef0163`.
 
 2. **Decode token count per turn**: should be 100–500 tokens for
    gpt-oss-120b on agentic tasks. If you see 3000–6000 tokens/turn, the
