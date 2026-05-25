@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ATLAS_DIR="${MCP_ATLAS_DIR:-$REPO_ROOT/third_party/mcp-atlas}"
 ENV_FILE="${MCP_ENV_FILE:-$ATLAS_DIR/.env}"
 PORT="${MCP_PORT:-1984}"
+WORKERS="${MCP_WORKERS:-1}"
 
 ENABLED_SERVERS="${ENABLED_SERVERS:-calculator,fetch,whois,weather,pubmed,github,clinicaltrialsgov-mcp-server,context7,ddg-search,met-museum,open-library,osm-mcp-server,filesystem,git,desktop-commander,memory,mcp-code-executor,arxiv,cli-mcp-server,wikipedia,alchemy}"
 
@@ -49,5 +50,5 @@ export PATH="/usr/bin:$PATH"
 envsubst < "$AGENT_ENV_DIR/src/agent_environment/mcp_server_template.json" \
     > "$AGENT_ENV_DIR/src/agent_environment/mcp_server_config.json"
 
-echo "Starting MCP server on port $MCP_PORT_SAVED with servers: $ENABLED_SERVERS"
-exec uvicorn agent_environment.main:app --host 0.0.0.0 --port "$MCP_PORT_SAVED" --timeout-keep-alive 300
+echo "Starting MCP server on port $MCP_PORT_SAVED ($WORKERS worker(s)) with servers: $ENABLED_SERVERS"
+exec uvicorn agent_environment.main:app --host 0.0.0.0 --port "$MCP_PORT_SAVED" --timeout-keep-alive 300 --workers "$WORKERS"
