@@ -77,49 +77,17 @@ benchmark. It runs as a separate process; we set it up in §2.
 
 ### 2a. Start the MCP server natively (no Docker)
 
-The Docker image `ghcr.io/scaleapi/mcp-atlas:latest` boils down to:
-
-- a Python `agent-environment` web service on port 1984 (uvicorn)
-- which lazily spawns ~22 MCP servers over stdio (mostly Node `npx` and
-  Python `uvx` packages)
-
-`mcp-server/start.sh` does the docker-equivalent setup on the host
-(Python 3.12 venv, install `agent-environment` with deps, `envsubst` the
-config template, launch uvicorn). One command:
-
 ```bash
 cd /path/to/AgentCAP
 bash mcp-server/start.sh
 ```
 
-First run:
+This is the docker-free equivalent of `ghcr.io/scaleapi/mcp-atlas:latest`
+(Python 3.12 venv + agent-environment + envsubst + uvicorn). The full
+setup, environment variables, troubleshooting, and concurrency tuning
+live in **[docs/mcp-server.md](mcp-server.md)**.
 
-1. Builds `mcp-server/.venv` with Python 3.12 and installs
-   `agent-environment` (matches docker `uv sync`).
-2. If `third_party/mcp-atlas/.env` doesn't exist, copies it from
-   `env.template` and exits. Fill in the API keys you need
-   (see §0), then re-run.
-3. Re-runs source the `.env`, run `envsubst` on
-   `mcp_server_template.json` to produce `mcp_server_config.json`, and
-   start `uvicorn agent_environment.main:app --host 0.0.0.0 --port 1984`.
-
-Server-list selection lives in `start.sh`'s `ENABLED_SERVERS` default
-(21 free-tier servers) — override per invocation:
-
-```bash
-ENABLED_SERVERS="calculator,fetch,wikipedia" bash mcp-server/start.sh
-MCP_PORT=2000 bash mcp-server/start.sh             # different port
-MCP_ATLAS_DIR=/path/to/mcp-atlas bash mcp-server/start.sh   # external clone
-```
-
-The first launch downloads all `npx` / `uvx` MCP server packages on
-demand; this can take 5–15 minutes depending on network. Subsequent
-runs hit cache and start in seconds.
-
-System packages required on the host: `python3.12`, `uv` (`pip install uv`),
-`node >= 20`, `npm`, `envsubst` (in `gettext-base`).
-
-Leave the server running. In another shell, sanity check:
+Leave the server running. In another shell:
 
 ```bash
 curl -s http://localhost:1984/health
