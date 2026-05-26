@@ -162,13 +162,13 @@ ls /tmp/swe_agent/config/bash_only.yaml
 
 ### 3c. Run the batch
 
-The unified script `k8s/run_sweagent.py` (commit `dfcf2d7` on this
+The unified script `scripts/run_sweagent.py` (commit `dfcf2d7` on this
 branch) supports `--deployment {k8s,docker,local,modal}`.
 
 ```bash
 cd /path/to/AgentCAP
 
-python k8s/run_sweagent.py \
+python scripts/run_sweagent.py \
     --deployment modal \
     --dataset swe-bench-lite \
     --task-indices benchmarks/swe_bench_lite_curated_100.json \
@@ -252,7 +252,7 @@ For each completed run, sanity-check:
 |---|---|
 | `agent_cap/runner/unified_runner.py` | mcp-atlas + IMO + medagentbench + tau2 + swebench-lite |
 | `agent_cap/runner/llm_client.py` | gpt-oss stop_token + tool-arg cleaning |
-| `k8s/run_sweagent.py` | SWE-bench Lite/Pro batch runner; `--deployment` flag |
+| `scripts/run_sweagent.py` | SWE-bench Lite/Pro batch runner; `--deployment` flag |
 | `third_party/mcp-atlas/` | submodule, the MCP server you start in §2a |
 | `agent_cap/evaluators/gtfa_eval.py` | Gemini judge for mcp-atlas |
 
@@ -286,7 +286,7 @@ For each completed run, sanity-check:
   branch). Pass it via `--task-indices`:
 
   ```bash
-  python k8s/run_sweagent.py --deployment modal \
+  python scripts/run_sweagent.py --deployment modal \
       --dataset swe-bench-lite \
       --task-indices benchmarks/swe_bench_lite_curated_100.json \
       --vllm-url "$VLLM_URL" \
