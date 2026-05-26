@@ -190,7 +190,6 @@ class HarmonyClient:
             "temperature": float(endpoint.temperature),
             "top_p": float(endpoint.top_p),
             "stop_token_ids": list(self._stop_token_ids),
-            "return_token_ids": True,
         }
         if endpoint.seed is not None:
             payload["seed"] = int(endpoint.seed)
