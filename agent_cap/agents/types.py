@@ -6,6 +6,21 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+        raise ValueError(f"cannot parse {value!r} as bool")
+    return bool(value)
+
+
 @dataclass
 class ModelEndpoint:
     """OpenAI-compatible model endpoint."""
@@ -34,7 +49,7 @@ class ModelEndpoint:
             temperature=float(data.get("temperature", 0.0) or 0.0),
             top_p=float(data.get("top_p", 1.0) or 1.0),
             seed=seed,
-            use_streaming=bool(data.get("use_streaming", False)),
+            use_streaming=_coerce_bool(data.get("use_streaming"), default=False),
             openrouter_provider=str(data.get("openrouter_provider", "")),
             protocol=str(data.get("protocol", "")),
             engine=str(data.get("engine", "")),
@@ -58,7 +73,7 @@ class AgentSpec:
             role=role,
             endpoint=endpoint,
             system_prompt=str(data.get("system_prompt", "")),
-            can_call_tools=bool(data.get("can_call_tools", True)),
+            can_call_tools=_coerce_bool(data.get("can_call_tools"), default=True),
             extra={k: v for k, v in data.items() if k not in {
                 "name", "model", "base_url", "api_key", "max_tokens", "temperature",
                 "top_p", "seed", "use_streaming", "openrouter_provider",
