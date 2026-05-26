@@ -22,9 +22,7 @@ Serve the model with tool-call parser:
 
 ```bash
 vllm serve Qwen/Qwen3.5-4B \
-  --served-model-name openai/Qwen3.5-4B \
   --port 30000 \
-  --max-model-len 65536 \
   --enable-auto-tool-choice --tool-call-parser qwen3_coder
 ```
 
@@ -39,7 +37,7 @@ Run the benchmark:
 ```bash
 python -m agent_cap.agents \
   --strategy single \
-  --model openai/Qwen3.5-4B \
+  --model Qwen/Qwen3.5-4B \
   --base-url http://localhost:30000/v1 \
   --api-key dummy \
   --dataset mcp-atlas \
@@ -58,8 +56,8 @@ history and system prompt — only the engine connection is shared.
 ```bash
 python -m agent_cap.agents \
   --strategy plan-execute \
-  --agent planner=name=openai/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
-  --agent executor=name=openai/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
+  --agent planner=name=Qwen/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
+  --agent executor=name=Qwen/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
   --task "Find the largest prime under 100. Use tools if helpful." \
   --tool-backend mcp --mcp-server-url http://localhost:1984
 ```
@@ -70,9 +68,9 @@ of its choice and stops when it emits `DONE: <answer>`:
 ```bash
 python -m agent_cap.agents \
   --strategy supervisor \
-  --agent supervisor=name=openai/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
-  --agent researcher=name=openai/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
-  --agent writer=name=openai/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
+  --agent supervisor=name=Qwen/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
+  --agent researcher=name=Qwen/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
+  --agent writer=name=Qwen/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=dummy \
   --task "Write a one-paragraph summary of the 2024 EU AI Act, then compute its character count." \
   --tool-backend mcp --mcp-server-url http://localhost:1984
 ```
