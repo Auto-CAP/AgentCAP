@@ -11,10 +11,43 @@ backends (MCP, SWE-bench, etc.) wrap them with a thin adapter.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import math
+import operator
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol
+
+_SAFE_CALC_BINOPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub,
+    ast.Mult: operator.mul, ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_SAFE_CALC_UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_SAFE_CALC_FUNCS = {k: getattr(math, k) for k in ("sqrt", "log", "exp", "sin", "cos")}
+_SAFE_CALC_CONSTS = {"pi": math.pi, "e": math.e}
+
+
+def _safe_calc_eval(node: ast.AST) -> float:
+    if isinstance(node, ast.Expression):
+        return _safe_calc_eval(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in _SAFE_CALC_CONSTS:
+        return _SAFE_CALC_CONSTS[node.id]
+    if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_CALC_BINOPS:
+        return _SAFE_CALC_BINOPS[type(node.op)](_safe_calc_eval(node.left), _safe_calc_eval(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_CALC_UNARYOPS:
+        return _SAFE_CALC_UNARYOPS[type(node.op)](_safe_calc_eval(node.operand))
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _SAFE_CALC_FUNCS
+        and not node.keywords
+    ):
+        return _SAFE_CALC_FUNCS[node.func.id](*(_safe_calc_eval(a) for a in node.args))
+    raise ValueError(f"calc: disallowed expression node {type(node).__name__}")
 
 
 class ToolProvider(Protocol):
@@ -92,8 +125,7 @@ def build_demo_tools() -> LocalToolRegistry:
         },
     )
     def calc(expr: str) -> str:
-        allowed = {k: getattr(math, k) for k in ("sqrt", "log", "exp", "sin", "cos", "pi", "e")}
-        return str(eval(expr, {"__builtins__": {}}, allowed))  # noqa: S307 - sandboxed
+        return str(_safe_calc_eval(ast.parse(expr, mode="eval")))
 
     @reg.tool(
         name="echo",
