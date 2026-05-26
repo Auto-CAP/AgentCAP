@@ -20,13 +20,6 @@ The agent code lives in **AgentCAP** `main`, which has the gpt-oss
 tool-use fixes and the unified `agent_cap.agents` runtime that any
 reproduction depends on.
 
-> ⚠️ Critical: do NOT run on a branch that lacks commit `2ef0163`
-> ("Fix gpt-oss tool-use on vLLM/SGLang without server-side parser").
-> Without that fix the model rambles for thousands of tokens per turn and
-> tool-call recovery silently fails.
-
----
-
 ## 0. Required env vars and endpoints
 
 Shell exports for the runner side:
@@ -227,7 +220,8 @@ For each completed run, sanity-check:
 1. **Tool-call recovery**: in the trajectory / detailed-results files,
    `tool_calls` should be non-empty for the majority of turns. If
    essentially all are `[]`, the gpt-oss `<|call|>` stop-token recovery
-   is broken — verify you are on the branch with commit `2ef0163`.
+   is broken — make sure you're on a recent `main` (the fix lives in
+   `agent_cap.runner.llm_client._stream_chat_completion_harmony`).
 
 2. **Decode token count per turn**: should be 100–500 tokens for
    gpt-oss-120b on agentic tasks. If you see 3000–6000 tokens/turn, the
