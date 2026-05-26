@@ -190,18 +190,21 @@ class HarmonyClient:
             "temperature": float(endpoint.temperature),
             "top_p": float(endpoint.top_p),
             "stop_token_ids": list(self._stop_token_ids),
+            "return_token_ids": True,
         }
         if endpoint.seed is not None:
             payload["seed"] = int(endpoint.seed)
         raw = await self._post_json(url, payload, endpoint.api_key, "vLLM /completions")
         choices = raw.get("choices") or []
-        token_ids = (
-            (choices[0].get("token_ids") if choices else None)
-            or (choices[0].get("logprobs", {}).get("tokens") if choices else None)
-            or []
-        )
+        raw_token_ids = choices[0].get("token_ids") if choices else None
+        token_ids: List[int] = []
+        if isinstance(raw_token_ids, list):
+            try:
+                token_ids = [int(t) for t in raw_token_ids]
+            except (TypeError, ValueError):
+                token_ids = []
         completion_text = (choices[0].get("text", "") if choices else "") or ""
-        return token_ids, completion_text, raw, len(prompt_ids), len(token_ids or [])
+        return token_ids, completion_text, raw, len(prompt_ids), len(token_ids)
 
     async def _call_sglang(
         self, *, endpoint: ModelEndpoint, prompt_ids: List[int],
