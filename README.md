@@ -23,7 +23,8 @@ Serve the model with tool-call parser:
 ```bash
 vllm serve Qwen/Qwen3.5-4B \
   --port 30000 \
-  --enable-auto-tool-choice --tool-call-parser qwen3_coder
+  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
+  --reasoning-parser qwen3
 ```
 
 Start the MCP tool server (in another terminal):
