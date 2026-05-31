@@ -507,7 +507,9 @@ async def _run_async(args: argparse.Namespace) -> int:
     if args.mock:
         results = await run_all(MockLLMClient())
     else:
-        async with aiohttp.ClientSession() as session:
+        connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True)
+        timeout = aiohttp.ClientTimeout(total=1800, connect=60, sock_connect=60, sock_read=1800)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             results = await run_all(None, session=session)
 
     _print_summary(results, evaluator_name)
