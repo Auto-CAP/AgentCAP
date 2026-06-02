@@ -161,15 +161,18 @@ class DockerDeploy:
         self.image_repo = image_repo
 
     def prepare(self, task_idx, instance_id, dockerhub_tag):
-        # nothing to spin up — sweagent CLI starts/stops the container
-        return {"image": f"{self.image_repo}:{dockerhub_tag}"}
+        if not self.image_repo:
+            image = dockerhub_tag
+        else:
+            image = f"{self.image_repo}:{dockerhub_tag}"
+        return {"image": image}
 
     def sweagent_args(self, ctx):
         return [
             "--env.deployment.type", "docker",
             "--env.deployment.image", ctx["image"],
             "--env.repo.type", "preexisting",
-            "--env.repo.repo_name", "app",
+            "--env.repo.repo_name", "testbed",
         ]
 
     def cleanup(self, ctx):
@@ -214,14 +217,20 @@ class ModalDeploy:
         self.image_repo = image_repo
 
     def prepare(self, task_idx, instance_id, dockerhub_tag):
+        if dockerhub_tag.startswith("docker.io/") or "://" in dockerhub_tag:
+            return {"image": dockerhub_tag}
+        if not self.image_repo:
+            return {"image": dockerhub_tag}
         return {"image": f"docker.io/{self.image_repo}:{dockerhub_tag}"}
 
     def sweagent_args(self, ctx):
         return [
             "--env.deployment.type", "modal",
             "--env.deployment.image", ctx["image"],
+            "--env.deployment.deployment_timeout", "14400",
+            "--env.deployment.runtime_timeout", "900",
             "--env.repo.type", "preexisting",
-            "--env.repo.repo_name", "app",
+            "--env.repo.repo_name", "testbed",
         ]
 
     def cleanup(self, ctx):
@@ -289,6 +298,8 @@ def run_one_task(task_idx, instance_id, dockerhub_tag, problem_statement,
     if ctx is None:
         return {"index": task_idx, "instance_id": instance_id, "status": "deploy_failed"}
 
+    import time
+    t_start_task = time.perf_counter()
     try:
         task_output = output_dir / f"task_{task_idx:03d}"
         task_output.mkdir(parents=True, exist_ok=True)
@@ -302,30 +313,40 @@ def run_one_task(task_idx, instance_id, dockerhub_tag, problem_statement,
         )
         ps_file.write_text(rules + problem_statement)
 
+        traj_dir = task_output / "sweagent_traj"
+        traj_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
             sys.executable, "-m", "sweagent", "run",
-            "--config", str(sweagent_dir / "config" / "bash_only.yaml"),
+            "--config", str(sweagent_dir / "config" / "default.yaml"),
             "--agent.model.name", model_name,
             "--agent.model.api_base", vllm_url,
             "--agent.model.per_instance_cost_limit", "0",
             "--agent.model.total_cost_limit", "0",
-            "--agent.model.per_instance_call_limit", "50",
+            "--agent.model.per_instance_call_limit", "200",
+            "--agent.model.completion_kwargs", '{"extra_body": {"stop_token_ids": [200012, 200002]}}',
             "--agent.templates.put_demos_in_history", "false",
             "--problem_statement.path", str(ps_file),
+            "--output_dir", str(traj_dir),
         ] + deploy.sweagent_args(ctx)
 
         env = os.environ.copy()
         env["OPENAI_API_KEY"] = "dummy"
+        env["SWEAGENT_STREAM_STATS_PATH"] = str(task_output / "stream_stats.jsonl")
 
         r = subprocess.run(cmd, env=env, capture_output=True, text=True,
                            timeout=1800, cwd=str(sweagent_dir))
+        (task_output / "sweagent_stdout.log").write_text(r.stdout or "")
+        (task_output / "sweagent_stderr.log").write_text(r.stderr or "")
 
-        traj_files = list(Path(sweagent_dir / "trajectories").rglob("*.traj"))
+        traj_files = list(traj_dir.rglob("*.traj"))
         patch = ""
+        tool_calls_count = 0
         for tf in sorted(traj_files, key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 traj = json.loads(tf.read_text())
                 p = traj.get("info", {}).get("submission") or traj.get("info", {}).get("model_patch") or ""
+                hist = traj.get("history") or traj.get("trajectory") or []
+                tool_calls_count = sum(len(m.get("tool_calls") or []) for m in hist)
                 if p:
                     patch = p
                     (task_output / "trajectory.traj").write_text(tf.read_text())
@@ -338,8 +359,70 @@ def run_one_task(task_idx, instance_id, dockerhub_tag, problem_statement,
             log(f"[task {task_idx}] DONE patch={len(patch)} chars")
         else:
             log(f"[task {task_idx}] DONE no patch (rc={r.returncode})")
+
+        stats_path = task_output / "stream_stats.jsonl"
+        prompt_total = completion_total = reasoning_total = cached_total = 0
+        ttft_list: list[float] = []
+        tpot_list: list[float] = []
+        requests = 0
+        if stats_path.exists():
+            for line in stats_path.read_text().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    s = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                prompt_total += int(s.get("prompt_tokens") or 0)
+                completion_total += int(s.get("completion_tokens") or 0)
+                reasoning_total += int(s.get("reasoning_tokens") or 0)
+                cached_total += int(s.get("cached_tokens") or 0)
+                if s.get("ttft_ms"):
+                    ttft_list.append(float(s["ttft_ms"]))
+                if s.get("tpot_ms"):
+                    tpot_list.append(float(s["tpot_ms"]))
+                requests += 1
+        def _mean(xs):
+            return (sum(xs) / len(xs)) if xs else 0.0
+        def _p50(xs):
+            if not xs:
+                return 0.0
+            ys = sorted(xs)
+            return ys[len(ys) // 2]
+        e2e = time.perf_counter() - t_start_task
+        usage = {
+            "input_tokens": prompt_total,
+            "output_tokens": completion_total + reasoning_total,
+            "completion_tokens": completion_total,
+            "reasoning_tokens": reasoning_total,
+            "cached_tokens": cached_total,
+            "requests": requests,
+        }
+        result_row = {
+            "task_id": instance_id,
+            "strategy": "single",
+            "output_text": patch,
+            "e2e_latency_s": e2e,
+            "per_role_usage": {"agent": usage},
+            "total_usage": usage,
+            "errors": [],
+            "num_turns": requests,
+            "tool_calls": tool_calls_count,
+            "extras": {
+                "ttft_ms_mean": _mean(ttft_list),
+                "ttft_ms_p50": _p50(ttft_list),
+                "tpot_ms_mean": _mean(tpot_list),
+                "tpot_ms_p50": _p50(tpot_list),
+                "has_patch": bool(patch),
+                "sweagent_rc": r.returncode,
+            },
+            "eval_passed": False,
+            "eval_score": 0.0,
+            "eval_details": {"evaluator": "swebench"},
+        }
+        (task_output / "result.json").write_text(json.dumps(result_row, indent=2))
         return {"index": task_idx, "instance_id": instance_id,
-                "status": "ok", "has_patch": bool(patch)}
+                "status": "ok", "has_patch": bool(patch), "result": result_row}
 
     except subprocess.TimeoutExpired:
         log(f"[task {task_idx}] TIMEOUT")
@@ -377,8 +460,9 @@ def main():
     ap.add_argument("--image-repo", default="jefzda/sweap-images")
     ap.add_argument("--local-work-root", default=None,
                     help="Where local deployment puts per-task workdirs")
-    ap.add_argument("--model", default="hosted_vllm/openai/gpt-oss-120b",
-                    help="LiteLLM model id (e.g. hosted_vllm/openai/Qwen3.5-4B)")
+    ap.add_argument("--model", default="openai/unsloth/gpt-oss-120b",
+                    help="LiteLLM model id. Use openai/<hf-id> for vllm/sglang OpenAI-compat endpoints "
+                         "(hosted_vllm/ prefix drops prompt_tokens_details.cached_tokens).")
     args = ap.parse_args()
 
     if not (args.vllm_url or args.vllm_job):
@@ -391,11 +475,14 @@ def main():
     log(f"Loading dataset {args.dataset}...")
     if args.dataset == "swe-bench-lite":
         ds = load_dataset("princeton-nlp/SWE-bench_Lite", split="test")
-        # SWE-bench_Lite tasks lack dockerhub_tag; the standard image is
-        # swebench/sweb.eval.x86_64.<instance_id_lower_with_underscores>:latest
         def _tag(ex):
             iid = ex["instance_id"].lower().replace("/", "__")
-            return f"swebench/sweb.eval.x86_64.{iid}"
+            if args.deployment == "modal":
+                escaped = iid.replace("__", "_1776_")
+                return f"docker.io/swebench/sweb.eval.x86_64.{escaped}:latest"
+            if args.image_repo:
+                return f"swebench/sweb.eval.x86_64.{iid}"
+            return f"sweb.eval.x86_64.{iid}:latest"
         get_image = _tag
     else:
         ds = load_dataset("ScaleAI/SWE-bench_Pro", split="test")
@@ -456,10 +543,80 @@ def main():
 
     results.sort(key=lambda x: x["index"])
     with open(output_dir / "batch_summary.json", "w") as fh:
-        json.dump(results, fh, indent=2)
+        json.dump([{k: v for k, v in r.items() if k != "result"} for r in results], fh, indent=2)
     ok = sum(1 for r in results if r["status"] == "ok")
     patches = sum(1 for r in results if r.get("has_patch"))
-    log(f"\nDone! {ok}/{len(results)} ok, {patches} patches. Summary: {output_dir}/batch_summary.json")
+    log(f"\nDone! {ok}/{len(results)} ok, {patches} patches.")
+
+    preds = []
+    for r in results:
+        if r.get("has_patch"):
+            preds.append({
+                "instance_id": r["instance_id"],
+                "model_patch": (output_dir / f"task_{r['index']:03d}" / "patch.diff").read_text(),
+                "model_name_or_path": args.model.replace("/", "-").replace(":", "-"),
+            })
+    preds_path = output_dir / "predictions.json"
+    preds_path.write_text(json.dumps(preds, indent=2))
+    log(f"Wrote {len(preds)} predictions to {preds_path}")
+
+    if preds:
+        run_id = f"sweagent_{output_dir.name[-40:]}"
+        eval_cmd = [
+            sys.executable, "-m", "swebench.harness.run_evaluation",
+            "--dataset_name", "princeton-nlp/SWE-bench_Lite" if args.dataset == "swe-bench-lite" else "ScaleAI/SWE-bench_Pro",
+            "--predictions_path", str(preds_path),
+            "--max_workers", str(min(args.concurrency, 8)),
+            "--run_id", run_id,
+            "--cache_level", "instance",
+        ]
+        log(f"Running swebench evaluator ({len(preds)} predictions)...")
+        with open(output_dir / "eval.log", "w") as ef:
+            subprocess.run(eval_cmd, stdout=ef, stderr=subprocess.STDOUT, timeout=3600 * 6)
+
+    eval_reports_dir = Path("logs/run_evaluation") / (
+        f"sweagent_{output_dir.name[-40:]}" if preds else ""
+    )
+    eval_results: dict[str, dict] = {}
+    model_name_dirs = list(eval_reports_dir.glob("*")) if eval_reports_dir.exists() else []
+    for model_dir in model_name_dirs:
+        for rep in model_dir.glob("*/report.json"):
+            iid = rep.parent.name
+            try:
+                info = json.loads(rep.read_text()).get(iid, {})
+                eval_results[iid] = {"resolved": bool(info.get("resolved")), "details": info}
+            except Exception:
+                pass
+
+    rows_path = output_dir / "results.jsonl"
+    with rows_path.open("w") as fh:
+        for r in results:
+            row = r.get("result") or {
+                "task_id": r["instance_id"],
+                "strategy": "single",
+                "output_text": "",
+                "e2e_latency_s": 0.0,
+                "per_role_usage": {},
+                "total_usage": {},
+                "errors": [r.get("status", "")] if r.get("status") != "ok" else [],
+                "num_turns": 0,
+                "extras": {},
+                "eval_passed": False,
+                "eval_score": 0.0,
+                "eval_details": {"evaluator": "swebench"},
+            }
+            ev = eval_results.get(r["instance_id"])
+            if ev:
+                row["eval_passed"] = ev["resolved"]
+                row["eval_score"] = 1.0 if ev["resolved"] else 0.0
+                row["eval_details"] = {"evaluator": "swebench", **ev["details"]}
+            fh.write(json.dumps(row) + "\n")
+    log(f"Wrote per-task rows to {rows_path}")
+
+    n = len(results)
+    pass_ = sum(1 for r in results if eval_results.get(r["instance_id"], {}).get("resolved"))
+    acc = pass_ / n if n else 0.0
+    log(f"FINAL: n={n}  pass={pass_}/{n}  acc={acc:.3f}  evaluator=swebench")
 
 
 if __name__ == "__main__":

@@ -112,15 +112,19 @@ class Agent:
 
     def final_text(self) -> str:
         for msg in reversed(self.state.messages):
-            if msg.get("role") == "assistant":
-                c = msg.get("content")
-                if isinstance(c, str) and c.strip():
-                    return c.strip()
-                if isinstance(c, list):
-                    parts = [b.get("text", "") for b in c if isinstance(b, dict)]
-                    joined = "\n".join(p for p in parts if p)
-                    if joined.strip():
-                        return joined.strip()
+            if msg.get("role") != "assistant":
+                continue
+            c = msg.get("content")
+            if isinstance(c, str) and c.strip():
+                return c.strip()
+            if isinstance(c, list):
+                parts = [b.get("text", "") for b in c if isinstance(b, dict)]
+                joined = "\n".join(p for p in parts if p)
+                if joined.strip():
+                    return joined.strip()
+            r = msg.get("reasoning_content") or msg.get("reasoning")
+            if isinstance(r, str) and r.strip():
+                return r.strip()
         return ""
 
 

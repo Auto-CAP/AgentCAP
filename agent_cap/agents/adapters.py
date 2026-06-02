@@ -11,7 +11,11 @@ from agent_cap.agents.tools import ToolProvider
 
 
 class MCPProviderAdapter:
-    """Wraps `agent_cap.runner.tool_backends.MCPToolBackend` as a ToolProvider."""
+    """Wraps `agent_cap.runner.tool_backends.MCPToolBackend` as a ToolProvider.
+
+    `set_task_allowlist` filters `list_tools()` output per task to match
+    official mcp-atlas behavior (see sandbox_client.py L44-47 in scaleapi/mcp-atlas).
+    """
 
     def __init__(
         self,
@@ -27,6 +31,16 @@ class MCPProviderAdapter:
             enabled_tools=enabled_tools or [],
         )
         self._setup_done = False
+        self._task_allowlist: Optional[set] = None
+
+    def set_task_allowlist(self, enabled_tools: Optional[List[Any]]) -> None:
+        if not enabled_tools:
+            self._task_allowlist = None
+            return
+        self._task_allowlist = {
+            t if isinstance(t, str) else (t.get("name", "") if isinstance(t, dict) else "")
+            for t in enabled_tools
+        }
 
     async def _ensure_setup(self) -> None:
         if not self._setup_done:
@@ -37,11 +51,20 @@ class MCPProviderAdapter:
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         await self._ensure_setup()
-        return await self._backend.list_tools()
+        tools = await self._backend.list_tools()
+        if self._task_allowlist is not None:
+            tools = [
+                t for t in tools
+                if t.get("function", {}).get("name", "") in self._task_allowlist
+            ]
+        return tools
 
     async def call(self, name: str, arguments: Dict[str, Any]) -> str:
         await self._ensure_setup()
-        result = await self._backend.call_tool(name, arguments)
+        try:
+            result = await self._backend.call_tool(name, arguments)
+        except Exception as exc:
+            return f"ERROR: tool '{name}' failed: {exc}"
         if isinstance(result, list):
             parts = []
             for blk in result:
@@ -69,13 +92,23 @@ def load_dataset_as_tasks(name: str, num_tasks: int = 0) -> List[Dict[str, Any]]
     for t in raw:
         msgs = list(getattr(t, "messages", []) or [])
         prompt = ""
-        if msgs:
-            prompt = str(msgs[-1].get("content", ""))
-        out.append({
+        for m in reversed(msgs):
+            if m.get("role") == "user":
+                prompt = str(m.get("content", ""))
+                break
+        system_prompt = ""
+        for m in msgs:
+            if m.get("role") == "system":
+                system_prompt = str(m.get("content", ""))
+                break
+        entry: Dict[str, Any] = {
             "task_id": getattr(t, "task_id", "") or f"task-{len(out)}",
             "user_prompt": prompt,
             "_unified_task": t,
-        })
+        }
+        if system_prompt:
+            entry["system_prompt"] = system_prompt
+        out.append(entry)
     return out
 
 

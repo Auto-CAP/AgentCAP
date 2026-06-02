@@ -56,14 +56,20 @@ def _run_coro_sync(coro: Any) -> Any:
 class GTFAEvaluator(Evaluator):
     def __init__(
         self,
-        judge_model: str = "google/gemini-3.1-flash-lite-preview",
-        judge_base_url: str = "https://openrouter.ai/api/v1",
+        judge_model: Optional[str] = None,
+        judge_base_url: Optional[str] = None,
         judge_api_key: Optional[str] = None,
         pass_threshold: float = 0.75,
     ):
-        self.judge_model = judge_model
-        self.judge_base_url = judge_base_url.rstrip("/")
-        self.judge_api_key = judge_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        self.judge_model = judge_model or os.environ.get("EVAL_LLM_MODEL") or "google/gemini-2.5-pro"
+        self.judge_base_url = (
+            judge_base_url or os.environ.get("EVAL_LLM_BASE_URL")
+            or "https://openrouter.ai/api/v1"
+        ).rstrip("/")
+        self.judge_api_key = (
+            judge_api_key or os.environ.get("EVAL_LLM_API_KEY")
+            or os.environ.get("OPENROUTER_API_KEY", "")
+        )
         self.pass_threshold = pass_threshold
 
     @staticmethod
