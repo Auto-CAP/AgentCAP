@@ -66,22 +66,26 @@ echo "== Verifying curated-100 indices file =="
 N=$(python3 -c "import json;d=json.load(open('$INDICES_FILE'));print(len(d.get('indices') or d.get('new_indices') or []))")
 echo "  $INDICES_FILE  ->  $N tasks"
 
-echo "== Launching SWE-agent batch (docker deploy, concurrency=$CONCURRENCY) =="
+echo "== Launching SWE-agent batch via unified CLI (docker, concurrency=$CONCURRENCY) =="
 mkdir -p "$OUTPUT_DIR"
-python scripts/run_sweagent.py \
-    --deployment docker \
+python -m agent_cap.agents \
+    --strategy sweagent \
+    --model "$MODEL" \
+    --base-url "$LLM_URL" \
+    --api-key dummy \
     --dataset swe-bench-lite \
     --task-indices "$INDICES_FILE" \
-    --vllm-url "$LLM_URL" \
-    --model "$MODEL" \
-    --concurrency "$CONCURRENCY" \
+    --sweagent-deployment docker \
     --sweagent-dir "$SWEAGENT_DIR" \
-    --image-repo "" \
+    --sweagent-image-repo "" \
+    --sweagent-call-limit 200 \
+    --concurrency "$CONCURRENCY" \
+    --evaluator swebench \
     --output-dir "$OUTPUT_DIR" \
     2>&1 | tee "$OUTPUT_DIR/run.log"
 
 echo "== Done.  Outputs =="
 echo "  predictions.json :  $OUTPUT_DIR/predictions.json"
 echo "  results.jsonl    :  $OUTPUT_DIR/results.jsonl"
-echo "  per-task         :  $OUTPUT_DIR/task_*"
+echo "  per-task         :  $OUTPUT_DIR/task_<instance_id>/"
 tail -1 "$OUTPUT_DIR/run.log" 2>/dev/null
