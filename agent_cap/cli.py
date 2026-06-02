@@ -847,8 +847,9 @@ def cmd_mcp_atlas(args):
     if args.max_turns:
         raw["max_turns"] = args.max_turns
 
-    limit = args.limit or int(raw.get("dataset_count", 50))
-    tasks = load_mcpatlas_tasks(limit=limit)
+    limit = args.limit or int(raw.get("dataset_count", 0))
+    free_only = bool(raw.get("free_only", False)) or bool(getattr(args, "free_only", False))
+    tasks = load_mcpatlas_tasks(limit=limit, free_only=free_only)
 
     print("=" * 70)
     print("MCP-ATLAS Benchmark")
@@ -859,6 +860,11 @@ def cmd_mcp_atlas(args):
     print(f"  Max turns:  {raw.get('max_turns', 20)}")
     print("=" * 70)
 
+    out_dir = raw.get("output_dir", "results/mcp_atlas")
+    from pathlib import Path
+
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
     runner = MCPAtlasRunner(
         base_url=raw.get("base_url", "http://localhost:8000"),
         model_id=raw.get("model_id", "default"),
@@ -866,13 +872,9 @@ def cmd_mcp_atlas(args):
         max_turns=raw.get("max_turns", 20),
         max_tokens=raw.get("max_tokens", 16384),
         temperature=raw.get("temperature", 0.0),
+        per_turn_stats_dir=f"{out_dir}/per_turn",
     )
     results = runner.run(tasks)
-
-    out_dir = raw.get("output_dir", "results/mcp_atlas")
-    from pathlib import Path
-
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
     with open(f"{out_dir}/results.jsonl", "w") as f:
         for r in results:
             f.write(
@@ -880,10 +882,16 @@ def cmd_mcp_atlas(args):
                     {
                         "task_id": r.task_id,
                         "response": r.response[:500],
+                        "num_turns": r.num_turns,
                         "tool_calls": r.tool_calls,
                         "input_tokens": r.input_tokens,
                         "output_tokens": r.output_tokens,
+                        "completion_tokens": r.completion_tokens,
+                        "reasoning_tokens": r.reasoning_tokens,
+                        "cached_tokens": r.cached_tokens,
                         "latency_ms": r.latency_ms,
+                        "ttft_ms": r.ttft_ms,
+                        "tpot_ms": r.tpot_ms_avg,
                         "errors": r.errors,
                     },
                     default=str,
@@ -960,6 +968,8 @@ def main():
     p_atlas.add_argument("--max-turns", type=int, default=None)
     p_atlas.add_argument("--base-url", type=str, default=None)
     p_atlas.add_argument("--mcp-server-url", type=str, default=None)
+    p_atlas.add_argument("--free-only", action="store_true",
+                         help="Restrict to the 60-task free-tier subset (no paid API keys).")
     p_atlas.add_argument("-v", "--verbose", action="store_true")
 
     args = parser.parse_args()

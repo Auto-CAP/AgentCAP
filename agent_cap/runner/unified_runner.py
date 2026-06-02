@@ -1356,6 +1356,9 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
             if not isinstance(claims, list):
                 claims = [str(claims)] if str(claims).strip() else []
             claims = [str(c).strip() for c in claims if str(c).strip()]
+            _data_root = os.getenv("MCP_PROMPT_DATA_ROOT", "").strip()
+            if _data_root and _data_root != "/data":
+                claims = [c.replace("/data", _data_root) for c in claims]
             _use_sys = os.getenv("USE_SYSTEM_PROMPT_IN_COMPLETION", "").strip().lower() == "true"
             _msgs: List[Dict[str, Any]] = []
             if _use_sys:
@@ -1363,7 +1366,10 @@ def _load_dataset_tasks(dataset_name: str, limit: int = 0) -> List[UnifiedTask]:
                     "role": "system",
                     "content": "You are a factual, tool-aware assistant connected to a variety of tools. Use the available tools to answer the user query. Do not ask the user for clarification; fully complete the task using the information provided.",
                 })
-            _msgs.append({"role": "user", "content": ex.get("PROMPT", "")})
+            _prompt_text = ex.get("PROMPT", "")
+            if _data_root and _data_root != "/data":
+                _prompt_text = _prompt_text.replace("/data", _data_root)
+            _msgs.append({"role": "user", "content": _prompt_text})
             tasks.append(
                 UnifiedTask(
                     task_id=task_id,

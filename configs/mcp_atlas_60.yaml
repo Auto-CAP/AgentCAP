@@ -1,9 +1,9 @@
-name: mcp-atlas-single-agent
+name: mcp-atlas-gptoss-60free
 model_id: unsloth/gpt-oss-120b
 base_url: http://localhost:8000
 mcp_server_url: http://localhost:1984
 max_turns: 20
 max_tokens: 16384
 temperature: 0.0
-dataset_count: 50
-output_dir: results/mcp_atlas
+free_only: true
+output_dir: /data/sicheng/agent-team-data/gptoss-120b_mcpatlas_60free
