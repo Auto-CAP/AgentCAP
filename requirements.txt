@@ -1,10 +1,20 @@
+# Core (mirrors pyproject.toml [project.dependencies])
 pyyaml>=6.0
+openai>=1.0
+httpx>=0.25
+aiohttp>=3.9
+datasets>=2.0
+openai-harmony>=0.0.4
+tiktoken>=0.7
 
 # Visualization (optional)
 plotly>=5.0.0
 
 # CUDA timing (optional)
 # torch>=2.0.0
+
+# SWE-bench Modal sandbox backend (only needed for run_swebench_modal_*.sh)
+# boto3>=1.34
 
 # Development
 pytest>=7.0.0
