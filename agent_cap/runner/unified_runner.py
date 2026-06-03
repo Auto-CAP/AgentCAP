@@ -1367,13 +1367,10 @@ def _load_dataset_tasks(
             _data_root = os.getenv("MCP_PROMPT_DATA_ROOT", "").strip()
             if _data_root and _data_root != "/data":
                 claims = [c.replace("/data", _data_root) for c in claims]
-            _use_sys = os.getenv("USE_SYSTEM_PROMPT_IN_COMPLETION", "").strip().lower() == "true"
-            _msgs: List[Dict[str, Any]] = []
-            if _use_sys:
-                _msgs.append({
-                    "role": "system",
-                    "content": "You are a factual, tool-aware assistant connected to a variety of tools. Use the available tools to answer the user query. Do not ask the user for clarification; fully complete the task using the information provided.",
-                })
+            _msgs: List[Dict[str, Any]] = [{
+                "role": "system",
+                "content": "You are a factual, tool-aware assistant connected to a variety of tools. Use the available tools to answer the user query. Do not ask the user for clarification; fully complete the task using the information provided.",
+            }]
             _prompt_text = ex.get("PROMPT", "")
             if _data_root and _data_root != "/data":
                 _prompt_text = _prompt_text.replace("/data", _data_root)
