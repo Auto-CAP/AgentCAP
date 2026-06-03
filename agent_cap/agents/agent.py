@@ -56,6 +56,15 @@ class Agent:
         """Make one LLM call. Does not auto-execute tool calls (see `run`)."""
         msgs_in = list(self.state.messages)
         reply = await self.llm.chat(self.spec.endpoint, msgs_in, tool_schemas)
+        tool_calls = list(reply.assistant.get("tool_calls") or [])
+        if not tool_calls:
+            from agent_cap.runner.unified_runner import _recover_tool_calls_from_content
+
+            content = reply.assistant.get("content") or ""
+            recovered = _recover_tool_calls_from_content(content, len(self.state.turns))
+            if recovered:
+                tool_calls = recovered
+                reply.assistant["tool_calls"] = recovered
         self.state.messages.append(reply.assistant)
         self.state.usage.add(reply.usage)
         record = TurnRecord(
@@ -63,7 +72,7 @@ class Agent:
             model=self.spec.endpoint.name,
             messages_in=msgs_in,
             assistant=reply.assistant,
-            tool_calls=list(reply.assistant.get("tool_calls") or []),
+            tool_calls=tool_calls,
             usage=reply.usage,
             latency_s=reply.latency_s,
             ttft_s=getattr(reply, "ttft_s", 0.0) or 0.0,
