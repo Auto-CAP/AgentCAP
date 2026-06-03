@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LEGACY: uses `scripts/run_sweagent.py --deployment modal` (NOT unified `agent_cap.agents`).
+# DIRECT (uses the dedicated CLI): uses `scripts/run_sweagent.py --deployment modal` (NOT unified `agent_cap.agents`).
 # See run_swebench_modal_100.sh for the unified version.
 #
 # Required runtime: modal auth (~/.modal.toml), boto3, /tmp/swe_agent checkout,
@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
 
 LLM_URL="${LLM_URL:-}"
-OUTPUT_DIR="/data/sicheng/agent-team-data/gptoss-120b_sweagent_swebenchlite_curated100_modal_legacy"
+OUTPUT_DIR="/data/sicheng/agent-team-data/gptoss-120b_sweagent_swebenchlite_curated100_modal_direct"
 CONCURRENCY=4
 INDICES_FILE="$REPO_ROOT/benchmarks/swe_bench_lite_curated_100.json"
 SWEAGENT_DIR="${SWEAGENT_DIR:-/tmp/swe_agent}"

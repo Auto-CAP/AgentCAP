@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LEGACY: uses dedicated `agent_cap.cli mcp-atlas` runner against the docker MCP container.
+# DIRECT (uses the dedicated CLI): uses dedicated `agent_cap.cli mcp-atlas` runner against the docker MCP container.
 # See run_mcpatlas_docker_60.sh for the unified `agent_cap.agents` version.
 #
 # Required env: BRAVE_API_KEY + GITHUB_TOKEN in $MCP_ENV_FILE.
@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
 
 ENV_FILE="${MCP_ENV_FILE:-$REPO_ROOT/third_party/mcp-atlas/.env}"
-OUTPUT_DIR="/data/sicheng/agent-team-data/gptoss-120b_mcpatlas_60free_docker_legacy"
+OUTPUT_DIR="/data/sicheng/agent-team-data/gptoss-120b_mcpatlas_60free_docker_direct"
 LLM_URL="http://localhost:8000"
 IMAGE="ghcr.io/scaleapi/mcp-atlas:latest"
 

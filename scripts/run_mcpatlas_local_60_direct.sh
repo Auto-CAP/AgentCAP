@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LEGACY VERSION: uses the dedicated `agent_cap.cli mcp-atlas` streaming
+# DIRECT VERSION: uses the dedicated `agent_cap.cli mcp-atlas` streaming
 # runner directly (NOT the unified `agent_cap.agents` CLI).
 # Kept as a reference / fallback path. See run_mcpatlas_local_60.sh for
 # the unified version.
@@ -11,14 +11,14 @@
 #   vLLM:   --reasoning-parser openai_gptoss --tool-call-parser openai
 #           --max-model-len 131072 --enable-prompt-tokens-details
 #
-# USAGE: bash scripts/run_mcpatlas_local_60_legacy.sh [--data-dir DIR] [--output-dir DIR]
+# USAGE: bash scripts/run_mcpatlas_local_60_direct.sh [--data-dir DIR] [--output-dir DIR]
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
 
 DATA_DIR="${MCP_DATA_DIR:-/data}"
-OUTPUT_DIR="/data/sicheng/agent-team-data/gptoss-120b_mcpatlas_60free_local_legacy"
+OUTPUT_DIR="/data/sicheng/agent-team-data/gptoss-120b_mcpatlas_60free_local_direct"
 LLM_URL="http://localhost:8000"
 
 while [[ $# -gt 0 ]]; do
