@@ -170,6 +170,12 @@ class RunResult:
                 sum(len(t.tool_calls) for t in self.turns) if self.turns
                 else int(self.extras.get("tool_calls") or 0)
             ),
+            "tool_call_latency_ms": (
+                sum(
+                    float(tr.get("latency_s") or 0.0) * 1000.0
+                    for t in self.turns for tr in t.tool_results
+                ) if self.turns else float(self.extras.get("tool_call_latency_ms") or 0.0)
+            ),
             "ttft_ms": (
                 (self.turns[0].ttft_s * 1000.0) if self.turns
                 else float(self.extras.get("ttft_ms_first") or self.extras.get("ttft_ms") or 0.0)
