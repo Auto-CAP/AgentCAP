@@ -263,11 +263,14 @@ async def list_openai_tools(
     async with session.post(f"{mcp_url}/list-tools") as resp:
         data = await resp.json()
     all_tools = data if isinstance(data, list) else data.get("tools", [])
-    enabled_set = set(enabled)
+    enabled_set = {
+        e if isinstance(e, str) else (e.get("name", "") if isinstance(e, dict) else "")
+        for e in enabled
+    }
     result = []
     for t in all_tools:
         tool_name = t.get("name", "")
-        if tool_name in enabled_set or f"{tool_name}" in enabled_set:
+        if tool_name in enabled_set:
             schema = {
                 "type": "function",
                 "function": {
