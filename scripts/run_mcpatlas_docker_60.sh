@@ -82,7 +82,6 @@ python -m agent_cap.agents \
     --model unsloth/gpt-oss-120b \
     --base-url "$LLM_URL/v1" \
     --api-key dummy \
-    --use-streaming \
     --dataset mcp-atlas \
     --num-tasks 60 \
     --evaluator gtfa \
