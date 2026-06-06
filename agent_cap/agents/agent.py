@@ -65,7 +65,9 @@ class Agent:
             if recovered:
                 tool_calls = recovered
                 reply.assistant["tool_calls"] = recovered
-        self.state.messages.append(reply.assistant)
+        clean_assistant = {k: v for k, v in reply.assistant.items() if v not in (None, "") and k in ("role", "content", "tool_calls", "reasoning_content")}
+        if "role" not in clean_assistant: clean_assistant["role"] = "assistant"
+        self.state.messages.append(clean_assistant)
         self.state.usage.add(reply.usage)
         record = TurnRecord(
             role=self.role,

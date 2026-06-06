@@ -451,6 +451,26 @@ async def chat_completion_streaming(
     if collected_reasoning_content:
         assistant_message["reasoning_content"] = collected_reasoning_content
     if collected_tool_calls:
+        for tc in collected_tool_calls.values():
+            args = tc.get("function", {}).get("arguments") or ""
+            if args:
+                try:
+                    json.loads(args)
+                except json.JSONDecodeError as e:
+                    if "Extra data" in str(e) and getattr(e, "pos", None):
+                        tc["function"]["arguments"] = args[: e.pos]
+                    else:
+                        depth = 0
+                        first_end = -1
+                        for i, ch in enumerate(args):
+                            if ch == "{": depth += 1
+                            elif ch == "}":
+                                depth -= 1
+                                if depth == 0:
+                                    first_end = i + 1
+                                    break
+                        if first_end > 0:
+                            tc["function"]["arguments"] = args[:first_end]
         assistant_message["tool_calls"] = [
             collected_tool_calls[i] for i in sorted(collected_tool_calls.keys())
         ]

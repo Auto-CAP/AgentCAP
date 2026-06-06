@@ -208,6 +208,27 @@ async def _astream(
 
     content_text = "".join(content_parts)
     reasoning_text = "".join(reasoning_parts)
+    for frag in tool_call_frags.values():
+        args = frag["function"].get("arguments") or ""
+        if args:
+            try:
+                json.loads(args)
+            except json.JSONDecodeError as e:
+                if "Extra data" in str(e) and getattr(e, "pos", None):
+                    frag["function"]["arguments"] = args[: e.pos]
+                else:
+                    depth = 0
+                    first_end = -1
+                    for i, ch in enumerate(args):
+                        if ch == "{":
+                            depth += 1
+                        elif ch == "}":
+                            depth -= 1
+                            if depth == 0:
+                                first_end = i + 1
+                                break
+                    if first_end > 0:
+                        frag["function"]["arguments"] = args[:first_end]
     tool_calls = [
         {"id": frag["id"], "type": "function", "function": frag["function"]}
         for frag in tool_call_frags.values()
