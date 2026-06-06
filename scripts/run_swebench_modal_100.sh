@@ -109,8 +109,32 @@ python -m agent_cap.agents \
     --output-dir "$OUTPUT_DIR" \
     2>&1 | tee "$OUTPUT_DIR/run.log"
 
-echo "== Done.  Outputs =="
+echo "== Inference done. Outputs =="
 echo "  predictions.json :  $OUTPUT_DIR/predictions.json"
 echo "  results.jsonl    :  $OUTPUT_DIR/results.jsonl"
 echo "  per-task         :  $OUTPUT_DIR/task_<instance_id>/"
-tail -1 "$OUTPUT_DIR/run.log" 2>/dev/null
+
+if [[ ! -f "$OUTPUT_DIR/predictions.json" ]]; then
+    echo "ERROR: predictions.json missing; skipping eval"
+    exit 1
+fi
+
+EVAL_RUN_ID="${EVAL_RUN_ID:-$(basename "$OUTPUT_DIR")_$(date +%s)}"
+echo
+echo "== Running swebench harness on Modal (run_id=$EVAL_RUN_ID) =="
+cd "$OUTPUT_DIR"
+PYTHONUNBUFFERED=1 MODAL_LOGLEVEL=INFO python -m swebench.harness.run_evaluation \
+    --dataset_name princeton-nlp/SWE-bench_Lite \
+    --predictions_path predictions.json \
+    --max_workers 4 \
+    --run_id "$EVAL_RUN_ID" \
+    --cache_level instance \
+    --modal True \
+    2>&1 | tee "$OUTPUT_DIR/swebench_eval_modal.log"
+
+SUMMARY=$(ls "$OUTPUT_DIR"/*"$EVAL_RUN_ID"*.json 2>/dev/null | head -1)
+if [[ -n "$SUMMARY" ]]; then
+    echo
+    echo "== Eval summary =="
+    python3 -c "import json; d=json.load(open('$SUMMARY')); print(f\"  resolved : {d.get('resolved_instances')}/{d.get('submitted_instances')}\"); print(f\"  completed: {d.get('completed_instances')}\"); print(f\"  errors   : {d.get('error_instances')}\")"
+fi
