@@ -120,21 +120,54 @@ if [[ ! -f "$OUTPUT_DIR/predictions.json" ]]; then
 fi
 
 EVAL_RUN_ID="${EVAL_RUN_ID:-$(basename "$OUTPUT_DIR")_$(date +%s)}"
+EVAL_BATCH="${EVAL_BATCH:-25}"
 echo
-echo "== Running swebench harness on Modal (run_id=$EVAL_RUN_ID) =="
+echo "== Running swebench harness on Modal in batches of $EVAL_BATCH (run_id=$EVAL_RUN_ID) =="
+echo "   (single 100-pred starmap saturates Modal queue; batching keeps each step <30 in-flight)"
 cd "$OUTPUT_DIR"
-PYTHONUNBUFFERED=1 MODAL_LOGLEVEL=INFO python -m swebench.harness.run_evaluation \
-    --dataset_name princeton-nlp/SWE-bench_Lite \
-    --predictions_path predictions.json \
-    --max_workers 4 \
-    --run_id "$EVAL_RUN_ID" \
-    --cache_level instance \
-    --modal True \
-    2>&1 | tee "$OUTPUT_DIR/swebench_eval_modal.log"
+PYTHONUNBUFFERED=1 MODAL_LOGLEVEL=INFO python3 - <<PY 2>&1 | tee "$OUTPUT_DIR/swebench_eval_modal.log"
+import json, os, subprocess, time
+from pathlib import Path
 
-SUMMARY=$(ls "$OUTPUT_DIR"/*"$EVAL_RUN_ID"*.json 2>/dev/null | head -1)
-if [[ -n "$SUMMARY" ]]; then
-    echo
-    echo "== Eval summary =="
-    python3 -c "import json; d=json.load(open('$SUMMARY')); print(f\"  resolved : {d.get('resolved_instances')}/{d.get('submitted_instances')}\"); print(f\"  completed: {d.get('completed_instances')}\"); print(f\"  errors   : {d.get('error_instances')}\")"
-fi
+OUT = Path(".")
+RUN_ID = "$EVAL_RUN_ID"
+BATCH = $EVAL_BATCH
+preds = json.load(open("predictions.json"))
+print(f"total: {len(preds)}", flush=True)
+
+reports_root = OUT / "logs" / "run_evaluation" / RUN_ID / "agentcap-unified"
+done = {p.parent.name for p in reports_root.glob("*/report.json")} if reports_root.exists() else set()
+remaining = [p for p in preds if p["instance_id"] not in done]
+print(f"remaining: {len(remaining)}", flush=True)
+batches = [remaining[i:i+BATCH] for i in range(0, len(remaining), BATCH)]
+
+for bi, batch in enumerate(batches):
+    bf = OUT / f"preds_batch_{bi}.json"
+    json.dump(batch, open(bf, "w"))
+    print(f"=== batch {bi+1}/{len(batches)} ({len(batch)}) ===", flush=True)
+    t0 = time.time()
+    subprocess.run([
+        "python3", "-u", "-m", "swebench.harness.run_evaluation",
+        "--dataset_name", "princeton-nlp/SWE-bench_Lite",
+        "--predictions_path", str(bf),
+        "--max_workers", "4",
+        "--run_id", RUN_ID,
+        "--cache_level", "instance",
+        "--modal", "True",
+    ], check=False)
+    n = len(list(reports_root.glob("*/report.json"))) if reports_root.exists() else 0
+    print(f"  batch {bi+1} done in {(time.time()-t0)/60:.1f} min, total_reports={n}", flush=True)
+PY
+
+echo
+echo "== Aggregate eval result =="
+python3 - <<PY
+import json, pathlib
+root = pathlib.Path("$OUTPUT_DIR/logs/run_evaluation/$EVAL_RUN_ID/agentcap-unified")
+reports = list(root.glob("*/report.json"))
+resolved = sum(1 for rp in reports
+               if json.loads(rp.read_text()).get(rp.parent.name, {}).get("resolved"))
+total = len(json.load(open("$OUTPUT_DIR/predictions.json")))
+print(f"  reports : {len(reports)}/{total}")
+print(f"  resolved: {resolved}/{total}  ({resolved/total*100:.1f}%)")
+PY
