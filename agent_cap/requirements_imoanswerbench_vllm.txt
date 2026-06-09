@@ -13,6 +13,10 @@ PyYAML==6.0.3
 pyzmq==27.1.0
 sympy==1.14.0
 transformers==4.57.1
+<<<<<<< HEAD
+=======
+
+>>>>>>> 8a397e5 (changed requirements_imoanswerbench_vllm.txt)
 torch==2.11.0+cu128
 torchvision==0.26.0+cu128
 torchaudio==2.11.0+cu128
