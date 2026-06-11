@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import requests
 import aiohttp
+import traceback
 # from google import genai
 from math_verify import parse, verify
 from openai import OpenAI, BadRequestError
@@ -1639,18 +1640,27 @@ def run_deepseek32_attempt(
         for turn_idx in range(max_turns):
             num_requests += 1
 
-            request_result = stream_deepseek32_chat_completion(
-                client=client,
-                model=model,
-                messages=messages,
-                tools=tools,
-                max_tokens=max_tokens,
-                context_tokens=context_tokens,
-                tokenizer=tokenizer,
-                temperature=temperature,
-                seed=seed,
-                enable_thinking=enable_thinking,
-            )
+            try:
+                request_result = stream_deepseek32_chat_completion(
+                    client=client,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                    context_tokens=context_tokens,
+                    tokenizer=tokenizer,
+                    temperature=temperature,
+                    seed=seed,
+                    enable_thinking=enable_thinking,
+                )
+            except ValueError as exc:
+                if "Prompt is too long for context window" in str(exc):
+                    errors.append(str(exc))
+                    response_text = ""
+                    last_finish_reason = "context_length_exceeded"
+                    break
+
+                raise
 
             content = request_result["content"]
             reasoning = request_result["reasoning"]
@@ -1945,6 +1955,64 @@ def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
     print(result["response"], flush=True)
 
 
+def make_failed_task_result(
+    task: Any,
+    example_index: int,
+    exc: BaseException,
+    stage: str = "solve_one_task",
+) -> Dict[str, Any]:
+    expected = (getattr(task, "eval_config", None) or {}).get("expected")
+
+    tb = "".join(
+        traceback.format_exception(
+            type(exc),
+            exc,
+            exc.__traceback__,
+        )
+    )
+
+    # Avoid writing a huge traceback into every JSONL row.
+    max_tb_chars = _env_int("AGENTCAP_MAX_EXCEPTION_TRACEBACK_CHARS", 12000)
+    if len(tb) > max_tb_chars:
+        tb = (
+            tb[: max_tb_chars // 2]
+            + f"\n\n[... truncated {len(tb) - max_tb_chars} traceback characters ...]\n\n"
+            + tb[-max_tb_chars // 2 :]
+        )
+
+    error_summary = f"{stage} failed: {type(exc).__name__}: {exc}"
+
+    return {
+        "task_id": getattr(task, "id", f"example_{example_index}"),
+        "task_name": getattr(task, "name", ""),
+        "category": getattr(task, "category", ""),
+        "expected": expected,
+        "predicted": None,
+        "score": 0.0,
+        "correct": False,
+        "response": "",
+        "tool_calls": 0,
+        "num_requests": 0,
+        "tool_latencies_ms": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "latency_ms": 0.0,
+        "ttft_ms": 0.0,
+        "tpot_ms_avg": 0.0,
+        "tpot_ms_p99": 0.0,
+        "errors": [
+            error_summary,
+            tb,
+        ],
+        "judge_equivalent": False,
+        "judge_response": error_summary,
+        "judge_status_code": None,
+        "judge_attempts": 0,
+        "detailed_rows": [],
+        "total_cached_tokens": 0,
+        "finish_reason": "exception",
+    }
+
 def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
     total = len(results)
     total_score = sum(float(r["score"]) for r in results)
@@ -1991,29 +2059,56 @@ async def async_main(
 
     results: List[Dict[str, Any]] = []
     for index, task in enumerate(tasks, start=1):
-        result = await solve_one_task(
-            task=task,
-            example_index=index - 1,
-            model=args.model,
-            base_url=f"http://127.0.0.1:{args.port}/v1",
-            max_turns=args.max_turns,
-            max_tokens=args.max_tokens,
-            context_tokens=args.context_tokens,
-            tokenizer=tokenizer,
-            temperature=args.temperature,
-            startup_timeout=args.startup_timeout,
-            exec_timeout=args.exec_timeout,
-            preload=args.preload,
-            auto_print_last_expr=args.auto_print_last_expr,
-            seed=args.seed + index,
-            judge=judge,
-            enable_thinking=args.enable_thinking,
-        )
+        try:
+            result = await solve_one_task(
+                task=task,
+                example_index=index - 1,
+                model=args.model,
+                base_url=f"http://127.0.0.1:{args.port}/v1",
+                max_turns=args.max_turns,
+                max_tokens=args.max_tokens,
+                context_tokens=args.context_tokens,
+                tokenizer=tokenizer,
+                temperature=args.temperature,
+                startup_timeout=args.startup_timeout,
+                exec_timeout=args.exec_timeout,
+                preload=args.preload,
+                auto_print_last_expr=args.auto_print_last_expr,
+                seed=args.seed + index,
+                judge=judge,
+                enable_thinking=args.enable_thinking,
+            )
 
+        except Exception as exc:
+            print(
+                "\n" + "=" * 100,
+                flush=True,
+            )
+            print(
+                f"[TASK FAILED BUT BENCHMARK WILL CONTINUE] "
+                f"index={index}, task_id={getattr(task, 'id', None)}, "
+                f"error={type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            print("=" * 100 + "\n", flush=True)
+
+            result = make_failed_task_result(
+                task=task,
+                example_index=index - 1,
+                exc=exc,
+                stage="solve_one_task",
+            )
 
         results.append(result)
-        append_detailed_result_rows(result.get("detailed_rows", []), output_paths["detailed_results_path"])
-        append_output_data_row(result, index, output_paths["output_data_path"])
+        append_detailed_result_rows(
+            result.get("detailed_rows", []),
+            output_paths["detailed_results_path"],
+        )
+        append_output_data_row(
+            result,
+            index,
+            output_paths["output_data_path"],
+        )
         print_task_result(index, len(tasks), result)
         print(f'[JUDGE RESPONSE]: {result["judge_response"]}', flush=True)
 
@@ -2133,7 +2228,14 @@ def main() -> None:
 
     wall_time_s = time.time() - t0
     print_summary(results, wall_time_s)
-    write_metrics_file(results, wall_time_s, output_paths, args)
+
+    try:
+        write_metrics_file(results, wall_time_s, output_paths, args)
+    except Exception as exc:
+        print(
+            f"[WARNING] Failed to write metrics file: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
