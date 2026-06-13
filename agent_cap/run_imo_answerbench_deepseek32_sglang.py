@@ -2188,6 +2188,8 @@ def main() -> None:
     parser.add_argument("--cuda-graph-max-bs", type=int, default=None)
     parser.add_argument("--enable-torch-compile", action="store_true")
     parser.add_argument("--allow-auto-truncate", action="store_true", default=True)
+    parser.add_argument("--enable-thinking", dest="enable_thinking", action="store_true", default=True)
+    parser.add_argument("--disable-thinking", dest="enable_thinking", action="store_false")
 
     parser.add_argument("--num-tasks", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
