@@ -51,7 +51,7 @@ fastrlock==0.8.3
 filelock==3.20.0
 
 # --- SGLang stack (pin to known-working versions) ---
-sglang[all]==0.5.9
+sglang[all]==0.5.13
 sgl-kernel==0.3.20
 hf_transfer==0.1.9
 flashinfer-python==0.5.3
