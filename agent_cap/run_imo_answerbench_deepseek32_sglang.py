@@ -2207,9 +2207,6 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
 
 
-    parser.add_argument("--stream-interval", type=int, default=1)
-
-
     parser.add_argument("--server-timeout", type=int, default=3600)
     parser.add_argument("--preload-workers", type=int, default=8)
     parser.add_argument("--judge-model", type=str, default="openrouter/elephant-alpha")
