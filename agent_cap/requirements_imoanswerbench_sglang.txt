@@ -1,3 +1,4 @@
 # --- SGLang stack (pin to known-working versions) ---
 sglang[all]==0.5.13
 math-verify==0.8.0
+tokenizers

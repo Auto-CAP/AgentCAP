@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from tokenizers import Tokenizer
 import requests
 import aiohttp
 import traceback
@@ -1339,6 +1340,24 @@ def _safe_json_loads_arguments(arguments: Optional[str]) -> Dict[str, Any]:
         return {"value": parsed}
     except Exception:
         return {"code": arguments}
+    
+class DSV32TokenizerWrapper:
+    def __init__(self, model_path: str):
+        self.name_or_path = model_path
+        self._agentcap_model_path = model_path
+        self.chat_template = None
+
+        tokenizer_json = Path(model_path) / "tokenizer.json"
+        if not tokenizer_json.is_file():
+            raise FileNotFoundError(f"Missing tokenizer.json: {tokenizer_json}")
+
+        self._tokenizer = Tokenizer.from_file(str(tokenizer_json))
+
+    def encode(self, text: str, add_special_tokens: bool = False):
+        # DeepSeek-V3.2's encoding_dsv32.py already inserts BOS/EOS and
+        # model-specific special tokens. So we do not add extra special tokens here.
+        del add_special_tokens
+        return self._tokenizer.encode(text).ids
 
 def _extract_tool_code_for_debug(function_name: str, tool_args: Dict[str, Any], arguments_str: str) -> str:
     """
@@ -1474,6 +1493,12 @@ def stream_deepseek32_chat_completion(
         "temperature": temperature,
         "stream": True,
         "stream_options": {"include_usage": True},
+        "extra_body": {
+            "chat_template_kwargs": {
+                "thinking": enable_thinking,
+            },
+            "separate_reasoning": True,
+        },
     }
 
     if tools:
@@ -2215,15 +2240,12 @@ def main() -> None:
 
     args = parser.parse_args()
     args.model_path = resolve_model_path(args.model_path)
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_path,
-        trust_remote_code=True,
-    )
-    setattr(tokenizer, "_agentcap_model_path", args.model_path)
+    tokenizer = DSV32TokenizerWrapper(args.model_path)
+
     encoder_path = Path(args.model_path) / "encoding" / "encoding_dsv32.py"
     print(f"[DeepSeek-V3.2 encoder] path={encoder_path}", flush=True)
     print(f"[DeepSeek-V3.2 encoder] exists={encoder_path.is_file()}", flush=True)
-    print(f"[DeepSeek-V3.2 tokenizer] chat_template is None={tokenizer.chat_template is None}", flush=True)
+    print(f"[DeepSeek-V3.2 tokenizer] loaded from tokenizer.json", flush=True)
     output_paths = initialize_output_files(args)
     t0 = time.time()
 
