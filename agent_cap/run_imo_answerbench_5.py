@@ -1450,7 +1450,7 @@ def sglang_generate_with_ids_streaming_native_on_path(
 
     sampling_params = {
         "max_new_tokens": int(max_new_tokens),
-        "max_tokens": int(max_new_tokens),
+        # "max_tokens": int(max_new_tokens), # does not work with sglang 0.5.13
         "temperature": float(temperature),
         "top_p": float(top_p),
         "stop_token_ids": list(map(int, stop_token_ids)),
