@@ -6,7 +6,7 @@ annotated-types==0.7.0
 anthropic==0.71.0
 antlr4-python3-runtime==4.13.2
 anyio==4.11.0
-apache-tvm-ffi==0.1.5
+apache-tvm-ffi
 arckit==0.1.0
 astor==0.8.1
 asttokens==3.0.1
