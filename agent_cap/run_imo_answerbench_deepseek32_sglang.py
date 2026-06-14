@@ -24,7 +24,7 @@ import aiohttp
 import traceback
 # from google import genai
 from math_verify import parse, verify
-from openai import OpenAI, BadRequestError
+from openai import OpenAI, BadRequestError, APIConnectionError, APITimeoutError, APIError
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 import copy
@@ -1012,6 +1012,23 @@ class SGLangInfraDeepSeek32:
 
         self.server_process = self._start_server()
         self._wait_for_server()
+    
+    def restart(self, reason: str = "") -> None:
+        print("\n" + "=" * 100, flush=True)
+        print(
+            f"[SGLang restart requested] reason={reason}",
+            flush=True,
+        )
+        print("=" * 100 + "\n", flush=True)
+
+        with contextlib.suppress(Exception):
+            self.stop()
+
+        sleep_s = _env_int("AGENTCAP_SERVER_RESTART_SLEEP_S", 15)
+        print(f"Sleeping {sleep_s}s before restarting SGLang...", flush=True)
+        time.sleep(sleep_s)
+
+        self.start()
 
     def stop(self) -> None:
         if self.server_process is not None and self.server_process.poll() is None:
@@ -2096,10 +2113,54 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
             print(f"  {ans}: {cnt}")
 
 
+def _exception_chain(exc: BaseException):
+    """
+    Yield exc, then its __cause__ / __context__ chain.
+    Useful because OpenAI wraps httpx/httpcore connection errors.
+    """
+    seen = set()
+    cur = exc
+
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        yield cur
+
+        if getattr(cur, "__cause__", None) is not None:
+            cur = cur.__cause__
+        else:
+            cur = getattr(cur, "__context__", None)
+
+
+def is_local_server_connection_error(exc: BaseException) -> bool:
+    """
+    Detect failures caused by the local SGLang/vLLM OpenAI-compatible server
+    disappearing or refusing connections.
+    """
+    for e in _exception_chain(exc):
+        if isinstance(e, APIConnectionError):
+            return True
+
+        # Optional: timeout can also mean the server is wedged.
+        if isinstance(e, APITimeoutError):
+            return True
+
+        msg = str(e).lower()
+        if (
+            "connection refused" in msg
+            or "connection reset" in msg
+            or "connection aborted" in msg
+            or "server disconnected" in msg
+            or "remote protocol error" in msg
+        ):
+            return True
+
+    return False
+
 async def async_main(
     args: argparse.Namespace,
     output_paths: Dict[str, str],
     tokenizer: Any,
+    infra: SGLangInfraDeepSeek32,
 ) -> List[Dict[str, Any]]:
     judge = OpenRouterEquivalenceJudge(model_name=args.judge_model)
 
@@ -2148,6 +2209,46 @@ async def async_main(
                 stage="solve_one_task",
             )
 
+            if is_local_server_connection_error(exc):
+                result["errors"].append(
+                    "Detected local inference server connection failure; restarting SGLang before next task."
+                )
+                result["finish_reason"] = "server_connection_error"
+
+                try:
+                    infra.restart(
+                        reason=(
+                            f"task_index={index}, "
+                            f"task_id={getattr(task, 'id', None)}, "
+                            f"error={type(exc).__name__}: {exc}"
+                        )
+                    )
+                except Exception as restart_exc:
+                    result["errors"].append(
+                        f"SGLang restart failed: {type(restart_exc).__name__}: {restart_exc}"
+                    )
+                    result["finish_reason"] = "server_restart_failed"
+                    print(
+                        f"[FATAL] SGLang restart failed: "
+                        f"{type(restart_exc).__name__}: {restart_exc}",
+                        flush=True,
+                    )
+                    # If restart fails, stop the benchmark because every following task
+                    # will probably also fail.
+                    results.append(result)
+                    append_detailed_result_rows(
+                        result.get("detailed_rows", []),
+                        output_paths["detailed_results_path"],
+                    )
+                    append_output_data_row(
+                        result,
+                        index,
+                        output_paths["output_data_path"],
+                    )
+                    print_task_result(index, len(tasks), result)
+                    print(f'[JUDGE RESPONSE]: {result["judge_response"]}', flush=True)
+                    break
+
         results.append(result)
         append_detailed_result_rows(
             result.get("detailed_rows", []),
@@ -2194,8 +2295,8 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=256)
 
     # Keep for compatibility, but map it to SGLang mem_fraction_static.
-    parser.add_argument("--gpu-memory-utilization", type=float, default=0.88)
-    parser.add_argument("--mem-fraction-static", type=float, default=None)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
+    parser.add_argument("--mem-fraction-static", type=float, default=0.85)
 
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--data-parallel-size", type=int, default=1)
@@ -2281,7 +2382,7 @@ def main() -> None:
 
     try:
         infra.start()
-        results = asyncio.run(async_main(args, output_paths, tokenizer))
+        results = asyncio.run(async_main(args, output_paths, tokenizer, infra))
     finally:
         infra.stop()
 
