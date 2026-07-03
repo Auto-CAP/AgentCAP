@@ -212,8 +212,10 @@ class IMOAnswerBenchEvaluator:
 
     1. Extract predicted answer via `\\boxed{...}` / "final answer is" / bold.
     2. Try `math_verify` symbolic equivalence (fast, deterministic).
-    3. If symbolic check is False AND `OPENROUTER_API_KEY` is set, ask an
-       LLM judge (default: openrouter/elephant-alpha) for semantic equivalence.
+    3. If symbolic check is False, ask an LLM judge for semantic equivalence:
+       - If `base_url` and `api_key` are passed, call that OpenAI-compatible endpoint directly
+         (e.g. Gemini: base_url=https://generativelanguage.googleapis.com/v1beta/openai).
+       - Otherwise falls back to OpenRouter if OPENROUTER_API_KEY is set.
 
     Expects `task_meta` to carry the gold answer under `answer` / `expected` /
     `gold` / inside `eval_config`.
@@ -223,10 +225,18 @@ class IMOAnswerBenchEvaluator:
         self,
         judge_model: str = "openrouter/elephant-alpha",
         judge_timeout_s: float = 60.0,
+        name: str = "",
+        base_url: str = "",
+        api_key: str = "",
         **_: Any,
     ) -> None:
-        self.judge_model = judge_model
+        import os
+        self.judge_model = name or judge_model
         self.judge_timeout_s = judge_timeout_s
+        self.base_url = base_url
+        # YAML loading does not expand env vars; expandvars here so both the
+        # YAML path (e.g. "${GEMINI_API_KEY}") and the CLI path work correctly.
+        self.api_key = os.path.expandvars(api_key) if api_key else api_key
 
     def evaluate(self, task_meta: Dict[str, Any], output_text: str) -> EvalResult:
         gold = _pick_gold(task_meta)
@@ -259,9 +269,13 @@ class IMOAnswerBenchEvaluator:
                 },
             )
 
-        judge_decision, judge_meta = _openrouter_judge(
-            predicted, gold, model=self.judge_model, timeout_s=self.judge_timeout_s,
-        )
+        if self.base_url and self.api_key:
+            judge_decision, judge_meta = self._configured_judge(predicted, gold)
+        else:
+            judge_decision, judge_meta = _openrouter_judge(
+                predicted, gold, model=self.judge_model, timeout_s=self.judge_timeout_s,
+            )
+
         if judge_decision is True:
             return EvalResult(
                 passed=True, score=1.0,
@@ -283,6 +297,23 @@ class IMOAnswerBenchEvaluator:
                 "judge": judge_meta,
             },
         )
+
+    def _configured_judge(self, predicted: str, gold: str):
+        decision, _, raw, err = _call_openai_judge(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            model=self.judge_model,
+            system_prompt=_JUDGE_SYSTEM,
+            user_prompt=f"PREDICTED: {predicted}\nEXPECTED: {gold}",
+            temperature=0.0,
+            max_tokens=128,
+            timeout_s=self.judge_timeout_s,
+            decision_field="equivalent",
+            score_field="",
+        )
+        if err:
+            return None, {"error": err}
+        return decision, {"model": self.judge_model, "raw": (raw or "")[:400], "decision": decision}
 
 
 @register_evaluator("exact")
