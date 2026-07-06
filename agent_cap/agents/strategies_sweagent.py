@@ -31,6 +31,7 @@ import os
 import subprocess
 import sys
 import time
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -136,8 +137,16 @@ class SWEAgentStrategy(Strategy):
         env["SWEAGENT_STREAM_STATS_PATH"] = str(stats_path)
 
         t0 = time.perf_counter()
-        r = subprocess.run(
-            cmd, env=env, capture_output=True, text=True,
+        # Run the blocking SWE-agent subprocess off the asyncio event loop.
+        # The outer AgentCAP CLI uses asyncio.gather + Semaphore(concurrency);
+        # calling subprocess.run() directly here serializes all tasks despite
+        # --concurrency > 1.
+        r = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
             timeout=int(cfg.get("subprocess_timeout", 1800)),
             cwd=str(sweagent_dir),
         )
