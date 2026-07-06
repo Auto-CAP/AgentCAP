@@ -53,11 +53,11 @@ echo "== Verifying SWE-agent checkout (with stream patch) =="
 [[ -f "$SWEAGENT_DIR/sweagent/agent/models.py" ]] || {
     echo "ERROR: $SWEAGENT_DIR/sweagent/agent/models.py not found"; exit 1
 }
-grep -q "SWEAGENT_STREAM_STATS_PATH" "$SWEAGENT_DIR/sweagent/agent/models.py" || {
-    echo "ERROR: $SWEAGENT_DIR not patched for streaming stats"; exit 1
+grep -q "AGENTCAP_STREAMING_PATCH_APPLIED" "$SWEAGENT_DIR/sweagent/agent/models.py" || {
+    echo "ERROR: $SWEAGENT_DIR not patched for AgentCAP streaming"; exit 1
 }
-grep -q "delta.reasoning\|_map_reasoning\|reasoning_content" "$SWEAGENT_DIR/sweagent/agent/models.py" || {
-    echo "ERROR: $SWEAGENT_DIR missing vllm reasoning patch"; exit 1
+grep -q "completion_streaming" "$SWEAGENT_DIR/sweagent/agent/models.py" || {
+    echo "ERROR: $SWEAGENT_DIR missing AgentCAP streaming completion hook"; exit 1
 }
 
 if [[ -z "$LLM_URL" ]]; then

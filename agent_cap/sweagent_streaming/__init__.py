@@ -304,6 +304,12 @@ def completion_streaming(
         for k, v in extra_body.items():
             payload[k] = v
 
+    # DeepSeek-V3.2 only emits reasoning_content when thinking is enabled in
+    # chat_template_kwargs. AgentCAP single-runner sets this already; SWE-agent
+    #/LiteLLM does not, so add it here unless the caller supplied an override.
+    if "deepseek" in str(model).lower() and "chat_template_kwargs" not in payload:
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
+
     result = asyncio.run(_astream(url, headers, payload, timeout_total))
 
     sink = os.environ.get("SWEAGENT_STREAM_STATS_PATH")
