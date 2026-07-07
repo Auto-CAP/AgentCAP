@@ -95,3 +95,158 @@ class SWEBenchEvaluator:
                     except Exception:
                         pass
         return results
+
+
+@register_evaluator("swebench-k8s")
+class SWEBenchK8sEvaluator(SWEBenchEvaluator):
+    """Official SWE-bench grading without a docker daemon.
+
+    Per prediction: run the official instance image as a K8s pod, apply the
+    model patch (git apply, then `patch --fuzz=5` fallback — same as the
+    harness), execute the TestSpec eval script, pull the log back, and grade
+    it locally with `swebench.harness.grading.get_eval_report`. Semantics
+    match `swebench.harness.run_evaluation`.
+
+    Env knobs: SWEBENCH_K8S_NAMESPACE (default eidf230ns),
+    SWEBENCH_EVAL_TIMEOUT (per-instance test timeout, default 1800s).
+    """
+
+    def finalize(self, out_dir: Path) -> Dict[str, Dict[str, Any]]:
+        if not self._buffer:
+            return {}
+        import subprocess as sp
+        import time
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from datasets import load_dataset
+        from swebench.harness.grading import get_eval_report
+        from swebench.harness.test_spec.test_spec import make_test_spec
+
+        namespace = os.environ.get("SWEBENCH_K8S_NAMESPACE", "eidf230ns")
+        eval_timeout = int(os.environ.get("SWEBENCH_EVAL_TIMEOUT", "1800"))
+        queue = f"{namespace}-user-queue"
+
+        preds = [
+            {"instance_id": iid, "model_patch": patch, "model_name_or_path": self.model_name}
+            for iid, patch in self._buffer.items()
+        ]
+        (out_dir / "predictions.json").write_text(json.dumps(preds, indent=2))
+
+        split = "test"
+        ds = load_dataset(self.dataset, split=split)
+        inst_map = {ex["instance_id"]: ex for ex in ds}
+
+        def kubectl(*args: str, input_text: Optional[str] = None, timeout: int = 300):
+            return sp.run(["kubectl", "-n", namespace, *args],
+                          input=input_text, capture_output=True, text=True, timeout=timeout)
+
+        def eval_one(iid: str, patch: str) -> Dict[str, Any]:
+            inst = inst_map.get(iid)
+            if inst is None:
+                return {"resolved": False, "details": {"error": "instance not in dataset"}}
+            spec = make_test_spec(inst, namespace="swebench")
+            image = f"docker.io/{spec.instance_image_key}"
+            inst_dir = out_dir / "eval_k8s" / iid
+            inst_dir.mkdir(parents=True, exist_ok=True)
+
+            job = {
+                "apiVersion": "batch/v1", "kind": "Job",
+                "metadata": {"generateName": "swe-eval-", "namespace": namespace,
+                             "labels": {"app": "swebench-eval",
+                                        "kueue.x-k8s.io/queue-name": queue}},
+                "spec": {"backoffLimit": 0, "ttlSecondsAfterFinished": 600,
+                         "activeDeadlineSeconds": 3 * 3600,
+                         "template": {"metadata": {"labels": {"app": "swebench-eval"}},
+                                      "spec": {"restartPolicy": "Never", "containers": [{
+                                          "name": "eval", "image": image,
+                                          "command": ["sleep", "10800"],
+                                          "resources": {
+                                              "requests": {"cpu": "1", "memory": "4Gi"},
+                                              "limits": {"cpu": "2", "memory": "8Gi"}},
+                                      }]}}},
+            }
+            job_name = pod_name = ""
+            try:
+                r = kubectl("create", "-f", "-", "-o", "jsonpath={.metadata.name}",
+                            input_text=json.dumps(job))
+                if r.returncode != 0:
+                    return {"resolved": False,
+                            "details": {"error": f"job create: {r.stderr[:200]}"}}
+                job_name = r.stdout.strip()
+                deadline = time.time() + 1200
+                while time.time() < deadline:
+                    r = kubectl("get", "pods", f"-l=job-name={job_name}", "-o",
+                                "jsonpath={.items[0].status.phase}|{.items[0].metadata.name}")
+                    parts = r.stdout.strip().split("|")
+                    phase, pod_name = (parts[0], parts[1]) if len(parts) >= 2 else ("", "")
+                    if phase == "Running" and pod_name:
+                        break
+                    if phase == "Failed":
+                        return {"resolved": False, "details": {"error": "eval pod failed"}}
+                    time.sleep(5)
+                else:
+                    return {"resolved": False, "details": {"error": "eval pod timeout"}}
+
+                patch_path = inst_dir / "patch.diff"
+                patch_path.write_text(patch)
+                eval_sh = inst_dir / "eval.sh"
+                eval_sh.write_text(spec.eval_script)
+                kubectl("cp", str(patch_path), f"{pod_name}:/tmp/patch.diff")
+                kubectl("cp", str(eval_sh), f"{pod_name}:/eval.sh")
+
+                # Apply patch with the same fallback chain as the harness.
+                apply_cmd = (
+                    "cd /testbed && ("
+                    "git apply -v /tmp/patch.diff || "
+                    "patch --batch --fuzz=5 -p1 -i /tmp/patch.diff)"
+                )
+                r = kubectl("exec", pod_name, "--", "bash", "-c", apply_cmd)
+                if r.returncode != 0:
+                    (inst_dir / "apply.log").write_text(r.stdout + "\n" + r.stderr)
+                    return {"resolved": False,
+                            "details": {"error": "patch apply failed",
+                                        "stderr": r.stderr[-500:]}}
+
+                r = kubectl("exec", pod_name, "--", "bash", "-c",
+                            f"timeout {eval_timeout} bash /eval.sh 2>&1 || true",
+                            timeout=eval_timeout + 120)
+                log_path = inst_dir / "test_output.txt"
+                log_path.write_text(r.stdout or "")
+
+                report = get_eval_report(
+                    test_spec=spec,
+                    prediction={"instance_id": iid, "model_patch": patch,
+                                "model_name_or_path": self.model_name},
+                    test_log_path=str(log_path),
+                    include_tests_status=True,
+                )
+                info = report.get(iid, {})
+                (inst_dir / "report.json").write_text(json.dumps(report, indent=2))
+                return {"resolved": bool(info.get("resolved")), "details": info}
+            except Exception as exc:
+                return {"resolved": False, "details": {"error": str(exc)[:300]}}
+            finally:
+                if job_name:
+                    try:
+                        kubectl("delete", "job", job_name,
+                                "--wait=false", "--ignore-not-found=true")
+                    except Exception:
+                        pass
+
+        results: Dict[str, Dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            futs = {pool.submit(eval_one, iid, patch): iid
+                    for iid, patch in self._buffer.items()}
+            done = 0
+            for fut in as_completed(futs):
+                iid = futs[fut]
+                try:
+                    results[iid] = fut.result()
+                except Exception as exc:
+                    results[iid] = {"resolved": False, "details": {"error": str(exc)[:300]}}
+                done += 1
+                n_res = sum(1 for v in results.values() if v.get("resolved"))
+                print(f"[swebench-k8s eval] {done}/{len(futs)} graded, "
+                      f"{n_res} resolved — {iid}", file=sys.stderr, flush=True)
+        (out_dir / "eval_k8s_results.json").write_text(json.dumps(results, indent=2))
+        return results
