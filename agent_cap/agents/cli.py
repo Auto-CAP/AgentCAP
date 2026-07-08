@@ -143,6 +143,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="For --strategy sweagent: docker|modal|local|k8s")
     p.add_argument("--sweagent-dir", default="/tmp/swe_agent",
                    help="Path to swe-agent checkout (for --strategy sweagent)")
+    p.add_argument("--sandbox-provider", default=None,
+                   help="For --sweagent-deployment k8s: 'k8s' (built-in, "
+                        "default) or an http(s) URL of an external sandbox "
+                        "broker (POST /acquire {image,label} -> "
+                        "{host,port,auth_token,handle}; POST /release "
+                        "{handle}), e.g. run by TEASBench")
     p.add_argument("--sweagent-image-repo", default="",
                    help="Docker image registry prefix; empty = local sweb.eval images")
     p.add_argument("--sweagent-call-limit", type=int, default=200,
@@ -484,6 +490,7 @@ async def _run_async(args: argparse.Namespace) -> int:
 
     sweagent_cfg = {
         "deployment": args.sweagent_deployment,
+        "sandbox_provider": args.sandbox_provider,
         "sweagent_dir": args.sweagent_dir,
         "image_repo": args.sweagent_image_repo,
         "per_instance_call_limit": args.sweagent_call_limit,
@@ -501,8 +508,18 @@ async def _run_async(args: argparse.Namespace) -> int:
 
         async def _run_one(i: int, task: Task) -> None:
             if task.task_id in done:
-                results[i] = done[task.task_id]
-                _emit_progress(i, task, done[task.task_id])
+                row = done[task.task_id]
+                results[i] = row
+                # Re-buffer resumed outputs into batch evaluators (e.g.
+                # swebench finalize()) — otherwise resumed tasks are never
+                # graded and the final accuracy silently drops them.
+                if (evaluator is not None and hasattr(evaluator, "finalize")
+                        and not row.get("errors")):
+                    try:
+                        evaluator.evaluate(_eval_meta(task), row.get("output_text", "") or "")
+                    except Exception:
+                        pass
+                _emit_progress(i, task, row)
                 return
             async with sem:
                 if hasattr(tools, "set_task_allowlist"):

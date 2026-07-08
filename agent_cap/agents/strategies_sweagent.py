@@ -26,14 +26,11 @@ Strategy-level config goes on `RunResult.extras["sweagent_config"]`:
 """
 from __future__ import annotations
 
-import itertools
 import json
 import os
 import subprocess
 import sys
-import threading
 import time
-import urllib.request
 import asyncio
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -54,146 +51,11 @@ def _swebench_image(instance_id: str, deployment: str, image_repo: str) -> str:
     return f"sweb.eval.x86_64.{iid}:latest"
 
 
-# ---------------------------------------------------------------------------
-# K8s sidecar deployment (no docker daemon needed — e.g. EIDF GPU service).
-#
-# Per task: create a K8s Job from the official swebench instance image that
-# pip-installs swe-rex and serves it on :9999, `kubectl port-forward` it to a
-# unique local port, then hand SWE-agent a `remote` deployment pointing at
-# 127.0.0.1:<port>. Torn down in `finally`.
-# ---------------------------------------------------------------------------
-
-_K8S_PORT_COUNTER = itertools.count(int(os.environ.get("SWEBENCH_K8S_PORT_BASE", "18800")))
-_K8S_PORT_LOCK = threading.Lock()
-_K8S_AUTH_TOKEN = os.environ.get("SWEBENCH_K8S_AUTH_TOKEN", "agentcap-swerex")
-
-
-def _k8s_next_port() -> int:
-    with _K8S_PORT_LOCK:
-        return next(_K8S_PORT_COUNTER)
-
-
-def _kubectl(namespace: str, *args: str, input_text: Optional[str] = None,
-             timeout: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["kubectl", "-n", namespace, *args],
-        input=input_text, capture_output=True, text=True, timeout=timeout,
-    )
-
-
-class _K8sSidecar:
-    """One swe-rex sidecar pod running the official swebench instance image."""
-
-    def __init__(self, namespace: str, image: str, instance_id: str):
-        self.namespace = namespace
-        self.image = image
-        self.instance_id = instance_id
-        self.job_name: Optional[str] = None
-        self.pod_name: Optional[str] = None
-        self.local_port: Optional[int] = None
-        self.pf_proc: Optional[subprocess.Popen] = None
-
-    def start(self, pod_timeout_s: int = 1200, swerex_timeout_s: int = 600) -> None:
-        queue = f"{self.namespace}-user-queue"
-        job = {
-            "apiVersion": "batch/v1", "kind": "Job",
-            "metadata": {
-                "generateName": "swe-rex-",
-                "namespace": self.namespace,
-                "labels": {"app": "sweagent-sidecar",
-                           "kueue.x-k8s.io/queue-name": queue},
-            },
-            "spec": {
-                "backoffLimit": 0,
-                "ttlSecondsAfterFinished": 600,
-                "activeDeadlineSeconds": 6 * 3600,
-                "template": {
-                    "metadata": {"labels": {"app": "sweagent-sidecar"}},
-                    "spec": {
-                        "restartPolicy": "Never",
-                        "containers": [{
-                            "name": "swebench",
-                            "image": self.image,
-                            "command": ["/bin/bash", "-c"],
-                            "args": [
-                                "set -e; "
-                                "git config --global --add safe.directory '*'; "
-                                "python3 -m pip install --quiet --no-input 'swe-rex>=1.4.0' && "
-                                f"exec python3 -m swerex --port 9999 --auth-token {_K8S_AUTH_TOKEN}"
-                            ],
-                            "ports": [{"containerPort": 9999}],
-                            "env": [{"name": "PIP_BREAK_SYSTEM_PACKAGES", "value": "1"}],
-                            "resources": {
-                                "requests": {"cpu": "1", "memory": "4Gi"},
-                                "limits": {"cpu": "2", "memory": "8Gi"},
-                            },
-                        }],
-                    },
-                },
-            },
-        }
-        r = _kubectl(self.namespace, "create", "-f", "-",
-                     "-o", "jsonpath={.metadata.name}", input_text=json.dumps(job))
-        if r.returncode != 0:
-            raise RuntimeError(f"sidecar job create failed: {r.stderr[:300]}")
-        self.job_name = r.stdout.strip()
-
-        deadline = time.time() + pod_timeout_s
-        while time.time() < deadline:
-            r = _kubectl(self.namespace, "get", "pods", f"-l=job-name={self.job_name}",
-                         "-o", "jsonpath={.items[0].status.phase}|{.items[0].metadata.name}")
-            parts = r.stdout.strip().split("|")
-            phase, pod = (parts[0], parts[1]) if len(parts) >= 2 else ("", "")
-            if phase == "Running" and pod:
-                self.pod_name = pod
-                break
-            if phase == "Failed":
-                raise RuntimeError(f"sidecar pod failed for {self.instance_id}")
-            time.sleep(5)
-        else:
-            raise RuntimeError(f"sidecar pod not Running after {pod_timeout_s}s "
-                               f"({self.instance_id})")
-
-        self.local_port = _k8s_next_port()
-        self.pf_proc = subprocess.Popen(
-            ["kubectl", "-n", self.namespace, "port-forward",
-             f"pod/{self.pod_name}", f"{self.local_port}:9999"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        deadline = time.time() + swerex_timeout_s
-        while time.time() < deadline:
-            if self.pf_proc.poll() is not None:
-                # port-forward died (e.g. pod still pip-installing) — restart it
-                self.pf_proc = subprocess.Popen(
-                    ["kubectl", "-n", self.namespace, "port-forward",
-                     f"pod/{self.pod_name}", f"{self.local_port}:9999"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                time.sleep(3)
-            try:
-                req = urllib.request.Request(
-                    f"http://127.0.0.1:{self.local_port}/is_alive",
-                    headers={"X-API-Key": _K8S_AUTH_TOKEN},
-                )
-                urllib.request.urlopen(req, timeout=5)
-                return
-            except Exception:
-                time.sleep(3)
-        raise RuntimeError(f"swerex not alive after {swerex_timeout_s}s ({self.instance_id})")
-
-    def stop(self) -> None:
-        if self.pf_proc is not None:
-            self.pf_proc.kill()
-            try:
-                self.pf_proc.wait(timeout=5)
-            except Exception:
-                pass
-        if self.job_name:
-            try:
-                _kubectl(self.namespace, "delete", "job", self.job_name,
-                         "--wait=false", "--ignore-not-found=true")
-            except Exception:
-                pass
+# K8s sandbox provisioning lives in sandbox_providers (deployment side of
+# the AgentCAP<->TEAS interface); this strategy only consumes endpoints.
+from agent_cap.agents.sandbox_providers import (  # noqa: E402
+    get_sandbox_provider,
+)
 
 
 @register_strategy("sweagent")
@@ -249,15 +111,22 @@ class SWEAgentStrategy(Strategy):
         traj_dir = task_dir / "sweagent_traj"
         traj_dir.mkdir(parents=True, exist_ok=True)
 
-        sidecar: Optional[_K8sSidecar] = None
+        provider = sandbox_ep = None
         if deployment == "k8s":
-            namespace = (cfg.get("k8s_namespace")
-                         or os.environ.get("SWEBENCH_K8S_NAMESPACE", "eidf230ns"))
-            sidecar = _K8sSidecar(namespace, image, instance_id)
+            # Built-in k8s provisioning by default; an http(s) URL delegates
+            # container provisioning to an external broker (e.g. TEASBench).
+            provider_name = (cfg.get("sandbox_provider")
+                             or os.environ.get("SWEBENCH_SANDBOX_PROVIDER", "k8s"))
+            provider_kwargs = {}
+            if provider_name == "k8s":
+                provider_kwargs["namespace"] = (
+                    cfg.get("k8s_namespace")
+                    or os.environ.get("SWEBENCH_K8S_NAMESPACE", "eidf230ns"))
+            provider = get_sandbox_provider(provider_name, **provider_kwargs)
             try:
-                await asyncio.to_thread(sidecar.start)
+                sandbox_ep = await asyncio.to_thread(
+                    provider.acquire, image, instance_id)
             except Exception as exc:
-                await asyncio.to_thread(sidecar.stop)
                 return RunResult(
                     task_id=task.task_id,
                     strategy="sweagent",
@@ -268,9 +137,9 @@ class SWEAgentStrategy(Strategy):
                 )
             deploy_args = [
                 "--env.deployment.type", "remote",
-                "--env.deployment.host", "http://127.0.0.1",
-                "--env.deployment.port", str(sidecar.local_port),
-                "--env.deployment.auth_token", _K8S_AUTH_TOKEN,
+                "--env.deployment.host", sandbox_ep.host,
+                "--env.deployment.port", str(sandbox_ep.port),
+                "--env.deployment.auth_token", sandbox_ep.auth_token,
                 "--env.repo.type", "preexisting",
                 "--env.repo.repo_name", "testbed",
             ]
@@ -332,8 +201,8 @@ class SWEAgentStrategy(Strategy):
                 stderr=f"sweagent timed out after {task_timeout}s",
             )
         finally:
-            if sidecar is not None:
-                await asyncio.to_thread(sidecar.stop)
+            if provider is not None and sandbox_ep is not None:
+                await asyncio.to_thread(provider.release, sandbox_ep)
         elapsed = time.perf_counter() - t0
         (task_dir / "sweagent_stdout.log").write_text(r.stdout or "")
         (task_dir / "sweagent_stderr.log").write_text(r.stderr or "")
