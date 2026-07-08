@@ -645,17 +645,41 @@ async def _run_async(args: argparse.Namespace) -> int:
             ch if ch.isalnum() or ch in ("-", "_") else "-"
             for ch in suffix_base
         ).strip("-") or "agents"
-        metrics_path = out_dir / f"metrics_{suffix_base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        # Stable pointer with the CLI-internal aggregate schema. The
+        # timestamped metrics_<dataset>_<ts>.json name is reserved for the
+        # TEAS-format writer below on sweagent runs (different schema, same
+        # naming pattern otherwise).
+        metrics_path = out_dir / "metrics.json"
         metrics_path.write_text(
             json.dumps(metrics, ensure_ascii=False, indent=4),
             encoding="utf-8",
         )
-        # Stable latest pointer for scripts that do not want to glob timestamps.
-        (out_dir / "metrics.json").write_text(
-            json.dumps(metrics, ensure_ascii=False, indent=4),
-            encoding="utf-8",
-        )
+        if args.strategy != "sweagent":
+            ts_path = out_dir / f"metrics_{suffix_base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            ts_path.write_text(
+                json.dumps(metrics, ensure_ascii=False, indent=4),
+                encoding="utf-8",
+            )
         print(f"metrics: {metrics_path}", file=sys.stderr)
+
+        # TEAS-format outputs (metadata/metrics/detailed-results/output-data)
+        # are written automatically for sweagent runs; hardware facts come
+        # from TEAS_* env vars set by the launch script.
+        if args.strategy == "sweagent":
+            try:
+                from agent_cap.agents.teas_output import write_teas_outputs
+                teas_path = write_teas_outputs(
+                    out_dir,
+                    [r for r in results if r is not None],
+                    dataset=suffix_base,
+                    wall_time_s=wall_time_s,
+                    model_name=args.model,
+                )
+                if teas_path is not None:
+                    print(f"teas outputs: {teas_path.parent} ({teas_path.name} et al.)",
+                          file=sys.stderr)
+            except Exception as exc:
+                print(f"WARNING: TEAS output writing failed: {exc}", file=sys.stderr)
 
     _print_summary(results, evaluator_name)
 

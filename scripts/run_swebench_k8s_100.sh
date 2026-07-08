@@ -82,6 +82,38 @@ if [[ -n "$DIR_ENGINE" ]]; then
     echo "  engine check: $DIR_ENGINE == $SERVED_BY"
 fi
 
+# ---- TEAS output env (read by agent_cap.agents.teas_output at run end) ----
+# Derived from the output dir name (<engine>_<gpu>x<N>_...); override by
+# exporting TEAS_* before calling this script.
+DIR_BASE="$(basename "$OUTPUT_DIR")"
+GPU_KEY="$(echo "$DIR_BASE" | grep -oE '(a100|h100|h200)' | head -1 || true)"
+GPU_N="$(echo "$DIR_BASE" | grep -oE 'x[0-9]+' | head -1 | tr -d x || true)"
+case "$GPU_KEY" in
+  a100) GPU_NAME="NVIDIA A100" ;;
+  h100) GPU_NAME="NVIDIA H100" ;;
+  h200) GPU_NAME="NVIDIA H200" ;;
+  *)    GPU_NAME="" ;;
+esac
+export TEAS_ENGINE="${TEAS_ENGINE:-${DIR_ENGINE:-unknown}}"
+case "$TEAS_ENGINE" in
+  sglang) export TEAS_ENGINE_VERSION="${TEAS_ENGINE_VERSION:-0.5.9}" ;;
+  vllm)   export TEAS_ENGINE_VERSION="${TEAS_ENGINE_VERSION:-0.21.0}" ;;
+esac
+export TEAS_GPU_TYPE="${TEAS_GPU_TYPE:-$GPU_NAME}"
+export TEAS_NUM_GPUS="${TEAS_NUM_GPUS:-${GPU_N:-0}}"
+export TEAS_TP="${TEAS_TP:-$TEAS_NUM_GPUS}"
+export TEAS_MODEL_NAME="${TEAS_MODEL_NAME:-${MODEL#openai/}}"
+export TEAS_PRECISION="${TEAS_PRECISION:-mxfp4}"
+export TEAS_BACKEND="${TEAS_BACKEND:-swebench-k8s}"
+if [[ -z "${TEAS_CPU_TYPE:-}" && -n "$GPU_KEY" ]]; then
+    SRV_POD="$(kubectl get pods -l "app=$TEAS_ENGINE-gptoss-$GPU_KEY" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+    if [[ -n "$SRV_POD" ]]; then
+        export TEAS_CPU_TYPE="$(kubectl exec "$SRV_POD" -- sh -c "lscpu 2>/dev/null | grep 'Model name' | head -1 | cut -d: -f2" 2>/dev/null | xargs || true)"
+        export TEAS_NUM_CPUS="$(kubectl exec "$SRV_POD" -- nproc 2>/dev/null || echo 0)"
+    fi
+fi
+echo "  TEAS env: engine=$TEAS_ENGINE v$TEAS_ENGINE_VERSION gpu='$TEAS_GPU_TYPE' x$TEAS_NUM_GPUS cpu='${TEAS_CPU_TYPE:-unknown}'"
+
 echo "== Verifying SWE-agent checkout (with stream patch) =="
 [[ -f "$SWEAGENT_DIR/sweagent/agent/models.py" ]] || {
     echo "ERROR: $SWEAGENT_DIR/sweagent/agent/models.py not found"; exit 1

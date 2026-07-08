@@ -67,12 +67,11 @@ cat > "$OUT/run.sh" <<PROV
 bash k8s/launch_llm_server.sh ${ENGINE} ${GPU}
 bash k8s/port_forward_llm.sh ${ENGINE}-gptoss-${GPU} 8000 &
 bash scripts/run_swebench_k8s_100.sh --output-dir $OUT --concurrency ${CONCURRENCY}
-python scripts/package_teas_results.py --run-dir $OUT --engine ${ENGINE} --engine-version ${EVER} \\
-    --gpu-type "${GPUTYPE}" --num-gpus ${NGPU} --tp ${NGPU} --concurrency ${CONCURRENCY}
+# TEAS outputs (metadata/metrics/detailed-results/output-data) are written
+# automatically at run end by agent_cap.agents.teas_output
 PROV
-python scripts/package_teas_results.py --run-dir "$OUT" \
-    --engine "$ENGINE" --engine-version "$EVER" \
-    --gpu-type "$GPUTYPE" --num-gpus "$NGPU" --tp "$NGPU" --concurrency "$CONCURRENCY"
+# TEAS-format outputs are written automatically by the run itself
+# (agent_cap.agents.teas_output; TEAS_* env exported by run_swebench_k8s_100.sh)
 
 # 6. teardown
 bash k8s/launch_llm_server.sh "$ENGINE" "$GPU" --stop
