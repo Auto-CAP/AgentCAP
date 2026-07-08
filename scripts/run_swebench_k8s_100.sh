@@ -49,6 +49,19 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$OUTPUT_DIR" ]] || { echo "ERROR: --output-dir required"; exit 1; }
 
+# One run per output dir — a duplicate concurrent run corrupts results.jsonl
+# and the per-task stream_stats (observed when a session flap re-executed the
+# launch command).
+mkdir -p "$OUTPUT_DIR"
+exec 9>"$OUTPUT_DIR/.run.lock"
+flock -n 9 || { echo "ERROR: another run is already active on $OUTPUT_DIR"; exit 1; }
+
+# Clear leftovers from crashed runs: stale sidecar port-forwards would collide
+# with new tunnels (SWE-agent then hits an OLD sidecar -> SessionExistsError),
+# and orphaned sidecar jobs waste quota.
+pkill -f "port-forward pod/swe-rex" 2>/dev/null || true
+kubectl delete job -l app=sweagent-sidecar --ignore-not-found >/dev/null 2>&1 || true
+
 echo "== Verifying kubectl =="
 kubectl get queue >/dev/null || { echo "ERROR: kubectl not working"; exit 1; }
 
@@ -56,6 +69,18 @@ echo "== Verifying LLM endpoint =="
 curl -sS -m 5 -o /dev/null -w "  $LLM_URL  ->  %{http_code}\n" "$LLM_URL/models" || {
     echo "ERROR: LLM not reachable at $LLM_URL"; exit 1
 }
+
+# The output dir name declares the engine (sglang_*/vllm_*). Refuse to run
+# against a mismatched server — a tunnel pointing at the wrong engine produces
+# silently mislabeled results (happened twice with concurrent sessions).
+DIR_ENGINE="$(basename "$OUTPUT_DIR" | grep -oE '^(sglang|vllm)' || true)"
+if [[ -n "$DIR_ENGINE" ]]; then
+    SERVED_BY="$(curl -sS -m 5 "$LLM_URL/models" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0].get("owned_by",""))' 2>/dev/null || true)"
+    if [[ -n "$SERVED_BY" && "$SERVED_BY" != "$DIR_ENGINE" ]]; then
+        echo "ERROR: output dir says '$DIR_ENGINE' but $LLM_URL is served by '$SERVED_BY'"; exit 1
+    fi
+    echo "  engine check: $DIR_ENGINE == $SERVED_BY"
+fi
 
 echo "== Verifying SWE-agent checkout (with stream patch) =="
 [[ -f "$SWEAGENT_DIR/sweagent/agent/models.py" ]] || {

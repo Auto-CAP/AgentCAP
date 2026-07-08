@@ -63,14 +63,19 @@ def _swebench_image(instance_id: str, deployment: str, image_repo: str) -> str:
 # 127.0.0.1:<port>. Torn down in `finally`.
 # ---------------------------------------------------------------------------
 
-_K8S_PORT_COUNTER = itertools.count(int(os.environ.get("SWEBENCH_K8S_PORT_BASE", "18800")))
 _K8S_PORT_LOCK = threading.Lock()
 _K8S_AUTH_TOKEN = os.environ.get("SWEBENCH_K8S_AUTH_TOKEN", "agentcap-swerex")
 
 
 def _k8s_next_port() -> int:
+    """OS-assigned free port. A fixed counter base collides with stale
+    kubectl port-forwards left by a previous crashed run — SWE-agent then
+    talks to the OLD sidecar and dies with SessionExistsError."""
+    import socket
     with _K8S_PORT_LOCK:
-        return next(_K8S_PORT_COUNTER)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
 
 
 def _kubectl(namespace: str, *args: str, input_text: Optional[str] = None,
