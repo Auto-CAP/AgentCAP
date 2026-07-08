@@ -140,6 +140,8 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
             return sp.run(["kubectl", "-n", namespace, *args],
                           input=input_text, capture_output=True, text=True, timeout=timeout)
 
+        from agent_cap.agents.sandbox_providers import K8sExecContainer
+
         def eval_one(iid: str, patch: str) -> Dict[str, Any]:
             inst = inst_map.get(iid)
             if inst is None:
@@ -149,50 +151,19 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
             inst_dir = out_dir / "eval_k8s" / iid
             inst_dir.mkdir(parents=True, exist_ok=True)
 
-            job = {
-                "apiVersion": "batch/v1", "kind": "Job",
-                "metadata": {"generateName": "swe-eval-", "namespace": namespace,
-                             "labels": {"app": "swebench-eval",
-                                        "kueue.x-k8s.io/queue-name": queue}},
-                "spec": {"backoffLimit": 0, "ttlSecondsAfterFinished": 600,
-                         "activeDeadlineSeconds": 3 * 3600,
-                         "template": {"metadata": {"labels": {"app": "swebench-eval"}},
-                                      "spec": {"restartPolicy": "Never", "containers": [{
-                                          "name": "eval", "image": image,
-                                          "command": ["sleep", "10800"],
-                                          "resources": {
-                                              "requests": {"cpu": "1", "memory": "4Gi"},
-                                              "limits": {"cpu": "2", "memory": "8Gi"}},
-                                      }]}}},
-            }
-            job_name = pod_name = ""
+            box = K8sExecContainer(namespace, image)
             try:
-                r = kubectl("create", "-f", "-", "-o", "jsonpath={.metadata.name}",
-                            input_text=json.dumps(job))
-                if r.returncode != 0:
-                    return {"resolved": False,
-                            "details": {"error": f"job create: {r.stderr[:200]}"}}
-                job_name = r.stdout.strip()
-                deadline = time.time() + 1200
-                while time.time() < deadline:
-                    r = kubectl("get", "pods", f"-l=job-name={job_name}", "-o",
-                                "jsonpath={.items[0].status.phase}|{.items[0].metadata.name}")
-                    parts = r.stdout.strip().split("|")
-                    phase, pod_name = (parts[0], parts[1]) if len(parts) >= 2 else ("", "")
-                    if phase == "Running" and pod_name:
-                        break
-                    if phase == "Failed":
-                        return {"resolved": False, "details": {"error": "eval pod failed"}}
-                    time.sleep(5)
-                else:
-                    return {"resolved": False, "details": {"error": "eval pod timeout"}}
+                try:
+                    box.start()
+                except Exception as exc:
+                    return {"resolved": False, "details": {"error": str(exc)[:200]}}
 
                 patch_path = inst_dir / "patch.diff"
                 patch_path.write_text(patch)
                 eval_sh = inst_dir / "eval.sh"
                 eval_sh.write_text(spec.eval_script)
-                kubectl("cp", str(patch_path), f"{pod_name}:/tmp/patch.diff")
-                kubectl("cp", str(eval_sh), f"{pod_name}:/eval.sh")
+                box.cp(str(patch_path), "/tmp/patch.diff")
+                box.cp(str(eval_sh), "/eval.sh")
 
                 # Apply patch with the same fallback chain as the harness.
                 apply_cmd = (
@@ -200,16 +171,15 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
                     "git apply -v /tmp/patch.diff || "
                     "patch --batch --fuzz=5 -p1 -i /tmp/patch.diff)"
                 )
-                r = kubectl("exec", pod_name, "--", "bash", "-c", apply_cmd)
+                r = box.exec(apply_cmd)
                 if r.returncode != 0:
                     (inst_dir / "apply.log").write_text(r.stdout + "\n" + r.stderr)
                     return {"resolved": False,
                             "details": {"error": "patch apply failed",
                                         "stderr": r.stderr[-500:]}}
 
-                r = kubectl("exec", pod_name, "--", "bash", "-c",
-                            f"timeout {eval_timeout} bash /eval.sh 2>&1 || true",
-                            timeout=eval_timeout + 120)
+                r = box.exec(f"timeout {eval_timeout} bash /eval.sh 2>&1 || true",
+                             timeout=eval_timeout + 120)
                 log_path = inst_dir / "test_output.txt"
                 log_path.write_text(r.stdout or "")
 
@@ -226,12 +196,7 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
             except Exception as exc:
                 return {"resolved": False, "details": {"error": str(exc)[:300]}}
             finally:
-                if job_name:
-                    try:
-                        kubectl("delete", "job", job_name,
-                                "--wait=false", "--ignore-not-found=true")
-                    except Exception:
-                        pass
+                box.stop()
 
         results: Dict[str, Dict[str, Any]] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
