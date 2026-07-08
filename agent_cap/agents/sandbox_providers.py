@@ -88,6 +88,8 @@ class _K8sSidecar:
         self.pod_name: Optional[str] = None
         self.local_port: Optional[int] = None
         self.pf_proc: Optional[subprocess.Popen] = None
+        self._stopped = False
+        self._pf_keeper: Optional[threading.Thread] = None
 
     def start(self, pod_timeout_s: int = 1200, swerex_timeout_s: int = 600) -> None:
         queue = f"{self.namespace}-user-queue"
@@ -178,12 +180,34 @@ class _K8sSidecar:
                     headers={"X-API-Key": _K8S_AUTH_TOKEN},
                 )
                 urllib.request.urlopen(req, timeout=5)
+                # Babysit the tunnel for the task's whole lifetime — kubectl
+                # port-forward occasionally drops mid-task, which otherwise
+                # kills the agent with "Cannot connect to 127.0.0.1:<port>".
+                self._pf_keeper = threading.Thread(
+                    target=self._keep_pf_alive, daemon=True)
+                self._pf_keeper.start()
                 return
             except Exception:
                 time.sleep(3)
         raise RuntimeError(f"swerex not alive after {swerex_timeout_s}s ({self.instance_id})")
 
+    def _keep_pf_alive(self) -> None:
+        while not self._stopped:
+            proc = self.pf_proc
+            if proc is not None and proc.poll() is not None and not self._stopped:
+                try:
+                    self.pf_proc = subprocess.Popen(
+                        ["kubectl", "-n", self.namespace, "port-forward",
+                         f"pod/{self.pod_name}", f"{self.local_port}:9999"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                except Exception:
+                    pass
+            time.sleep(5)
+
     def stop(self) -> None:
+        self._stopped = True
         if self.pf_proc is not None:
             self.pf_proc.kill()
             try:
