@@ -218,11 +218,6 @@ def aggregate_agent_metrics(
             "p99_tpot_ms": _percentile(tpot_ms, 99),
             "avg_latency_ms": _safe_mean(latency_ms),
             "p99_latency_ms": _percentile(latency_ms, 99),
-            "decode_time_s": 0.0,
-            "p99_decode_time_s": 0.0,
-            "output_throughput_tok_s": (
-                total_output_tokens / wall_time_s if wall_time_s > 0 else 0.0
-            ),
         },
         "agentic": {
             "avg_total_input_tokens": _safe_mean([float(v) for v in input_tokens_by_task]),
