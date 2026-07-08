@@ -93,6 +93,8 @@ def main():
     ap.add_argument("--model-name", default="unsloth/gpt-oss-120b")
     ap.add_argument("--dataset", default="swe-bench-lite")
     ap.add_argument("--concurrency", type=int, default=4)
+    ap.add_argument("--cpu-type", default=None)
+    ap.add_argument("--num-cpus", type=int, default=None)
     ap.add_argument("--dest", default=None,
                     help="agentic_results/eidf root; default: <run-dir>/teas")
     ap.add_argument("--timestamp", default=None, help="YYYYMMDD_HHMMSS; default now")
@@ -112,44 +114,116 @@ def main():
         out = run_dir / "teas" / combo / ts_dir
     out.mkdir(parents=True, exist_ok=True)
 
-    # ---- metrics: reuse CLI aggregate, override hardware, add wall time ----
-    metrics_src = run_dir / "metrics.json"
-    metrics = json.loads(metrics_src.read_text())
-    perf = metrics.get("performance", {})
-    perf["total_wall_time_min"] = round(perf.get("e2e_s", 0.0) / 60.0, 2)
-    metrics["hardware"] = {
-        "gpu_type": args.gpu_type,
-        "num_gpus": args.num_gpus,
-        f"{args.engine}_version": args.engine_version,
-        "concurrency": args.concurrency,
-        "streaming": True,
+    # ---- metrics: exact TEAS reference schema (see agentic/vastai/... b300x4) ----
+    def pct(vals, p):
+        vals = sorted(vals)
+        if not vals:
+            return 0.0
+        k = (len(vals) - 1) * p
+        lo = int(k)
+        hi = min(lo + 1, len(vals) - 1)
+        return vals[lo] * (1 - (k - lo)) + vals[hi] * (k - lo)
+
+    rows = [json.loads(l) for l in (run_dir / "results.jsonl").read_text().splitlines()
+            if l.strip()]
+    req_rows = per_request_rows(run_dir)
+    cli_metrics = json.loads((run_dir / "metrics.json").read_text())
+    wall_s = cli_metrics.get("performance", {}).get("e2e_s", 0.0)
+
+    e2e = [r.get("e2e_latency_s", 0.0) for r in rows]
+    ttfts = [r["prefill_time_s"] for r in req_rows if r["prefill_time_s"] > 0]
+    tpots = [r["tpot_s"] for r in req_rows if r["tpot_s"] > 0]
+    n = len(rows)
+    passed = sum(1 for r in rows if r.get("eval_passed"))
+    tot_in = sum(r["total_usage"]["input_tokens"] for r in rows)
+    tot_out = sum(r["total_usage"]["output_tokens"] for r in rows)
+    tot_cached = sum(r["total_usage"]["cached_tokens"] for r in rows)
+    tot_reqs = sum(r["total_usage"]["requests"] for r in rows)
+    tot_tools = sum(r.get("tool_calls", 0) for r in rows)
+
+    metrics = {
+        "performance": {
+            "total_wall_time_min": round(wall_s / 60.0, 2),
+            "avg_e2e_latency_s": round(sum(e2e) / max(n, 1), 2),
+            "p50_e2e_latency_s": round(pct(e2e, 0.5), 2),
+            "p99_e2e_latency_s": round(pct(e2e, 0.99), 2),
+            "ttft": round(sum(ttfts) / max(len(ttfts), 1), 6),
+            "p99_ttft": round(pct(ttfts, 0.99), 6),
+            "tpot": round(sum(tpots) / max(len(tpots), 1), 6),
+            "p99_tpot": round(pct(tpots, 0.99), 6),
+        },
+        "agentic": {
+            "avg_total_input_tokens": round(tot_in / max(n, 1), 2),
+            "avg_total_output_tokens": round(tot_out / max(n, 1), 2),
+            "avg_tool_call_count": round(tot_tools / max(n, 1), 2),
+            "avg_num_requests": round(tot_reqs / max(n, 1), 2),
+            "avg_input_tokens_per_request": round(tot_in / max(tot_reqs, 1), 2),
+            "avg_output_tokens_per_request": round(tot_out / max(tot_reqs, 1), 2),
+            "total_input_tokens": tot_in,
+            "total_output_tokens": tot_out,
+            "total_cached_tokens": tot_cached,
+            "total_requests": tot_reqs,
+            "total_tool_calls": tot_tools,
+        },
+        "quality": {
+            "acc": round(passed / max(n, 1), 4),
+            "total_examples": n,
+            "passed": passed,
+        },
+        "hardware": {
+            "gpu_type": args.gpu_type,
+            "num_gpus": args.num_gpus,
+            f"{args.engine}_version": args.engine_version,
+            "streaming": True,
+        },
     }
     (out / f"metrics_{suffix}.json").write_text(json.dumps(metrics, indent=2))
 
-    # ---- metadata ----
-    n_examples = sum(1 for line in (run_dir / "results.jsonl").read_text().splitlines()
-                     if line.strip())
+    # ---- metadata: exact TEAS reference schema ----
+    cpu_type, num_cpus = args.cpu_type, args.num_cpus
+    if not cpu_type or not num_cpus:
+        # best effort: read from the serving pod's node if it is still up
+        import subprocess
+        gpu_key = combo.split("x")[0]
+        pod = subprocess.run(
+            ["kubectl", "get", "pods", "-l", f"app={args.engine}-gptoss-{gpu_key}",
+             "-o", "jsonpath={.items[0].metadata.name}"],
+            capture_output=True, text=True).stdout.strip()
+        if pod:
+            r = subprocess.run(
+                ["kubectl", "exec", pod, "--", "sh", "-c",
+                 "nproc; lscpu | grep 'Model name' | head -1 | cut -d: -f2"],
+                capture_output=True, text=True)
+            lines = [x.strip() for x in r.stdout.splitlines() if x.strip()]
+            if len(lines) >= 1 and not num_cpus:
+                try:
+                    num_cpus = int(lines[0])
+                except ValueError:
+                    pass
+            if len(lines) >= 2 and not cpu_type:
+                cpu_type = lines[1]
     metadata = {
-        "hardware": {"gpu_type": args.gpu_type, "num_gpus": args.num_gpus},
+        "hardware": {
+            "gpu_type": args.gpu_type,
+            "num_gpus": args.num_gpus,
+            "cpu_type": cpu_type or "unknown",
+            "num_cpus": num_cpus or 0,
+        },
         "model_config": {"model_name": args.model_name, "precision": "mxfp4"},
         "system_environment": {
             "inference_engine": args.engine,
-            "engine_version": args.engine_version,
-            "engine_image": ("lmsysorg/sglang:v" if args.engine == "sglang"
-                             else "vllm/vllm-openai:v") + args.engine_version,
             "base_url": "http://localhost:8000/v1",
             "is_local": True,
             "backend": "swebench-k8s",
             "dataset": args.dataset,
-            "num_examples": n_examples,
+            "num_examples": n,
             "tensor_parallel_size": args.tp,
             "streaming": True,
             "timestamp": ts,
             "agentcap_strategy": "sweagent",
+            "sweagent_streaming_patch": "AGENTCAP_STREAMING_PATCH_APPLIED",
             "reasoning_parser": "gpt-oss" if args.engine == "sglang" else "openai_gptoss",
             "tool_call_parser": "gpt-oss" if args.engine == "sglang" else "openai",
-            "notes": ("EIDF k8s; sandboxes + eval as k8s pods from official "
-                      "swebench images (no dind); stock official engine image."),
         },
     }
     (out / f"metadata_{suffix}.json").write_text(json.dumps(metadata, indent=2))
@@ -169,7 +243,7 @@ def main():
 
     print(f"packaged -> {out}")
     q = metrics.get("quality", {})
-    print(f"acc={q.get('acc')} examples={n_examples}")
+    print(f"acc={q.get('acc')} examples={n}")
 
 
 if __name__ == "__main__":
