@@ -151,10 +151,15 @@ class _K8sSidecar:
                                f"({self.instance_id})")
 
         self.local_port = _k8s_next_port()
+        # start_new_session: detach the tunnel from the caller's process
+        # group so a terminal/session teardown can't kill it mid-task
+        # (observed: session flap killed in-flight sidecar tunnels ->
+        # "Cannot connect to host 127.0.0.1:<port>" -> task rc=1).
         self.pf_proc = subprocess.Popen(
             ["kubectl", "-n", self.namespace, "port-forward",
              f"pod/{self.pod_name}", f"{self.local_port}:9999"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
         deadline = time.time() + swerex_timeout_s
         while time.time() < deadline:
@@ -164,6 +169,7 @@ class _K8sSidecar:
                     ["kubectl", "-n", self.namespace, "port-forward",
                      f"pod/{self.pod_name}", f"{self.local_port}:9999"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True,
                 )
                 time.sleep(3)
             try:
