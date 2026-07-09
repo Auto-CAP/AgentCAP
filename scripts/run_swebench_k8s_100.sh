@@ -96,7 +96,7 @@ case "$GPU_KEY" in
 esac
 export TEAS_ENGINE="${TEAS_ENGINE:-${DIR_ENGINE:-unknown}}"
 case "$TEAS_ENGINE" in
-  sglang) export TEAS_ENGINE_VERSION="${TEAS_ENGINE_VERSION:-0.5.9}" ;;
+  sglang) export TEAS_ENGINE_VERSION="${TEAS_ENGINE_VERSION:-0.5.12.post1}" ;;
   vllm)   export TEAS_ENGINE_VERSION="${TEAS_ENGINE_VERSION:-0.21.0}" ;;
 esac
 export TEAS_GPU_TYPE="${TEAS_GPU_TYPE:-$GPU_NAME}"

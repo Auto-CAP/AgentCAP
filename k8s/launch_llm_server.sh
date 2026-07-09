@@ -37,7 +37,7 @@ fi
 
 case "$ENGINE" in
   sglang)
-    IMAGE="lmsysorg/sglang:v0.5.9"
+    IMAGE="lmsysorg/sglang:v0.5.12.post1"
     CMD=$(cat <<EOF
 exec python3 -m sglang.launch_server \
     --model-path $MODEL_PATH \
