@@ -122,8 +122,8 @@ class _K8sSidecar:
                             "ports": [{"containerPort": 9999}],
                             "env": [{"name": "PIP_BREAK_SYSTEM_PACKAGES", "value": "1"}],
                             "resources": {
-                                "requests": {"cpu": "1", "memory": "4Gi"},
-                                "limits": {"cpu": "2", "memory": "24Gi"},
+                                "requests": {"cpu": "2", "memory": "4Gi"},
+                                "limits": {"cpu": "6", "memory": "24Gi"},
                             },
                         }],
                     },
@@ -341,8 +341,8 @@ class K8sExecContainer:
                                       "name": "eval", "image": self.image,
                                       "command": ["sleep", "10800"],
                                       "resources": {
-                                          "requests": {"cpu": "1", "memory": "4Gi"},
-                                          "limits": {"cpu": "2", "memory": "24Gi"}},
+                                          "requests": {"cpu": "2", "memory": "4Gi"},
+                                          "limits": {"cpu": "6", "memory": "24Gi"}},
                                   }]}}},
         }
         r = _kubectl(self.namespace, "create", "-f", "-",
