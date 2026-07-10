@@ -204,7 +204,7 @@ class _K8sSidecar:
                     )
                 except Exception:
                     pass
-            time.sleep(5)
+            time.sleep(2)
 
     def stop(self) -> None:
         self._stopped = True
