@@ -123,7 +123,7 @@ class _K8sSidecar:
                             "env": [{"name": "PIP_BREAK_SYSTEM_PACKAGES", "value": "1"}],
                             "resources": {
                                 "requests": {"cpu": "1", "memory": "4Gi"},
-                                "limits": {"cpu": "2", "memory": "8Gi"},
+                                "limits": {"cpu": "2", "memory": "24Gi"},
                             },
                         }],
                     },
@@ -342,7 +342,7 @@ class K8sExecContainer:
                                       "command": ["sleep", "10800"],
                                       "resources": {
                                           "requests": {"cpu": "1", "memory": "4Gi"},
-                                          "limits": {"cpu": "2", "memory": "8Gi"}},
+                                          "limits": {"cpu": "2", "memory": "24Gi"}},
                                   }]}}},
         }
         r = _kubectl(self.namespace, "create", "-f", "-",
