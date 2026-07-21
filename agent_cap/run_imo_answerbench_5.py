@@ -311,7 +311,7 @@ def write_metrics_file(
     total_output_tokens = int(sum(output_tokens_list))
     total_tool_calls = int(sum(tool_calls_list))
 
-    num_requests_list = [1 for _ in results]
+    num_requests_list = [int(r["num_requests"]) for r in results]
     total_requests = int(sum(num_requests_list))
 
     input_tokens_per_request = []
@@ -319,12 +319,13 @@ def write_metrics_file(
     max_input_tokens_per_request_list = []
 
     for r in results:
-        reqs = 1
+        reqs = int(r["num_requests"])
         total_in = int(r["input_tokens"])
         total_out = int(r["output_tokens"])
 
-        input_tokens_per_request.append(total_in / reqs)
-        output_tokens_per_request.append(total_out / reqs)
+        if reqs > 0:
+            input_tokens_per_request.append(total_in / reqs)
+            output_tokens_per_request.append(total_out / reqs)
         max_input_tokens_per_request_list.append(float(total_in))
 
     decode_time_s_list = [
