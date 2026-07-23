@@ -13,7 +13,7 @@ MCP_URL="${MCP_URL:-http://127.0.0.1:1984}"
 OUTPUT_DIR=""
 CONCURRENCY=4
 INDICES_FILE="$REPO_ROOT/benchmarks/mcp_atlas_free_60.json"
-MODEL="${MODEL:-openai/unsloth/gpt-oss-120b}"
+MODEL="${MODEL:-unsloth/gpt-oss-120b}"
 RESUME=""
 
 while [[ $# -gt 0 ]]; do
