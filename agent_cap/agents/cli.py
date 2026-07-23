@@ -665,7 +665,7 @@ async def _run_async(args: argparse.Namespace) -> int:
         # TEAS-format outputs (metadata/metrics/detailed-results/output-data)
         # are written automatically for sweagent runs; hardware facts come
         # from TEAS_* env vars set by the launch script.
-        if args.strategy == "sweagent":
+        if args.strategy == "sweagent" or (suffix_base or "").startswith("mcp-atlas"):
             try:
                 from agent_cap.agents.teas_output import write_teas_outputs
                 teas_path = write_teas_outputs(
@@ -832,6 +832,23 @@ def _default_mock_specs(strategy_name: str) -> Dict[str, AgentSpec]:
 
 def _serialize_result(res, verbose: int) -> Dict[str, Any]:
     payload = res.to_dict()
+    # Compact per-request stats (numbers only) so TEAS detailed-results can be
+    # built for non-sweagent strategies without verbose message dumps.
+    if getattr(res, "turns", None):
+        payload["turn_stats"] = [
+            {
+                "input_tokens": t.usage.input_tokens,
+                "output_tokens": t.usage.output_tokens,
+                "completion_tokens": t.usage.completion_tokens,
+                "reasoning_tokens": t.usage.reasoning_tokens,
+                "cached_tokens": t.usage.cached_tokens,
+                "latency_s": round(t.latency_s, 6),
+                "ttft_s": round(t.ttft_s, 6),
+                "decode_s": round(t.decode_s, 6),
+                "num_tool_calls": len(t.tool_calls),
+            }
+            for t in res.turns
+        ]
     if verbose >= 2:
         payload["turns"] = [
             {

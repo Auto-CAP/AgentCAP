@@ -90,6 +90,32 @@ def per_task_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def turn_stat_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Per-request rows from compact turn_stats (non-sweagent strategies)."""
+    out = []
+    for i, r in enumerate(rows):
+        for j, s in enumerate(r.get("turn_stats") or []):
+            out_tok = int(s.get("output_tokens") or 0)
+            decode_s = float(s.get("decode_s") or 0.0)
+            tpot_s = (decode_s / out_tok) if out_tok > 0 else 0.0
+            out.append({
+                "example_index": i,
+                "request_index": j,
+                "input_tokens": int(s.get("input_tokens") or 0),
+                "output_tokens": out_tok,
+                "completion_tokens": int(s.get("completion_tokens") or 0),
+                "reasoning_tokens": int(s.get("reasoning_tokens") or 0),
+                "cached_tokens": int(s.get("cached_tokens") or 0),
+                "prefill_time_s": float(s.get("ttft_s") or 0.0),
+                "decode_time_s": decode_s,
+                "tpot_s": tpot_s,
+                "output_throughput_tok_s": (out_tok / decode_s) if decode_s > 0 else 0.0,
+                "has_tool_calls": int(s.get("num_tool_calls") or 0) > 0,
+                "num_tool_calls": int(s.get("num_tool_calls") or 0),
+            })
+    return out
+
+
 def write_teas_outputs(
     out_dir: Path,
     rows: List[Dict[str, Any]],
@@ -105,8 +131,11 @@ def write_teas_outputs(
     engine = env("TEAS_ENGINE", "unknown")
     ts = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
     suffix = f"{dataset}_{ts}"
+    is_mcp = dataset.startswith("mcp-atlas")
 
     req_rows = per_request_rows(out_dir)
+    if not req_rows:
+        req_rows = turn_stat_rows(rows)
     e2e = [r.get("e2e_latency_s", 0.0) for r in rows]
     ttfts = [r["prefill_time_s"] for r in req_rows if r["prefill_time_s"] > 0]
     tpots = [r["tpot_s"] for r in req_rows if r["tpot_s"] > 0]
@@ -117,8 +146,16 @@ def write_teas_outputs(
     tot_cached, tot_reqs = usage("cached_tokens"), usage("requests")
     tot_tools = sum(r.get("tool_calls", 0) for r in rows)
 
-    metrics = {
-        "performance": {
+    if is_mcp:
+        perf = {
+            "total_wall_time_min": round(wall_time_s / 60.0, 2),
+            "ttft": round(sum(ttfts) / max(len(ttfts), 1), 6),
+            "p99_ttft": round(_pct(ttfts, 0.99), 6),
+            "tpot": round(sum(tpots) / max(len(tpots), 1), 6),
+            "p99_tpot": round(_pct(tpots, 0.99), 6),
+        }
+    else:
+        perf = {
             "total_wall_time_min": round(wall_time_s / 60.0, 2),
             "avg_e2e_latency_s": round(sum(e2e) / max(n, 1), 2),
             "p50_e2e_latency_s": round(_pct(e2e, 0.5), 2),
@@ -127,7 +164,9 @@ def write_teas_outputs(
             "p99_ttft": round(_pct(ttfts, 0.99), 6),
             "tpot": round(sum(tpots) / max(len(tpots), 1), 6),
             "p99_tpot": round(_pct(tpots, 0.99), 6),
-        },
+        }
+    metrics = {
+        "performance": perf,
         "agentic": {
             "avg_total_input_tokens": round(tot_in / max(n, 1), 2),
             "avg_total_output_tokens": round(tot_out / max(n, 1), 2),
@@ -165,7 +204,19 @@ def write_teas_outputs(
             "model_name": env("TEAS_MODEL_NAME", model_name or "unknown"),
             "precision": env("TEAS_PRECISION", "unknown"),
         },
-        "system_environment": {
+        "system_environment": ({
+            "inference_engine": engine,
+            "base_url": "http://localhost:8000/v1",
+            "is_local": True,
+            "backend": env("TEAS_BACKEND", "mcp-atlas-localmcp"),
+            "dataset": dataset,
+            "num_examples": n,
+            "max_model_len": 131072,
+            "streaming": True,
+            "timestamp": ts,
+            "agentcap_strategy": "single",
+            "sweagent_streaming_patch": None,
+        } if is_mcp else {
             "inference_engine": engine,
             "base_url": "http://localhost:8000/v1",
             "is_local": True,
@@ -179,7 +230,7 @@ def write_teas_outputs(
             "sweagent_streaming_patch": "AGENTCAP_STREAMING_PATCH_APPLIED",
             "reasoning_parser": "gpt-oss" if engine == "sglang" else "openai_gptoss",
             "tool_call_parser": "gpt-oss" if engine == "sglang" else "openai",
-        },
+        }),
     }
 
     (out_dir / f"metrics_{suffix}.json").write_text(json.dumps(metrics, indent=2))
