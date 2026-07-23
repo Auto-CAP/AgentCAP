@@ -1577,6 +1577,56 @@ async def async_main(args: argparse.Namespace, output_paths: Dict[str, str]) -> 
 
     return results
 
+def wait_for_external_sglang_server(
+    host: str,
+    port: int,
+    timeout_s: int,
+    expected_model: Optional[str] = None,
+) -> None:
+    client_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    models_url = f"http://{client_host}:{port}/v1/models"
+
+    print(
+        f"Waiting for externally managed SGLang server at {models_url}...",
+        flush=True,
+    )
+
+    deadline = time.monotonic() + timeout_s
+    last_error: Optional[BaseException] = None
+
+    while time.monotonic() < deadline:
+        try:
+            response = requests.get(models_url, timeout=5)
+            response.raise_for_status()
+
+            payload = response.json()
+            model_ids = [
+                item.get("id")
+                for item in payload.get("data", [])
+                if isinstance(item, dict)
+            ]
+
+            print("External SGLang server is ready.", flush=True)
+            print(f"Models reported by server: {model_ids}", flush=True)
+
+            if expected_model and expected_model not in model_ids:
+                print(
+                    f"WARNING: requested model name {expected_model!r} was not "
+                    f"reported by /v1/models. Reported names: {model_ids}",
+                    flush=True,
+                )
+
+            return
+        except Exception as exc:
+            last_error = exc
+            time.sleep(1)
+
+    raise RuntimeError(
+        f"External SGLang server did not become ready within "
+        f"{timeout_s} seconds. Last error: "
+        f"{type(last_error).__name__}: {last_error}"
+    )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -1647,13 +1697,31 @@ def main() -> None:
     parser.add_argument("--extra-sglang-args", type=str, default="")
 
     parser.add_argument("--probe-sglang-endpoints-and-exit", action="store_true")
+    parser.add_argument(
+        "--external-sglang-server",
+        action="store_true",
+        help=(
+            "Use an already-running SGLang server instead of launching SGLang "
+            "with the current Python environment."
+        ),
+    )
 
     args = parser.parse_args()
 
     if args.mem_fraction_static is None:
         args.mem_fraction_static = args.gpu_memory_utilization
 
-    args.model_path = resolve_model_path(args.model_path)
+    if args.external_sglang_server:
+        # The model exists in the Hugging Face cache mounted into the Docker
+        # container. Do not resolve or download it on the host.
+        print(
+            f"External-server mode: treating {args.model_path!r} as a model ID. "
+            "No model files will be downloaded into the host environment.",
+            flush=True,
+        )
+    else:
+        args.model_path = resolve_model_path(args.model_path)
+
     output_paths = initialize_output_files(args)
     t0 = time.time()
     results: List[Dict[str, Any]] = []
@@ -1690,17 +1758,32 @@ def main() -> None:
         extra_sglang_args=args.extra_sglang_args,
     )
 
-    infra = SGLangInfraDeepSeek32(runtime_cfg)
-    try:
-        infra.start()
+    if args.external_sglang_server:
+        wait_for_external_sglang_server(
+            host=args.host,
+            port=args.port,
+            timeout_s=args.server_timeout,
+            expected_model=args.model,
+        )
 
         if args.probe_sglang_endpoints_and_exit:
             probe_sglang_endpoints(f"http://127.0.0.1:{args.port}")
             return
 
         results = asyncio.run(async_main(args, output_paths))
-    finally:
-        infra.stop()
+    else:
+        infra = SGLangInfraDeepSeek32(runtime_cfg)
+
+        try:
+            infra.start()
+
+            if args.probe_sglang_endpoints_and_exit:
+                probe_sglang_endpoints(f"http://127.0.0.1:{args.port}")
+                return
+
+            results = asyncio.run(async_main(args, output_paths))
+        finally:
+            infra.stop()
 
     wall_time_s = time.time() - t0
     print_summary(results, wall_time_s)
