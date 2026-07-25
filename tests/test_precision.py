@@ -26,6 +26,21 @@ def test_compressed_tensors_fp8():
     }}) == "fp8"
 
 
+def test_kimi_nested_text_config_no_quant_method():
+    # Real kimi-k2.5 shape: quant in text_config, uses `dtype`, no quant_method.
+    assert rp({"dtype": "bfloat16", "quantization_config": None, "text_config": {
+        "dtype": "bfloat16",
+        "quantization_config": {
+            "format": "pack-quantized",
+            "config_groups": {"g0": {"weights": {"num_bits": 4, "type": "int"}}},
+        },
+    }}) == "int4"
+
+
+def test_dtype_key_alias():
+    assert rp({"dtype": "bfloat16"}) == "bfloat16"
+
+
 def test_fp8_and_nvfp4_methods():
     assert rp({"quantization_config": {"quant_method": "fp8"}}) == "fp8"
     assert rp({"quantization_config": {"quant_method": "nvfp4"}}) == "nvfp4"
