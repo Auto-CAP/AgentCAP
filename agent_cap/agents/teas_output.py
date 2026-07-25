@@ -23,6 +23,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from agent_cap.utils.precision import resolve_precision, normalize_model_id
+
 
 def _pct(vals: List[float], p: float) -> float:
     vals = sorted(vals)
@@ -201,8 +203,10 @@ def write_teas_outputs(
             "num_cpus": int(env("TEAS_NUM_CPUS", "0")),
         },
         "model_config": {
-            "model_name": env("TEAS_MODEL_NAME", model_name or "unknown"),
-            "precision": env("TEAS_PRECISION", "unknown"),
+            "model_name": normalize_model_id(env("TEAS_MODEL_NAME", model_name) or "unknown"),
+            "precision": (env("TEAS_PRECISION")
+                          or resolve_precision(env("TEAS_MODEL_NAME", model_name))
+                          or "unknown"),
         },
         "system_environment": ({
             "inference_engine": engine,
