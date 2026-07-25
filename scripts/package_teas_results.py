@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 from agent_cap.agents.teas_output import write_teas_outputs
+from agent_cap.utils.precision import resolve_precision, normalize_model_id
 
 
 def main():
@@ -28,12 +29,16 @@ def main():
     ap.add_argument("--num-gpus", type=int, required=True)
     ap.add_argument("--tp", type=int, required=True)
     ap.add_argument("--model-name", default="unsloth/gpt-oss-120b")
-    ap.add_argument("--precision", default="mxfp4")
+    ap.add_argument("--precision", default=None,
+                    help="default: resolve from the checkpoint's quantization_config")
     ap.add_argument("--dataset", default="swe-bench-lite")
     ap.add_argument("--cpu-type", default=None)
     ap.add_argument("--num-cpus", type=int, default=None)
     ap.add_argument("--timestamp", default=None, help="YYYYMMDD_HHMMSS; default now")
     args = ap.parse_args()
+
+    model_name = normalize_model_id(args.model_name)
+    precision = args.precision or resolve_precision(args.model_name) or "unknown"
 
     os.environ.update({
         "TEAS_ENGINE": args.engine,
@@ -41,8 +46,8 @@ def main():
         "TEAS_GPU_TYPE": args.gpu_type,
         "TEAS_NUM_GPUS": str(args.num_gpus),
         "TEAS_TP": str(args.tp),
-        "TEAS_MODEL_NAME": args.model_name,
-        "TEAS_PRECISION": args.precision,
+        "TEAS_MODEL_NAME": model_name,
+        "TEAS_PRECISION": precision,
     })
     if args.cpu_type:
         os.environ["TEAS_CPU_TYPE"] = args.cpu_type

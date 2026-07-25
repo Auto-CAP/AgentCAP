@@ -39,6 +39,7 @@ except ImportError:
     psutil = None
 
 from agent_cap.server.gpu_monitor import GPUMetricsSummary, GPUMonitor
+from agent_cap.utils.precision import resolve_precision, normalize_model_id
 
 
 @dataclass
@@ -1952,7 +1953,7 @@ Examples:
         resolved_openrouter_provider = resolve(None, "openrouter_provider_pin", "")
 
     config = UnifiedConfig(
-        model_name=resolve(args.model_name, "model_name", ""),
+        model_name=normalize_model_id(resolve(args.model_name, "model_name", "")),
         serving_engine=resolve(args.serving_engine, "serving_engine", "sglang"),
         base_url=resolve(args.base_url, "base_url", "http://localhost:30000"),
         dataset=resolve(args.dataset, "dataset", ""),
@@ -1968,7 +1969,9 @@ Examples:
         ),
         openrouter_provider=resolved_openrouter_provider,
         is_local=False if args.no_local else resolve(None, "is_local", True),
-        precision=resolve(args.precision, "precision", "bfloat16"),
+        precision=(resolve(args.precision, "precision", None)
+                   or resolve_precision(resolve(args.model_name, "model_name", ""))
+                   or "bfloat16"),
         max_turns=resolve(args.max_turns, "max_turns", 15),
         max_tokens=resolve(args.max_tokens, "max_tokens", 8192),
         temperature=resolve(args.temperature, "temperature", 0.0),
