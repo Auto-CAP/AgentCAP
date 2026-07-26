@@ -192,6 +192,8 @@ class DelegationStrategy(ABC):
 class PlanExecuteStrategy(DelegationStrategy):
     """Phase 1: planner generates plan. Phase 2: executor follows plan with tools."""
 
+    strategy_name = "plan-execute"
+
     PLAN_SYSTEM_PROMPT = (
         "You are a strategic planning agent. You are a PLANNER, not an implementer.\n\n"
         "Your mission: produce a decision-complete plan for an executor agent. "
@@ -302,6 +304,25 @@ class PlanExecuteStrategy(DelegationStrategy):
             }
         )
 
+    async def _postprocess_plan(
+        self,
+        *,
+        session: aiohttp.ClientSession,
+        models: Dict[str, ModelEndpoint],
+        task: UnifiedTask,
+        user_prompt: str,
+        plan_text: str,
+        tools: List[Dict[str, Any]],
+        role_metrics: Dict[str, RoleMetrics],
+        per_request_details: List[Dict[str, Any]],
+        errors: List[str],
+        all_input_tokens: List[int],
+        request_index: int,
+        task_dir: Optional[Path],
+    ) -> tuple[str, int]:
+        """Optional strategy hook between planning and execution."""
+        return plan_text, request_index
+
     async def run_task(
         self,
         session: aiohttp.ClientSession,
@@ -380,7 +401,7 @@ class PlanExecuteStrategy(DelegationStrategy):
             return TeamTaskResult(
                 task_id=task.task_id,
                 task_name=task.task_name,
-                strategy="plan-execute",
+                strategy=self.strategy_name,
                 role_metrics=role_metrics,
                 total_input_tokens=0,
                 total_output_tokens=0,
@@ -458,6 +479,21 @@ class PlanExecuteStrategy(DelegationStrategy):
                 encoding="utf-8",
             )
             (task_dir / "plan.txt").write_text(raw_plan_text, encoding="utf-8")
+
+        plan_text, request_index = await self._postprocess_plan(
+            session=session,
+            models=models,
+            task=task,
+            user_prompt=user_prompt,
+            plan_text=plan_text,
+            tools=tools,
+            role_metrics=role_metrics,
+            per_request_details=per_request_details,
+            errors=errors,
+            all_input_tokens=all_input_tokens,
+            request_index=request_index,
+            task_dir=task_dir,
+        )
 
         exec_prompt = (
             f"TASK: {user_prompt}\n\nPLAN:\n{plan_text}\n\nExecute the plan now."
@@ -653,7 +689,7 @@ class PlanExecuteStrategy(DelegationStrategy):
             summary = {
                 "task_id": task.task_id,
                 "task_name": task.task_name,
-                "strategy": "plan-execute",
+                "strategy": self.strategy_name,
                 "roles": {
                     role: {
                         "model": metric.model_name,
@@ -685,7 +721,7 @@ class PlanExecuteStrategy(DelegationStrategy):
         return TeamTaskResult(
             task_id=task.task_id,
             task_name=task.task_name,
-            strategy="plan-execute",
+            strategy=self.strategy_name,
             role_metrics=role_metrics,
             total_input_tokens=total_input_tokens,
             total_output_tokens=total_output_tokens,
@@ -709,6 +745,345 @@ class PlanExecuteStrategy(DelegationStrategy):
             else 0,
             per_request_details=per_request_details,
         )
+
+
+class PlanVerifyExecuteStrategy(PlanExecuteStrategy):
+    """Plan, audit the draft plan once, then execute the verified plan."""
+
+    strategy_name = "plan-verify-execute"
+    VERIFY_SYSTEM_PROMPT = (
+        "Evaluate the quality of a proposed tool-use plan without performing the "
+        "plan. Check completeness, executability with concrete tool arguments, "
+        "and valid step dependencies. Default to APPROVED when the plan is "
+        "plausibly executable. Use NEEDS_REVISION only for one specific defect a "
+        "different plan would fix, not for style or optional extra verification. "
+        "Reply with one JSON object only."
+    )
+
+    def required_roles(self) -> List[str]:
+        return ["planner", "verifier", "executor"]
+
+    @staticmethod
+    def _parse_verifier_json(text: str) -> Optional[Dict[str, Any]]:
+        cleaned = THINK_RE.sub("", text or "").strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+        first = cleaned.find("{")
+        last = cleaned.rfind("}")
+        if first < 0 or last < first:
+            return None
+        try:
+            parsed = json.loads(cleaned[first : last + 1])
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        status = str(parsed.get("status", "")).strip().upper()
+        if status not in {"APPROVED", "NEEDS_REVISION"}:
+            return None
+        parsed["status"] = status
+        return parsed
+
+    async def _postprocess_plan(
+        self,
+        *,
+        session: aiohttp.ClientSession,
+        models: Dict[str, ModelEndpoint],
+        task: UnifiedTask,
+        user_prompt: str,
+        plan_text: str,
+        tools: List[Dict[str, Any]],
+        role_metrics: Dict[str, RoleMetrics],
+        per_request_details: List[Dict[str, Any]],
+        errors: List[str],
+        all_input_tokens: List[int],
+        request_index: int,
+        task_dir: Optional[Path],
+        verification_round: int = 0,
+    ) -> tuple[str, int]:
+        round_no = verification_round + 1
+        verifier = models["verifier"]
+        tool_names = [
+            str(tool.get("function", {}).get("name", ""))
+            for tool in tools
+            if tool.get("function", {}).get("name")
+        ]
+        verifier_messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": self.VERIFY_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Evaluate this proposed plan for completeness, executability, "
+                    "and valid step dependencies.\n\n"
+                    f"ORIGINAL TASK:\n{user_prompt}\n\n"
+                    f"AVAILABLE TOOLS:\n{json.dumps(tool_names, ensure_ascii=False)}\n\n"
+                    f"PLAN:\n{plan_text}\n\n"
+                    "Reply exactly as one of these schemas and add no other text:\n"
+                    '{"status":"APPROVED","feedback":""}\n'
+                    '{"status":"NEEDS_REVISION","feedback":"one specific plan defect"}'
+                ),
+            },
+        ]
+
+        if task_dir is not None:
+            (task_dir / f"verify_request_round_{round_no}.json").write_text(
+                json.dumps(
+                    {
+                        "turn": "verify",
+                        "timestamp": datetime.now().isoformat(),
+                        "model": verifier.name,
+                        "messages": verifier_messages,
+                        "tools_count": 0,
+                        "temperature": verifier.temperature,
+                        "max_tokens": verifier.max_tokens,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+        try:
+            verify_timed = await _chat_with_fallback(
+                session=session,
+                base_url=verifier.base_url,
+                api_key=verifier.api_key,
+                model=verifier.name,
+                messages=verifier_messages,
+                tools=None,
+                max_tokens=verifier.max_tokens,
+                temperature=verifier.temperature,
+                openrouter_provider=verifier.openrouter_provider,
+                use_streaming=verifier.use_streaming,
+                errors=errors,
+            )
+        except Exception as exc:
+            errors.append(f"verifier_request_failed: {exc}")
+            return plan_text, request_index
+
+        verify_result = verify_timed.response_json
+        verify_usage = verify_result.get("usage") or {}
+        verify_in_tok = _to_int(
+            verify_usage.get("prompt_tokens", verify_timed.input_tokens)
+        )
+        verify_out_tok = _to_int(
+            verify_usage.get("completion_tokens", verify_timed.output_tokens)
+        )
+        verify_cached_tok = _to_int(
+            verify_usage.get("cached_tokens", verify_timed.cached_tokens)
+        )
+        if verify_cached_tok == 0:
+            verify_cached_tok = _extract_cached_tokens(verify_usage)
+
+        metric = role_metrics["verifier"]
+        metric.input_tokens += verify_in_tok
+        metric.output_tokens += verify_out_tok
+        metric.cached_tokens += verify_cached_tok
+        metric.prefill_time_s += verify_timed.ttft_seconds
+        metric.decode_time_s += verify_timed.decode_seconds
+        metric.num_requests += 1
+        all_input_tokens.append(verify_in_tok)
+
+        verify_choices = verify_result.get("choices") or []
+        verify_message = verify_choices[0].get("message", {}) if verify_choices else {}
+        raw_verifier_output = self._extract_message_text(verify_message)
+        verdict = self._parse_verifier_json(raw_verifier_output)
+        if verdict is None:
+            errors.append("verifier_returned_invalid_json")
+
+        self._append_request_detail(
+            per_request_details=per_request_details,
+            role="verifier",
+            request_index=request_index,
+            in_tok=verify_in_tok,
+            out_tok=verify_out_tok,
+            cached_tok=verify_cached_tok,
+            ttft_s=verify_timed.ttft_seconds,
+            decode_s=verify_timed.decode_seconds,
+            num_tool_calls=0,
+            has_tool_calls=False,
+        )
+        request_index += 1
+
+        if task_dir is not None:
+            (task_dir / f"verify_response_round_{round_no}.json").write_text(
+                json.dumps(
+                    {
+                        "turn": "verify",
+                        "timestamp": datetime.now().isoformat(),
+                        "raw_response": verify_result,
+                        "thinking_content": _extract_thinking_content(verify_message),
+                        "content": raw_verifier_output,
+                        "usage": verify_usage,
+                        "cached_tokens": verify_cached_tok,
+                        "ttft_s": (
+                            verify_timed.ttft_seconds if verify_timed.is_streaming else 0.0
+                        ),
+                        "decode_s": (
+                            verify_timed.decode_seconds if verify_timed.is_streaming else 0.0
+                        ),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (task_dir / f"verifier_verdict_round_{round_no}.json").write_text(
+                json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+        if verdict is None or verdict["status"] == "APPROVED":
+            if task_dir is not None:
+                (task_dir / "verified_plan.txt").write_text(
+                    plan_text, encoding="utf-8"
+                )
+            return plan_text, request_index
+
+        feedback = str(verdict.get("feedback", "")).strip()
+        if not feedback:
+            errors.append("verifier_requested_revision_without_feedback")
+            return plan_text, request_index
+
+        planner = models["planner"]
+        tool_lines = []
+        for tool in tools:
+            fn = tool.get("function", {})
+            name = str(fn.get("name", ""))
+            desc = str(fn.get("description", ""))
+            if name:
+                tool_lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+        tool_names_str = "\n\nAvailable tools:\n" + "\n".join(tool_lines)
+        revision_messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": self.PLAN_SYSTEM_PROMPT + tool_names_str},
+            {
+                "role": "user",
+                "content": (
+                    f"ORIGINAL TASK:\n{user_prompt}\n\n"
+                    f"CURRENT PLAN:\n{plan_text}\n\n"
+                    f"VERIFIER FEEDBACK:\n{feedback}\n\n"
+                    "Return a revised decision-complete numbered plan that fixes "
+                    "the concrete verifier feedback. Output only the revised plan."
+                ),
+            },
+        ]
+        if task_dir is not None:
+            (task_dir / f"revision_request_round_{round_no}.json").write_text(
+                json.dumps(
+                    {
+                        "turn": "revision",
+                        "timestamp": datetime.now().isoformat(),
+                        "model": planner.name,
+                        "messages": revision_messages,
+                        "tools_count": 0,
+                        "temperature": planner.temperature,
+                        "max_tokens": planner.max_tokens,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        try:
+            revision_timed = await _chat_with_fallback(
+                session=session,
+                base_url=planner.base_url,
+                api_key=planner.api_key,
+                model=planner.name,
+                messages=revision_messages,
+                tools=None,
+                max_tokens=planner.max_tokens,
+                temperature=planner.temperature,
+                openrouter_provider=planner.openrouter_provider,
+                use_streaming=planner.use_streaming,
+                errors=errors,
+            )
+        except Exception as exc:
+            errors.append(f"planner_revision_request_failed: {exc}")
+            return plan_text, request_index
+
+        revision_result = revision_timed.response_json
+        revision_usage = revision_result.get("usage") or {}
+        revision_in_tok = _to_int(
+            revision_usage.get("prompt_tokens", revision_timed.input_tokens)
+        )
+        revision_out_tok = _to_int(
+            revision_usage.get("completion_tokens", revision_timed.output_tokens)
+        )
+        revision_cached_tok = _to_int(
+            revision_usage.get("cached_tokens", revision_timed.cached_tokens)
+        )
+        if revision_cached_tok == 0:
+            revision_cached_tok = _extract_cached_tokens(revision_usage)
+
+        planner_metric = role_metrics["planner"]
+        planner_metric.input_tokens += revision_in_tok
+        planner_metric.output_tokens += revision_out_tok
+        planner_metric.cached_tokens += revision_cached_tok
+        planner_metric.prefill_time_s += revision_timed.ttft_seconds
+        planner_metric.decode_time_s += revision_timed.decode_seconds
+        planner_metric.num_requests += 1
+        all_input_tokens.append(revision_in_tok)
+        revision_choices = revision_result.get("choices") or []
+        revision_message = (
+            revision_choices[0].get("message", {}) if revision_choices else {}
+        )
+        raw_revised_plan = self._extract_message_text(revision_message)
+        revised_plan = THINK_RE.sub("", raw_revised_plan).strip()
+        if not revised_plan:
+            errors.append("planner_returned_empty_revision")
+            revised_plan = plan_text
+
+        self._append_request_detail(
+            per_request_details=per_request_details,
+            role="planner",
+            request_index=request_index,
+            in_tok=revision_in_tok,
+            out_tok=revision_out_tok,
+            cached_tok=revision_cached_tok,
+            ttft_s=revision_timed.ttft_seconds,
+            decode_s=revision_timed.decode_seconds,
+            num_tool_calls=0,
+            has_tool_calls=False,
+        )
+        request_index += 1
+        if task_dir is not None:
+            (task_dir / f"revision_response_round_{round_no}.json").write_text(
+                json.dumps(
+                    {
+                        "turn": "revision",
+                        "timestamp": datetime.now().isoformat(),
+                        "raw_response": revision_result,
+                        "content": raw_revised_plan,
+                        "usage": revision_usage,
+                        "cached_tokens": revision_cached_tok,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (task_dir / "verified_plan.txt").write_text(
+                revised_plan, encoding="utf-8"
+            )
+
+        if verification_round == 0:
+            return await self._postprocess_plan(
+                session=session,
+                models=models,
+                task=task,
+                user_prompt=user_prompt,
+                plan_text=revised_plan,
+                tools=tools,
+                role_metrics=role_metrics,
+                per_request_details=per_request_details,
+                errors=errors,
+                all_input_tokens=all_input_tokens,
+                request_index=request_index,
+                task_dir=task_dir,
+                verification_round=1,
+            )
+        return revised_plan, request_index
 
 
 def _safe_mean(values: Sequence[float]) -> float:
@@ -2554,6 +2929,7 @@ __all__ = [
     "RoleMetrics",
     "DelegationStrategy",
     "PlanExecuteStrategy",
+    "PlanVerifyExecuteStrategy",
     "TeamTaskResult",
     "TeamRunResult",
     "TeamRunner",
@@ -2564,6 +2940,7 @@ __all__ = [
 
 
 register_strategy("plan-execute", PlanExecuteStrategy())
+register_strategy("plan-verify-execute", PlanVerifyExecuteStrategy())
 
 
 if __name__ == "__main__":
