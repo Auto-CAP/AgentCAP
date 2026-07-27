@@ -1,0 +1,58 @@
+{
+  "status": "valid_complete",
+  "dataset": "financebench",
+  "replication": 1,
+  "run_started_utc": "2026-07-27T20:33:16+00:00",
+  "run_completed_utc": "2026-07-27T21:49:23+00:00",
+  "code_commit_at_run": "6885103",
+  "output_root": "/root/agentcard_rebuttal/prompt_ablation_langchain_control_replication1_20260727",
+  "task_manifest_sha256": "e861d9179e3113a85ec57dc4ad5ab3898a84d9156ef3b79385fb11ee847fd76d",
+  "num_tasks_per_arm": 30,
+  "arms": 4,
+  "total_task_runs": 120,
+  "execution_errors": 0,
+  "prompts": {
+    "submitted": {
+      "planner_sha256": "e656ab211d4689896274441d350f0f8c9251459be3b9a98dc31b8b8117b6ac6f",
+      "executor_sha256": "309ae0e666823ead604eb7720e2e4be822a09328634e81c62d87c02dacd5ffdd"
+    },
+    "langchain-v0.0.354-native": {
+      "planner_sha256": "0217ce3fc21d65f7fc5f3d23ae19e875aa4c89107280a5538c77b78d7bdbbadd",
+      "executor_sha256": "ef6c8deda0e50071e9ad1fd8fad06a60ba1424be4e792ac4e1bead13b6b6cd38",
+      "upstream": "langchain-ai/langchain v0.0.354",
+      "upstream_commit": "6e90b7a91bba16d84689d07d1016a941eddf4f64",
+      "license": "MIT",
+      "adaptation": "textual JSON tool-call serialization replaced by native function calling"
+    }
+  },
+  "results": {
+    "submitted": {
+      "gpt-5.4_planner_gpt-5.4-mini_executor": "12/30",
+      "gpt-5.4-mini_planner_gpt-5.4_executor": "13/30",
+      "strong_planner_minus_strong_executor_percent": -3.3333333333333335,
+      "paired_bootstrap_95_percent": [-13.333333333333334, 6.666666666666667],
+      "planner_only_executor_only": [1, 2],
+      "exact_mcnemar_two_sided_p": 1.0
+    },
+    "langchain-v0.0.354-native": {
+      "gpt-5.4_planner_gpt-5.4-mini_executor": "11/30",
+      "gpt-5.4-mini_planner_gpt-5.4_executor": "8/30",
+      "strong_planner_minus_strong_executor_percent": 10.0,
+      "paired_bootstrap_95_percent": [0.0, 23.333333333333332],
+      "planner_only_executor_only": [3, 0],
+      "exact_mcnemar_two_sided_p": 0.25
+    }
+  },
+  "analysis": {
+    "bootstrap_draws": 10000,
+    "bootstrap_seed": 20260724,
+    "failure_policy": "failures score zero",
+    "point_role_ranking_agreement": false,
+    "interpretation": "The point ranking changes across scaffolds, but neither within-scaffold exact paired test resolves a role preference. Role assignment is reported as scaffold-conditional."
+  },
+  "artifacts": {
+    "aggregate_json_sha256": "c8368e239990a4d9b370997d7c0e9ec203f3bf0b5d31a11486b7fe073f0f1cc8",
+    "sanitized_per_task_jsonl_sha256": "8972486bdb5bedc8473fcebf85d16387badc3edc4ee54b48c6540a23298f7c23"
+  },
+  "invalid_first_attempt": "docs/rebuttal_prompt_control_run1_incident_20260727.json"
+}
