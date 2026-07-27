@@ -1,0 +1,83 @@
+{
+  "title": "AgentCARD FinanceBench external prompt-scaffold control",
+  "status": "frozen_before_any_new_outcome",
+  "created_utc": "2026-07-27T19:06:57+00:00",
+  "code_commit": "59332a897468469e8cf568b08f9da7fa96c713b9",
+  "dataset": "financebench",
+  "num_tasks_per_arm": 30,
+  "task_selection_seed": 20260724,
+  "task_manifest_sha256_expected": "e861d9179e3113a85ec57dc4ad5ab3898a84d9156ef3b79385fb11ee847fd76d",
+  "strata_expected": {
+    "domain-relevant": 10,
+    "metrics-generated": 10,
+    "novel-generated": 10
+  },
+  "models": [
+    "gpt-5.4",
+    "gpt-5.4-mini"
+  ],
+  "conditions": [
+    {
+      "variant": "original",
+      "planner": "gpt-5.4",
+      "executor": "gpt-5.4-mini"
+    },
+    {
+      "variant": "original",
+      "planner": "gpt-5.4-mini",
+      "executor": "gpt-5.4"
+    },
+    {
+      "variant": "langchain-v0.0.354-native",
+      "planner": "gpt-5.4",
+      "executor": "gpt-5.4-mini"
+    },
+    {
+      "variant": "langchain-v0.0.354-native",
+      "planner": "gpt-5.4-mini",
+      "executor": "gpt-5.4"
+    }
+  ],
+  "prompt_hashes": {
+    "original": {
+      "planner_sha256": "e656ab211d4689896274441d350f0f8c9251459be3b9a98dc31b8b8117b6ac6f",
+      "executor_sha256": "309ae0e666823ead604eb7720e2e4be822a09328634e81c62d87c02dacd5ffdd"
+    },
+    "langchain-v0.0.354-native": {
+      "planner_sha256": "0217ce3fc21d65f7fc5f3d23ae19e875aa4c89107280a5538c77b78d7bdbbadd",
+      "executor_sha256": "ef6c8deda0e50071e9ad1fd8fad06a60ba1424be4e792ac4e1bead13b6b6cd38"
+    }
+  },
+  "external_prompt_source": {
+    "repository": "langchain-ai/langchain",
+    "tag": "v0.0.354",
+    "tag_commit": "6e90b7a91bba16d84689d07d1016a941eddf4f64",
+    "license": "MIT",
+    "planner_path": "libs/experimental/langchain_experimental/plan_and_execute/planners/chat_planner.py",
+    "executor_path": "libs/langchain/langchain/agents/structured_chat/prompt.py",
+    "adaptation": "StructuredChatAgent textual JSON tool-call serialization is omitted because the runner supplies tool schemas through native function calling. The task-to-plan and plan-to-executor message boundaries are unchanged across all arms."
+  },
+  "fixed_runtime": {
+    "base_url": "http://127.0.0.1:8317/v1",
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "max_turns": 10,
+    "tools": "unchanged FinanceBench backend",
+    "evaluator": "unchanged FinanceBench evaluator",
+    "failures": "score as zero"
+  },
+  "analysis": {
+    "primary": "For each scaffold, report the paired strong-planner minus strong-executor accuracy difference on all 30 tasks.",
+    "uncertainty": "Paired bootstrap 95% percentile interval with fixed seeds; also report the paired 2x2 transition counts and exact McNemar p-value.",
+    "prompt_effect": "For each model direction, report external-scaffold minus original accuracy on the same 30 task IDs.",
+    "reporting": "Report all four arms and all 120 task outcomes. Do not select a scaffold, task subset, seed, or rerun based on direction or significance."
+  },
+  "stopping_rule": "Stop after exactly the four declared arms complete. Do not add prompt variants after viewing outcomes.",
+  "pilot_disposition": {
+    "variant": "paraphrase",
+    "status": "retained as response-period pilot artifact but excluded from the primary external-scaffold table",
+    "design_reason": "The handwritten intervention simultaneously weakened exact-tool and zero-judgment constraints, removed explicit discovery rules, and added executor adaptation behavior; it is not a strict meaning-preserving prompt control.",
+    "outcome_direction_not_an_exclusion_reason": true
+  },
+  "output_root": "/root/agentcard_rebuttal/prompt_ablation_langchain_control_20260727"
+}
