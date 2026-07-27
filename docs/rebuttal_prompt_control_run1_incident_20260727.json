@@ -1,0 +1,29 @@
+{
+  "incident": "prompt-control run 1 infrastructure-invalid arm",
+  "detected_after_matrix_completion_utc": "2026-07-27T20:30:42+00:00",
+  "run_root": "/root/agentcard_rebuttal/prompt_ablation_langchain_control_20260727",
+  "task_manifest_sha256": "e861d9179e3113a85ec57dc4ad5ab3898a84d9156ef3b79385fb11ee847fd76d",
+  "raw_failure_as_zero_results": {
+    "original:gpt-5.4->gpt-5.4-mini": "13/30",
+    "original:gpt-5.4-mini->gpt-5.4": "17/30",
+    "langchain-v0.0.354-native:gpt-5.4->gpt-5.4-mini": "9/30",
+    "langchain-v0.0.354-native:gpt-5.4-mini->gpt-5.4": "6/30"
+  },
+  "objective_failure": {
+    "affected_arm": "langchain-v0.0.354-native:gpt-5.4-mini->gpt-5.4",
+    "infrastructure_error_tasks": 10,
+    "error_breakdown": {
+      "503 auth_unavailable for gpt-5.4-mini": 9,
+      "503 upstream connection timeout": 1
+    }
+  },
+  "decision_before_replication": {
+    "preserve_run_1": true,
+    "report_run_1_raw_failure_as_zero_counts": true,
+    "do_not_selectively_rerun_failed_tasks": true,
+    "replicate_all_four_arms": true,
+    "change_prompts": false,
+    "change_manifest": false,
+    "use_replication_as_valid_prompt_comparison_only_if_all_arms_have_zero_infrastructure_errors": true
+  }
+}
