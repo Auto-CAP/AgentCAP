@@ -1581,8 +1581,8 @@ def sglang_generate_with_ids_streaming_native_on_path(
 ) -> tuple[str, List[int], Dict[str, Any], float, float]:
 
     sampling_params = {
+        # Native SGLang /generate uses max_new_tokens.
         "max_new_tokens": int(max_new_tokens),
-        "max_tokens": int(max_new_tokens),
         "temperature": float(temperature),
         "top_p": float(top_p),
         "stop_token_ids": list(map(int, stop_token_ids)),
