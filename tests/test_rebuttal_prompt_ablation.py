@@ -2,6 +2,10 @@ from types import SimpleNamespace
 
 from scripts.aggregate_rebuttal_prompt_ablation import paired_bootstrap_delta
 from scripts.rebuttal_prompt_ablation import (
+    LANGCHAIN_EXEC,
+    LANGCHAIN_PLAN,
+    prompt_pair,
+    prompt_provenance,
     is_mcp_read_only,
     select_stratified,
     stable_hash,
@@ -61,3 +65,33 @@ def test_paired_bootstrap_delta_respects_pairing_and_scale():
     assert 50.0 <= hi <= 100.0
     tie_lo, tie_hi = paired_bootstrap_delta([1, 0], [1, 0], draws=500)
     assert tie_lo == tie_hi == 0.0
+
+
+def test_langchain_prompt_control_is_pinned_and_protocol_only_adapted():
+    planner, executor = prompt_pair("langchain-v0.0.354-native")
+    assert planner == LANGCHAIN_PLAN
+    assert executor == LANGCHAIN_EXEC
+    assert planner.startswith("Let's first understand the problem and devise a plan")
+    assert planner.endswith("'<END_OF_PLAN>'")
+    assert executor == (
+        "Respond to the human as helpfully and accurately as possible. "
+        "You have access to the following tools:"
+    )
+
+    source = prompt_provenance("langchain-v0.0.354-native")
+    assert source["upstream"] == "langchain-ai/langchain"
+    assert source["version"] == "v0.0.354"
+    assert source["license"] == "MIT"
+    assert source["adaptation"] == (
+        "StructuredChatAgent textual JSON tool-call serialization omitted; "
+        "the runner supplies the same tool schemas through native function calling. "
+        "Task-to-plan and plan-to-executor message boundaries are unchanged across arms."
+    )
+
+
+def test_original_prompt_pair_remains_the_production_scaffold():
+    planner, executor = prompt_pair("original")
+    assert planner
+    assert executor
+    assert planner != LANGCHAIN_PLAN
+    assert executor != LANGCHAIN_EXEC

@@ -35,6 +35,61 @@ ORIGINAL_EXEC = PlanExecuteStrategy.EXEC_SYSTEM_PROMPT
 PARAPHRASE_PLAN = """You are the planner for a tool-using executor. Produce a numbered, decision-complete procedure for the user's task. Name the relevant tools and concrete arguments, explain how each result determines the next step, include recovery branches for likely failures, and finish with the required output format. Do not execute tools or answer the task yourself. Do not ask the user for information that can be obtained with the available tools."""
 PARAPHRASE_EXEC = """You are the executor in a planner-executor team. Complete the user's task by carrying out the supplied plan with the available tools. Call tools rather than describing hypothetical calls; inspect returned values, adapt when observations differ from the plan, recover from tool errors when possible, and return the requested final answer. Do not ask the user for information that an available tool can obtain."""
 
+# Public LangChain PlanAndExecute scaffold, pinned to v0.0.354 (MIT).
+# The upstream StructuredChatAgent serializes tool calls as textual JSON. This
+# runner already supplies native function schemas, so only that serialization
+# layer is omitted; task/plan message boundaries remain unchanged.
+LANGCHAIN_PLAN = (
+    "Let's first understand the problem and devise a plan to solve the problem."
+    " Please output the plan starting with the header 'Plan:' "
+    "and then followed by a numbered list of steps. "
+    "Please make the plan the minimum number of steps required "
+    "to accurately complete the task. If the task is a question, "
+    "the final step should almost always be 'Given the above steps taken, "
+    "please respond to the users original question'. "
+    "At the end of your plan, say '<END_OF_PLAN>'"
+)
+LANGCHAIN_EXEC = (
+    "Respond to the human as helpfully and accurately as possible. "
+    "You have access to the following tools:"
+)
+
+
+def prompt_pair(variant: str) -> tuple[str, str]:
+    pairs = {
+        "original": (ORIGINAL_PLAN, ORIGINAL_EXEC),
+        "paraphrase": (PARAPHRASE_PLAN, PARAPHRASE_EXEC),
+        "langchain-v0.0.354-native": (LANGCHAIN_PLAN, LANGCHAIN_EXEC),
+    }
+    try:
+        return pairs[variant]
+    except KeyError as exc:
+        raise ValueError(f"unknown prompt variant: {variant}") from exc
+
+
+def prompt_provenance(variant: str) -> dict[str, str]:
+    if variant == "langchain-v0.0.354-native":
+        return {
+            "upstream": "langchain-ai/langchain",
+            "version": "v0.0.354",
+            "license": "MIT",
+            "planner_source": (
+                "libs/experimental/langchain_experimental/plan_and_execute/"
+                "planners/chat_planner.py"
+            ),
+            "executor_source": (
+                "libs/langchain/langchain/agents/structured_chat/prompt.py"
+            ),
+            "adaptation": (
+                "StructuredChatAgent textual JSON tool-call serialization omitted; "
+                "the runner supplies the same tool schemas through native function calling. "
+                "Task-to-plan and plan-to-executor message boundaries are unchanged across arms."
+            ),
+        }
+    if variant == "original":
+        return {"upstream": "AgentCARD production PlanExecuteStrategy"}
+    return {"upstream": "AgentCARD response-period handwritten pilot"}
+
 READ_ONLY_MCP_SERVERS = {
     "arxiv", "brave-search", "calculator", "clinicaltrialsgov-mcp-server",
     "context7", "ddg-search", "fetch", "met-museum", "open-library",
@@ -114,7 +169,11 @@ def parse_args() -> argparse.Namespace:
         choices=["financebench", "imo-answerbench", "mcp-atlas"],
         required=True,
     )
-    ap.add_argument("--variant", choices=["original", "paraphrase"], required=True)
+    ap.add_argument(
+        "--variant",
+        choices=["original", "paraphrase", "langchain-v0.0.354-native"],
+        required=True,
+    )
     ap.add_argument("--planner", required=True)
     ap.add_argument("--executor", required=True)
     ap.add_argument("--num-tasks", type=int, default=30)
@@ -131,12 +190,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.variant == "original":
-        PlanExecuteStrategy.PLAN_SYSTEM_PROMPT = ORIGINAL_PLAN
-        PlanExecuteStrategy.EXEC_SYSTEM_PROMPT = ORIGINAL_EXEC
-    else:
-        PlanExecuteStrategy.PLAN_SYSTEM_PROMPT = PARAPHRASE_PLAN
-        PlanExecuteStrategy.EXEC_SYSTEM_PROMPT = PARAPHRASE_EXEC
+    plan_prompt, exec_prompt = prompt_pair(args.variant)
+    setattr(PlanExecuteStrategy, "PLAN_SYSTEM_PROMPT", plan_prompt)
+    setattr(PlanExecuteStrategy, "EXEC_SYSTEM_PROMPT", exec_prompt)
 
     source_tasks = _load_dataset_tasks(args.dataset, 0)
     all_tasks = source_tasks
@@ -181,6 +237,7 @@ def main() -> None:
         "executor_prompt_sha256": stable_hash(PlanExecuteStrategy.EXEC_SYSTEM_PROMPT),
         "planner_prompt": PlanExecuteStrategy.PLAN_SYSTEM_PROMPT,
         "executor_prompt": PlanExecuteStrategy.EXEC_SYSTEM_PROMPT,
+        "prompt_provenance": prompt_provenance(args.variant),
         "credentials_serialized": False,
     }
     (out / "ablation_spec.json").write_text(json.dumps(spec, indent=2, ensure_ascii=False))
