@@ -1,3 +1,4 @@
+# This build includes both external SGLang server support and crash-resume support.
 import argparse
 import asyncio
 import contextlib
@@ -190,16 +191,76 @@ def collect_hardware_info_rocm_fallback() -> Dict[str, Any]:
     return hw_info
 
 
+def _find_single_resume_file(results_dir: Path, pattern: str) -> Path:
+    matches = sorted(results_dir.glob(pattern))
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected exactly one file matching {pattern!r} in {results_dir}, "
+            f"but found {len(matches)}: {[str(path) for path in matches]}"
+        )
+    return matches[0]
+
+
 def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
+    if args.resume_dir:
+        results_dir = Path(args.resume_dir).expanduser().resolve()
+        if not results_dir.is_dir():
+            raise FileNotFoundError(
+                f"Resume directory does not exist or is not a directory: {results_dir}"
+            )
+
+        detailed_results_path = _find_single_resume_file(
+            results_dir,
+            "detailed-results_imo-answerbench_*.jsonl",
+        )
+        metadata_path = _find_single_resume_file(
+            results_dir,
+            "metadata_imo-answerbench_*.json",
+        )
+        metrics_path = _find_single_resume_file(
+            results_dir,
+            "metrics_imo-answerbench_*.json",
+        )
+        output_data_path = _find_single_resume_file(
+            results_dir,
+            "output-data_imo-answerbench_*.jsonl",
+        )
+
+        print(f"Resuming existing results directory: {results_dir}")
+        print(f"Detailed results file:             {detailed_results_path}")
+        print(f"Metadata file:                     {metadata_path}")
+        print(f"Metrics file:                      {metrics_path}")
+        print(f"Output data file:                  {output_data_path}")
+
+        return {
+            "timestamp": results_dir.name,
+            "results_dir": str(results_dir),
+            "detailed_results_path": str(detailed_results_path),
+            "metadata_path": str(metadata_path),
+            "metrics_path": str(metrics_path),
+            "output_data_path": str(output_data_path),
+        }
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     print('collecting hardware info...', flush=True)
     hw_info = collect_hardware_info_rocm_fallback()
     print('successfully collected hardware info.', flush=True)
-    model_name = Path(args.model_path).name
+    model_identifier = args.model_path or args.served_model_name
+    model_name = Path(model_identifier.rstrip("/")).name or args.served_model_name
     dataset_name = "imo_answerbench"
     gpu_shortform = str(hw_info.get("gpu_type", "unknown")).replace(" ", "-")
-    number_of_gpus = int(hw_info.get("num_gpus", 0))
+
+    # In external-server mode, the benchmark process may see every GPU on the
+    # host even though the SGLang server uses only a subset. Use the configured
+    # tensor-parallel size unless NUM_GPUS explicitly overrides it.
+    detected_num_gpus = int(hw_info.get("num_gpus", 0))
+    default_num_gpus = args.tensor_parallel_size if args.external_server else detected_num_gpus
+    number_of_gpus = _env_int("NUM_GPUS", default_num_gpus)
+
+    if args.external_server:
+        hw_info["client_visible_num_gpus"] = detected_num_gpus
+        hw_info["num_gpus"] = number_of_gpus
 
     output_root = Path(
         _env_str(
@@ -229,8 +290,15 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     metadata = {
         "hardware": hw_info,
         "model_config": {
-            "model_name": _env_str("MODEL_NAME_FOR_METADATA", args.model_path),
-            "precision": infer_model_precision(args.model_path),
+            "model_name": _env_str("MODEL_NAME_FOR_METADATA", model_identifier),
+            "precision": (
+                infer_model_precision(args.model_path)
+                if args.model_path and Path(args.model_path).is_dir()
+                else _env_str("MODEL_PRECISION", args.dtype or "unknown")
+            ),
+            "served_model_name": args.served_model_name,
+            "server_url": args.server_url,
+            "external_server": args.external_server,
         },
         "system_environment": {
             "inference_engine": _env_str("INFERENCE_ENGINE", "sglang"),
@@ -240,6 +308,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
             "max_turns": args.max_turns,
             "max_tokens": args.max_tokens,
             "temperature": args.temperature,
+            "seed": args.seed,
             "timestamp": timestamp,
         },
     }
@@ -291,39 +360,6 @@ def _p99(values: List[float]) -> float:
     return float(statistics.quantiles(values, n=100, method="inclusive")[98])
 
 
-def _max_input_tokens_by_task(detailed_results_path: str) -> Dict[int, int]:
-    """Largest single-request input length per task, from the per-request records.
-
-    The aggregation rows carry only per-task totals, so the maximum cannot be
-    derived from them: on a single-request task the two coincide, and on every
-    other task the total exceeds any individual request. Read the per-request
-    file this run already writes and take the real maximum. An empty mapping
-    means the field cannot be measured and must be published as null.
-    """
-    by_task: Dict[int, int] = {}
-    try:
-        with open(detailed_results_path, "r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if "request_index" not in row:
-                    return {}
-                task = row.get("example_index")
-                tokens = int(row.get("input_tokens") or 0)
-                if task is None:
-                    continue
-                if tokens > by_task.get(task, -1):
-                    by_task[task] = tokens
-    except OSError:
-        return {}
-    return by_task
-
-
 def write_metrics_file(
     results: List[Dict[str, Any]],
     wall_time_s: float,
@@ -352,25 +388,13 @@ def write_metrics_file(
     max_input_tokens_per_request_list = []
 
     for r in results:
-        reqs = 1
+        reqs = max(1, int(r.get("num_requests", 1)))
         total_in = int(r["input_tokens"])
         total_out = int(r["output_tokens"])
 
         input_tokens_per_request.append(total_in / reqs)
         output_tokens_per_request.append(total_out / reqs)
-        # max input per request is not derivable from a task total; filled in below
-
-    _max_by_task = _max_input_tokens_by_task(
-        output_paths.get("detailed_results_path", "")
-    )
-    # A task that recorded no requests contributed nothing to the token totals
-    # either, so it carries 0 here for the same reason. An empty mapping means
-    # the per-request records are absent entirely and the field is not measurable.
-    max_input_tokens_per_request_list = (
-        [float(_max_by_task.get(k, 0)) for k in range(len(results))]
-        if _max_by_task
-        else []
-    )
+        max_input_tokens_per_request_list.append(float(total_in))
 
     decode_time_s_list = [
         (float(r["tpot_ms_avg"]) / 1000.0) * int(r["output_tokens"])
@@ -408,11 +432,7 @@ def write_metrics_file(
             "avg_num_requests": _safe_mean([float(x) for x in num_requests_list]),
             "avg_input_tokens_per_request": _safe_mean(input_tokens_per_request),
             "avg_output_tokens_per_request": _safe_mean(output_tokens_per_request),
-            "avg_max_input_tokens_per_request": (
-                _safe_mean(max_input_tokens_per_request_list)
-                if max_input_tokens_per_request_list
-                else None
-            ),
+            "avg_max_input_tokens_per_request": _safe_mean(max_input_tokens_per_request_list),
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
             "total_cached_tokens": 0,
@@ -452,6 +472,7 @@ def append_output_data_row(
         "output_tokens": result["output_tokens"],
         "tool_call_count": result["tool_calls"],
         "num_requests": result["num_requests"],
+        "finish_reason": result.get("finish_reason"),
         "e2e_latency_s": float(result["latency_ms"]) / 1000.0,
         "output_text": result["response"],
         "errors": result["errors"],
@@ -830,6 +851,68 @@ def resolve_model_path(model_path: str, local_model_root: Optional[str] = None) 
 
     print(f"Downloaded model snapshot to: {resolved}", flush=True)
     return resolved
+
+
+def normalize_server_url(server_url: Optional[str], host: str, port: int) -> str:
+    """Return the base SGLang URL without a trailing /v1 path."""
+    if server_url:
+        base_url = server_url.strip().rstrip("/")
+    else:
+        client_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        base_url = f"http://{client_host}:{port}"
+
+    if base_url.endswith("/v1"):
+        base_url = base_url[:-3].rstrip("/")
+
+    if not base_url.startswith(("http://", "https://")):
+        base_url = f"http://{base_url}"
+
+    return base_url.rstrip("/")
+
+
+def wait_for_external_sglang(
+    base_url: str,
+    served_model_name: str,
+    timeout_s: int,
+) -> None:
+    """Wait for an already-running SGLang server and validate its model list."""
+    models_url = f"{base_url.rstrip('/')}/v1/models"
+    deadline = time.monotonic() + timeout_s
+    last_error: Optional[str] = None
+
+    print(f"Connecting to external SGLang server: {base_url}", flush=True)
+
+    while time.monotonic() < deadline:
+        try:
+            response = requests.get(models_url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                model_ids = [
+                    str(item.get("id"))
+                    for item in data.get("data", [])
+                    if isinstance(item, dict) and item.get("id") is not None
+                ]
+
+                if model_ids and served_model_name not in model_ids:
+                    print(
+                        f"Warning: requested served model '{served_model_name}' was not "
+                        f"listed by the server. Available models: {model_ids}",
+                        flush=True,
+                    )
+
+                print("External SGLang server is ready.\n", flush=True)
+                return
+
+            last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+
+        time.sleep(1)
+
+    raise RuntimeError(
+        f"External SGLang server at {base_url} did not become ready within "
+        f"{timeout_s} seconds. Last error: {last_error}"
+    )
 
 class SGLangInfraGPTOSS:
     def __init__(self, cfg: RuntimeConfig):
@@ -2247,42 +2330,381 @@ def probe_sglang_endpoints(base_url: str) -> None:
     print("=" * 100 + "\n", flush=True)
 
 
+def _read_jsonl(path: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+
+    # Open read/write so an incomplete trailing line left by a hard crash can
+    # be removed before this process appends any new rows.
+    with open(path, "rb+") as f:
+        while True:
+            line_offset = f.tell()
+            raw_line = f.readline()
+            if not raw_line:
+                break
+            if not raw_line.strip():
+                continue
+
+            try:
+                line = raw_line.decode("utf-8")
+                row = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                remaining = f.read()
+                if not remaining.strip():
+                    print(
+                        f"WARNING: removing incomplete trailing JSONL line in {path} "
+                        f"at byte offset {line_offset}: {exc}",
+                        flush=True,
+                    )
+                    f.seek(line_offset)
+                    f.truncate()
+                    break
+
+                raise RuntimeError(
+                    f"Invalid JSON in {path} near byte offset {line_offset}: {exc}"
+                ) from exc
+
+            if not isinstance(row, dict):
+                raise RuntimeError(
+                    f"Expected a JSON object in {path} near byte offset {line_offset}."
+                )
+            rows.append(row)
+
+    return rows
+
+
+def _rewrite_jsonl(path: str, rows: List[Dict[str, Any]]) -> None:
+    temporary_path = f"{path}.resume-repair.tmp"
+    with open(temporary_path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temporary_path, path)
+
+
+def _latest_detailed_attempt(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep the latest request-index sequence for one benchmark example."""
+    if not rows:
+        return []
+
+    attempt_starts = [
+        idx
+        for idx, row in enumerate(rows)
+        if int(row.get("request_index", 0)) == 0
+    ]
+    if len(attempt_starts) <= 1:
+        return rows
+
+    # If a process crashed after writing detailed rows but before writing the
+    # task-level output row, rerunning that task creates another sequence that
+    # starts at request_index=0. Only the final sequence belongs to the saved
+    # task-level result.
+    return rows[attempt_starts[-1] :]
+
+
+def load_existing_results_for_resume(
+    *,
+    tasks: List[Any],
+    output_paths: Dict[str, str],
+) -> tuple[List[Dict[str, Any]], set[str], float]:
+    output_rows = _read_jsonl(output_paths["output_data_path"])
+    raw_detailed_rows = _read_jsonl(output_paths["detailed_results_path"])
+
+    indexed_results: List[tuple[int, Dict[str, Any]]] = []
+    completed_task_ids: set[str] = set()
+    seen_indexes: set[int] = set()
+
+    # Validate output rows first. These task-level rows are the commit marker:
+    # a detailed row without a corresponding output row is treated as orphaned
+    # work from an interrupted task and will be removed.
+    for row in output_rows:
+        index = int(row["index"])
+        task_id = str(row["task_id"])
+
+        if index in seen_indexes:
+            raise RuntimeError(
+                f"Duplicate completed output index {index} in "
+                f"{output_paths['output_data_path']}"
+            )
+        if task_id in completed_task_ids:
+            raise RuntimeError(
+                f"Duplicate completed task_id {task_id!r} in "
+                f"{output_paths['output_data_path']}"
+            )
+        if index < 0 or index >= len(tasks):
+            raise RuntimeError(
+                f"Stored result index {index} is outside the newly loaded task list "
+                f"of length {len(tasks)}. Use the same --num-tasks and --seed."
+            )
+
+        task = tasks[index]
+        if str(task.id) != task_id:
+            raise RuntimeError(
+                "Resume validation failed: the stored task order does not match "
+                "the newly loaded benchmark. "
+                f"At index {index}, stored task_id={task_id!r}, "
+                f"new task_id={str(task.id)!r}. "
+                "Use exactly the same --num-tasks and --seed as the original run."
+            )
+
+        seen_indexes.add(index)
+        completed_task_ids.add(task_id)
+
+    raw_details_by_example: Dict[int, List[Dict[str, Any]]] = {}
+    for row in raw_detailed_rows:
+        example_index = int(row.get("example_index", -1))
+        raw_details_by_example.setdefault(example_index, []).append(row)
+
+    details_by_example: Dict[int, List[Dict[str, Any]]] = {}
+    repaired_detailed_rows: List[Dict[str, Any]] = []
+    for index in sorted(seen_indexes):
+        selected_rows = _latest_detailed_attempt(
+            raw_details_by_example.get(index, [])
+        )
+        selected_rows = sorted(
+            selected_rows,
+            key=lambda item: int(item.get("request_index", 0)),
+        )
+        details_by_example[index] = selected_rows
+        repaired_detailed_rows.extend(selected_rows)
+
+    if repaired_detailed_rows != raw_detailed_rows:
+        removed_count = len(raw_detailed_rows) - len(repaired_detailed_rows)
+        print(
+            "Repairing detailed-results JSONL before resume: "
+            f"discarding {removed_count} orphaned or superseded row(s).",
+            flush=True,
+        )
+        _rewrite_jsonl(
+            output_paths["detailed_results_path"],
+            repaired_detailed_rows,
+        )
+
+    for row in output_rows:
+        index = int(row["index"])
+        task_id = str(row["task_id"])
+        task = tasks[index]
+        task_details = details_by_example.get(index, [])
+
+        response_text = str(row.get("output_text") or "")
+        output_tokens = int(row.get("output_tokens", 0))
+        total_prefill_time_s = sum(
+            float(item.get("prefill_time_s", 0.0)) for item in task_details
+        )
+        total_decode_time_s = sum(
+            float(item.get("decode_time_s", 0.0)) for item in task_details
+        )
+
+        raw_errors = row.get("errors", [])
+        if isinstance(raw_errors, list):
+            errors = [str(item) for item in raw_errors]
+        elif raw_errors in (None, ""):
+            errors = []
+        else:
+            errors = [str(raw_errors)]
+
+        score = float(row.get("eval_score", 0.0))
+        expected = (task.eval_config or {}).get("expected")
+
+        result = {
+            "task_id": task.id,
+            "task_name": task.name,
+            "category": task.category,
+            "expected": expected,
+            "predicted": _scan_for_answer(response_text),
+            "score": score,
+            "correct": score >= 1.0,
+            "response": response_text,
+            "tool_calls": int(row.get("tool_call_count", 0)),
+            "num_requests": int(row.get("num_requests", 1)),
+            "tool_latencies_ms": [],
+            "input_tokens": int(row.get("input_tokens", 0)),
+            "output_tokens": output_tokens,
+            "latency_ms": float(row.get("e2e_latency_s", 0.0)) * 1000.0,
+            "ttft_ms": total_prefill_time_s * 1000.0,
+            "tpot_ms_avg": (
+                total_decode_time_s * 1000.0 / output_tokens
+                if output_tokens > 0
+                else 0.0
+            ),
+            "tpot_ms_p99": 0.0,
+            "errors": errors,
+            "judge_equivalent": bool(row.get("eval_passed", False)),
+            "judge_response": row.get("eval_details"),
+            "judge_status_code": None,
+            "judge_attempts": 1 if row.get("eval_details") is not None else 0,
+            "detailed_rows": task_details,
+            "finish_reason": row.get("finish_reason"),
+        }
+
+        indexed_results.append((index, result))
+
+    indexed_results.sort(key=lambda item: item[0])
+    existing_results = [result for _, result in indexed_results]
+
+    prior_wall_time_s: Optional[float] = None
+    try:
+        with open(output_paths["metrics_path"], "r", encoding="utf-8") as f:
+            existing_metrics = json.load(f)
+        performance = existing_metrics.get("performance", {})
+        if isinstance(performance, dict) and "e2e_s" in performance:
+            prior_wall_time_s = float(performance["e2e_s"])
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        prior_wall_time_s = None
+
+    if prior_wall_time_s is None:
+        prior_wall_time_s = sum(
+            float(result["latency_ms"]) / 1000.0 for result in existing_results
+        )
+        print(
+            "WARNING: the crashed run did not contain a completed/checkpointed "
+            "overall wall-time metric. Using the sum of completed per-task "
+            f"latencies ({prior_wall_time_s:.2f}s) as the prior wall-time estimate.",
+            flush=True,
+        )
+
+    print(
+        f"Loaded {len(existing_results)} completed tasks from the resume directory.",
+        flush=True,
+    )
+
+    return existing_results, completed_task_ids, prior_wall_time_s
+
+
+def build_failed_task_result(
+    *,
+    task: Any,
+    error_message: str,
+    latency_ms: float,
+    finish_reason: str = "unhandled_task_exception",
+) -> Dict[str, Any]:
+    expected = (task.eval_config or {}).get("expected")
+
+    return {
+        "task_id": task.id,
+        "task_name": task.name,
+        "category": task.category,
+        "expected": expected,
+        "predicted": None,
+        "score": 0.0,
+        "correct": False,
+        "response": "",
+        "tool_calls": 0,
+        "num_requests": 0,
+        "tool_latencies_ms": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "latency_ms": latency_ms,
+        "ttft_ms": 0.0,
+        "tpot_ms_avg": 0.0,
+        "tpot_ms_p99": 0.0,
+        "errors": [error_message],
+        "judge_equivalent": False,
+        "judge_response": f"Evaluation skipped: {error_message}",
+        "judge_status_code": None,
+        "judge_attempts": 0,
+        "detailed_rows": [],
+        "finish_reason": finish_reason,
+    }
+
+
 async def async_main(
     args: argparse.Namespace,
     output_paths: Dict[str, str],
-) -> List[Dict[str, Any]]:
+    native_base_url: str,
+    run_start_time: float,
+) -> tuple[List[Dict[str, Any]], float]:
     judge = OpenRouterEquivalenceJudge(model_name=args.judge_model)
 
     tasks = load_benchmark("imo_answerbench", num_tasks=args.num_tasks, seed=args.seed)
     print(f"Loaded {len(tasks)} IMO AnswerBench tasks")
 
-    results: List[Dict[str, Any]] = []
-    for index, task in enumerate(tasks, start=1):
-        result = await solve_one_task(
-            task=task,
-            example_index=index - 1,
-            model=args.model,
-            native_base_url=f"http://127.0.0.1:{args.port}",
-            max_turns=args.max_turns,
-            max_tokens=args.max_tokens,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            startup_timeout=args.startup_timeout,
-            exec_timeout=args.exec_timeout,
-            preload=args.preload,
-            auto_print_last_expr=args.auto_print_last_expr,
-            seed=args.seed + index,
-            judge=judge,
+    existing_results: List[Dict[str, Any]] = []
+    completed_task_ids: set[str] = set()
+    prior_wall_time_s = 0.0
+
+    if args.resume_dir:
+        (
+            existing_results,
+            completed_task_ids,
+            prior_wall_time_s,
+        ) = load_existing_results_for_resume(
+            tasks=tasks,
+            output_paths=output_paths,
         )
 
+    results: List[Dict[str, Any]] = list(existing_results)
+
+    for index, task in enumerate(tasks, start=1):
+        if str(task.id) in completed_task_ids:
+            print(
+                f"[{index}/{len(tasks)}] {task.id}: already completed; skipping.",
+                flush=True,
+            )
+            continue
+
+        task_start = time.time()
+
+        try:
+            result = await solve_one_task(
+                task=task,
+                example_index=index - 1,
+                model=args.served_model_name,
+                native_base_url=native_base_url,
+                max_turns=args.max_turns,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                startup_timeout=args.startup_timeout,
+                exec_timeout=args.exec_timeout,
+                preload=args.preload,
+                auto_print_last_expr=args.auto_print_last_expr,
+                seed=args.seed + index,
+                judge=judge,
+            )
+        except Exception as exc:
+            error_message = (
+                f"Unhandled exception while solving task {task.id}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+            print("\n" + "=" * 100, flush=True)
+            print(error_message, flush=True)
+            print("Recording task as failed and continuing.", flush=True)
+            print("=" * 100 + "\n", flush=True)
+
+            result = build_failed_task_result(
+                task=task,
+                error_message=error_message,
+                latency_ms=(time.time() - task_start) * 1000.0,
+            )
 
         results.append(result)
-        append_detailed_result_rows(result.get("detailed_rows", []), output_paths["detailed_results_path"])
-        append_output_data_row(result, index, output_paths["output_data_path"])
+        completed_task_ids.add(str(task.id))
+
+        append_detailed_result_rows(
+            result.get("detailed_rows", []),
+            output_paths["detailed_results_path"],
+        )
+        append_output_data_row(
+            result,
+            index,
+            output_paths["output_data_path"],
+        )
         print_task_result(index, len(tasks), result)
         print(f'[JUDGE RESPONSE]: {result["judge_response"]}', flush=True)
 
-    return results
+        # Checkpoint aggregate metrics after every completed task. If the process
+        # crashes again, the next resume can preserve accumulated wall time.
+        checkpoint_wall_time_s = prior_wall_time_s + (time.time() - run_start_time)
+        write_metrics_file(
+            results,
+            checkpoint_wall_time_s,
+            output_paths,
+            args,
+        )
+
+    return results, prior_wall_time_s
 
 
 def main() -> None:
@@ -2306,7 +2728,29 @@ def main() -> None:
 
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--served-model-name", type=str, default="gpt-oss")
-    parser.add_argument("--model-path", type=str, required=True)
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default="unsloth/gpt-oss-120b",
+        help=(
+            "Local path or Hugging Face repo used when launching SGLang internally. "
+            "In --external-server mode this is metadata only."
+        ),
+    )
+    parser.add_argument(
+        "--external-server",
+        action="store_true",
+        help="Connect to an existing SGLang server instead of launching one.",
+    )
+    parser.add_argument(
+        "--server-url",
+        type=str,
+        default=None,
+        help=(
+            "Base URL of an existing SGLang server, for example "
+            "http://127.0.0.1:30001. Do not include /v1."
+        ),
+    )
     parser.add_argument("--kv-cache-dtype", type=str, default="fp8_e4m3")
     parser.add_argument("--dtype", type=str, default="auto")
     parser.add_argument("--stream-interval", type=int, default=1)
@@ -2330,50 +2774,94 @@ def main() -> None:
     parser.add_argument("--allow-auto-truncate", action="store_true", default=True)
 
     parser.add_argument("--probe-sglang-endpoints-and-exit", action="store_true")
+    parser.add_argument(
+        "--resume-dir",
+        type=str,
+        default=None,
+        help=(
+            "Resume into an existing results directory. Completed task IDs are "
+            "loaded from output-data JSONL, skipped, and included in final metrics."
+        ),
+    )
 
     args = parser.parse_args()
     if args.mem_fraction_static is None:
         # Reuse the old vLLM knob as the default SGLang memory fraction.
         args.mem_fraction_static = args.gpu_memory_utilization
-    args.model_path = resolve_model_path(args.model_path)
+
+    args.server_url = normalize_server_url(args.server_url, args.host, args.port)
+
+    # Only resolve/download model weights when this script owns the server.
+    if not args.external_server:
+        args.model_path = resolve_model_path(args.model_path)
+
     output_paths = initialize_output_files(args)
     t0 = time.time()
+    results: List[Dict[str, Any]] = []
+    prior_wall_time_s = 0.0
 
-    runtime_cfg = RuntimeConfig(
-        served_model_name=args.served_model_name,
-        model_path=args.model_path,
-        port=args.port,
-        seed=args.seed,
-        kv_cache_dtype=args.kv_cache_dtype,
-        dtype=args.dtype,
-        context_tokens=args.context_tokens,
-        batch_size=args.batch_size,
-        mem_fraction_static=args.mem_fraction_static,
-        tensor_parallel_size=args.tensor_parallel_size,
-        server_timeout=args.server_timeout,
-        preload_workers=args.preload_workers,
-        host=args.host,
-        log_level=args.log_level,
-        chunked_prefill_size=args.chunked_prefill_size,
-        cuda_graph_max_bs=args.cuda_graph_max_bs,
-        enable_torch_compile=args.enable_torch_compile,
-        allow_auto_truncate=args.allow_auto_truncate,
-        top_p=args.top_p,
-    )
-
-    infra = SGLangInfraGPTOSS(runtime_cfg)
-    try:
-        infra.start()
+    if args.external_server:
+        wait_for_external_sglang(
+            base_url=args.server_url,
+            served_model_name=args.served_model_name,
+            timeout_s=args.server_timeout,
+        )
 
         if args.probe_sglang_endpoints_and_exit:
-            probe_sglang_endpoints(f"http://127.0.0.1:{args.port}") 
+            probe_sglang_endpoints(args.server_url)
             return
 
-        results = asyncio.run(async_main(args, output_paths))
-    finally:
-        infra.stop()
+        results, prior_wall_time_s = asyncio.run(
+            async_main(
+                args,
+                output_paths,
+                args.server_url,
+                run_start_time=t0,
+            )
+        )
+    else:
+        runtime_cfg = RuntimeConfig(
+            served_model_name=args.served_model_name,
+            model_path=args.model_path,
+            port=args.port,
+            seed=args.seed,
+            kv_cache_dtype=args.kv_cache_dtype,
+            dtype=args.dtype,
+            context_tokens=args.context_tokens,
+            batch_size=args.batch_size,
+            mem_fraction_static=args.mem_fraction_static,
+            tensor_parallel_size=args.tensor_parallel_size,
+            server_timeout=args.server_timeout,
+            preload_workers=args.preload_workers,
+            host=args.host,
+            log_level=args.log_level,
+            chunked_prefill_size=args.chunked_prefill_size,
+            cuda_graph_max_bs=args.cuda_graph_max_bs,
+            enable_torch_compile=args.enable_torch_compile,
+            allow_auto_truncate=args.allow_auto_truncate,
+            top_p=args.top_p,
+        )
 
-    wall_time_s = time.time() - t0
+        infra = SGLangInfraGPTOSS(runtime_cfg)
+        try:
+            infra.start()
+
+            if args.probe_sglang_endpoints_and_exit:
+                probe_sglang_endpoints(args.server_url)
+                return
+
+            results, prior_wall_time_s = asyncio.run(
+                async_main(
+                    args,
+                    output_paths,
+                    args.server_url,
+                    run_start_time=t0,
+                )
+            )
+        finally:
+            infra.stop()
+
+    wall_time_s = prior_wall_time_s + (time.time() - t0)
     print_summary(results, wall_time_s)
     write_metrics_file(results, wall_time_s, output_paths, args)
 
