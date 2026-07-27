@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import re
 from pathlib import Path
@@ -27,12 +28,36 @@ def paired_bootstrap_delta(a: list[int], b: list[int], seed: int=20260724, draws
     return vals[int(0.025*draws)], vals[min(draws-1,int(0.975*draws))]
 
 
+def exact_mcnemar(a: list[int], b: list[int]) -> dict[str, int | float]:
+    """Return paired transitions and the two-sided exact McNemar p-value."""
+    if len(a) != len(b) or not a:
+        raise ValueError("paired arrays required")
+    both_pass = sum(x == 1 and y == 1 for x, y in zip(a, b))
+    a_only = sum(x == 1 and y == 0 for x, y in zip(a, b))
+    b_only = sum(x == 0 and y == 1 for x, y in zip(a, b))
+    both_fail = sum(x == 0 and y == 0 for x, y in zip(a, b))
+    discordant = a_only + b_only
+    if discordant == 0:
+        p_value = 1.0
+    else:
+        tail = sum(math.comb(discordant, k) for k in range(min(a_only, b_only) + 1))
+        p_value = min(1.0, 2.0 * tail / (2**discordant))
+    return {
+        "both_pass": both_pass,
+        "a_only": a_only,
+        "b_only": b_only,
+        "both_fail": both_fail,
+        "discordant": discordant,
+        "exact_two_sided_p": p_value,
+    }
+
+
 def arm_key(summary: dict[str,Any]) -> str:
     spec=summary['spec']; return f"{spec['variant']}:{spec['planner']}->{spec['executor']}"
 
 
 def main() -> None:
-    ap=argparse.ArgumentParser(); ap.add_argument('--root',type=Path,required=True); ap.add_argument('--dataset',required=True); ap.add_argument('--output-prefix',type=Path,required=True); args=ap.parse_args()
+    ap=argparse.ArgumentParser(); ap.add_argument('--root',type=Path,required=True); ap.add_argument('--dataset',required=True); ap.add_argument('--output-prefix',type=Path,required=True); ap.add_argument('--variants',nargs=2,default=['original','paraphrase'],metavar=('BASELINE','ALTERNATE')); args=ap.parse_args()
     summaries=[]
     for p in sorted(args.root.glob(f"{args.dataset}_*/run_summary.json")):
         summaries.append(json.loads(p.read_text()))
@@ -76,18 +101,23 @@ def main() -> None:
     models=sorted({s['spec']['planner'] for s in summaries}|{s['spec']['executor'] for s in summaries})
     if len(models)!=2: raise SystemExit(f'expected two models, got {models}')
     strong='gpt-5.4' if 'gpt-5.4' in models else models[-1]; weak=next(x for x in models if x!=strong)
-    out={'dataset':args.dataset,'n':n,'task_manifest_sha256':next(iter(hashes)),'arms':{},'direction_verdicts':{}}
+    baseline,alternate=args.variants
+    observed_variants={s['spec']['variant'] for s in summaries}
+    if observed_variants!={baseline,alternate}: raise SystemExit(f'variant mismatch: expected {[baseline,alternate]}, found {sorted(observed_variants)}')
+    out={'dataset':args.dataset,'n':n,'task_manifest_sha256':next(iter(hashes)),'variants':{'baseline':baseline,'alternate':alternate},'arms':{},'direction_verdicts':{}}
     for k,v in arms.items(): out['arms'][k]={x:v[x] for x in ['passed','errors','requests']}
-    for variant in ['original','paraphrase']:
+    for variant in [baseline,alternate]:
         sk=f'{variant}:{strong}->{weak}'; wk=f'{variant}:{weak}->{strong}'
         if sk not in arms or wk not in arms: raise SystemExit(f'missing direction arms for {variant}')
         a=arms[sk]['scores']; b=arms[wk]['scores']; delta=100*(sum(a)-sum(b))/n; lo,hi=paired_bootstrap_delta(a,b)
-        out['direction_verdicts'][variant]={'strong_planner_passed':sum(a),'strong_executor_passed':sum(b),'strong_planner_minus_strong_executor_percent':delta,'paired_bootstrap_95_percent':[lo,hi],'preferred_role_for_strong_model':'planner' if delta>0 else 'executor' if delta<0 else 'tie'}
-    out['role_ranking_agreement']=out['direction_verdicts']['original']['preferred_role_for_strong_model']==out['direction_verdicts']['paraphrase']['preferred_role_for_strong_model']
+        out['direction_verdicts'][variant]={'strong_planner_passed':sum(a),'strong_executor_passed':sum(b),'strong_planner_minus_strong_executor_percent':delta,'paired_bootstrap_95_percent':[lo,hi],'paired_transitions':exact_mcnemar(a,b),'preferred_role_for_strong_model':'planner' if delta>0 else 'executor' if delta<0 else 'tie'}
+    out['role_ranking_agreement']=out['direction_verdicts'][baseline]['preferred_role_for_strong_model']==out['direction_verdicts'][alternate]['preferred_role_for_strong_model']
     prompt_effects={}
     for planner,executor in [(strong,weak),(weak,strong)]:
-        a=arms[f'paraphrase:{planner}->{executor}']['scores'];b=arms[f'original:{planner}->{executor}']['scores'];delta=100*(sum(a)-sum(b))/n;lo,hi=paired_bootstrap_delta(a,b,seed=20260725)
-        prompt_effects[f'{planner}->{executor}']={'paraphrase_minus_original_percent':delta,'paired_bootstrap_95_percent':[lo,hi]}
+        a=arms[f'{alternate}:{planner}->{executor}']['scores'];b=arms[f'{baseline}:{planner}->{executor}']['scores'];delta=100*(sum(a)-sum(b))/n;lo,hi=paired_bootstrap_delta(a,b,seed=20260725)
+        effect={'comparison':f'{alternate}_minus_{baseline}','alternate_minus_baseline_percent':delta,'paired_bootstrap_95_percent':[lo,hi],'paired_transitions':exact_mcnemar(a,b)}
+        if baseline=='original' and alternate=='paraphrase': effect['paraphrase_minus_original_percent']=delta
+        prompt_effects[f'{planner}->{executor}']=effect
     out['prompt_effects']=prompt_effects
     args.output_prefix.parent.mkdir(parents=True,exist_ok=True)
     args.output_prefix.with_suffix('.json').write_text(json.dumps(out,indent=2,ensure_ascii=False))
@@ -95,12 +125,12 @@ def main() -> None:
         for row in sanitized:
             f.write(json.dumps(row,ensure_ascii=False,separators=(',',':'))+'\n')
     lines=[f"# {args.dataset} prompt sensitivity",'',f"N={n}; manifest `{out['task_manifest_sha256']}`; failures are scored as zero.",'', '| Prompt | GPT-5.4 planner, mini executor | mini planner, GPT-5.4 executor | Preferred role for GPT-5.4 |', '|---|---:|---:|---|']
-    for v in ['original','paraphrase']:
+    for v in [baseline,alternate]:
         d=out['direction_verdicts'][v]; lines.append(f"| {v} | {d['strong_planner_passed']},{n} | {d['strong_executor_passed']},{n} | {d['preferred_role_for_strong_model']} |")
     lines+=['',f"Role-ranking agreement across prompts: `{out['role_ranking_agreement']}`.",'', 'Paired direction deltas:', '']
-    for v,d in out['direction_verdicts'].items(): lines.append(f"- {v}: {d['strong_planner_minus_strong_executor_percent']:+.1f}% absolute; paired bootstrap 95% interval [{d['paired_bootstrap_95_percent'][0]:+.1f}%, {d['paired_bootstrap_95_percent'][1]:+.1f}%].")
+    for v,d in out['direction_verdicts'].items(): lines.append(f"- {v}: {d['strong_planner_minus_strong_executor_percent']:+.1f}% absolute; paired bootstrap 95% interval [{d['paired_bootstrap_95_percent'][0]:+.1f}%, {d['paired_bootstrap_95_percent'][1]:+.1f}%]; discordant {d['paired_transitions']['a_only']}/{d['paired_transitions']['b_only']}; exact McNemar p={d['paired_transitions']['exact_two_sided_p']:.4f}.")
     lines+=['','Prompt effects within each direction:','']
-    for k,d in prompt_effects.items(): lines.append(f"- {k}: {d['paraphrase_minus_original_percent']:+.1f}% absolute; paired bootstrap 95% interval [{d['paired_bootstrap_95_percent'][0]:+.1f}%, {d['paired_bootstrap_95_percent'][1]:+.1f}%].")
+    for k,d in prompt_effects.items(): lines.append(f"- {k}: {d['alternate_minus_baseline_percent']:+.1f}% absolute; paired bootstrap 95% interval [{d['paired_bootstrap_95_percent'][0]:+.1f}%, {d['paired_bootstrap_95_percent'][1]:+.1f}%]; alternate fixed/broke {d['paired_transitions']['a_only']}/{d['paired_transitions']['b_only']}; exact McNemar p={d['paired_transitions']['exact_two_sided_p']:.4f}.")
     args.output_prefix.with_suffix('.md').write_text('\n'.join(lines)+'\n')
     print(json.dumps(out,indent=2,ensure_ascii=False))
 

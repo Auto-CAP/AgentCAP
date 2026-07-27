@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from scripts.aggregate_rebuttal_prompt_ablation import paired_bootstrap_delta
+from scripts.aggregate_rebuttal_prompt_ablation import exact_mcnemar, paired_bootstrap_delta
 from scripts.rebuttal_prompt_ablation import (
     LANGCHAIN_EXEC,
     LANGCHAIN_PLAN,
@@ -65,6 +65,22 @@ def test_paired_bootstrap_delta_respects_pairing_and_scale():
     assert 50.0 <= hi <= 100.0
     tie_lo, tie_hi = paired_bootstrap_delta([1, 0], [1, 0], draws=500)
     assert tie_lo == tie_hi == 0.0
+
+
+def test_exact_mcnemar_reports_directional_transitions():
+    result = exact_mcnemar([1, 1, 1], [0, 0, 0])
+    assert result == {
+        "both_pass": 0,
+        "a_only": 3,
+        "b_only": 0,
+        "both_fail": 0,
+        "discordant": 3,
+        "exact_two_sided_p": 0.25,
+    }
+
+    tied = exact_mcnemar([1, 1, 0, 0], [0, 1, 1, 0])
+    assert tied["a_only"] == tied["b_only"] == 1
+    assert tied["exact_two_sided_p"] == 1.0
 
 
 def test_langchain_prompt_control_is_pinned_and_protocol_only_adapted():
