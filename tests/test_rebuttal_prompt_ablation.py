@@ -4,6 +4,7 @@ from scripts.aggregate_rebuttal_prompt_ablation import exact_mcnemar, paired_boo
 from scripts.rebuttal_prompt_ablation import (
     LANGCHAIN_EXEC,
     LANGCHAIN_PLAN,
+    load_task_indices,
     prompt_pair,
     prompt_provenance,
     is_mcp_read_only,
@@ -58,6 +59,22 @@ def test_stratified_holdout_window_is_deterministic_and_disjoint():
         kind: sum(task_stratum("financebench", x) == kind for x in holdout)
         for kind in "ABC"
     } == {"A": 8, "B": 8, "C": 8}
+
+
+def test_explicit_task_indices_preserve_order_and_reject_duplicates(tmp_path):
+    manifest = tmp_path / "indices.json"
+    manifest.write_text('{"indices": [9, 2, 17]}')
+    indices, digest = load_task_indices(manifest)
+    assert indices == [9, 2, 17]
+    assert len(digest) == 64
+
+    manifest.write_text('{"indices": [9, 2, 9]}')
+    try:
+        load_task_indices(manifest)
+    except ValueError as exc:
+        assert "unique" in str(exc)
+    else:
+        raise AssertionError("duplicate indices must be rejected")
 
 
 def test_mcp_stratum_uses_tool_server_set():

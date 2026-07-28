@@ -101,6 +101,20 @@ def stable_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def load_task_indices(path: Path) -> tuple[list[int], str]:
+    raw = path.read_bytes()
+    data = json.loads(raw)
+    values = data.get("indices") or data.get("new_indices") or []
+    indices = [int(x) for x in values]
+    if not indices:
+        raise ValueError("task-index manifest is empty")
+    if any(x < 0 for x in indices):
+        raise ValueError("task indices must be non-negative")
+    if len(indices) != len(set(indices)):
+        raise ValueError("task indices must be unique")
+    return indices, hashlib.sha256(raw).hexdigest()
+
+
 def tool_server(tool_name: str) -> str:
     for server in sorted(READ_ONLY_MCP_SERVERS, key=len, reverse=True):
         if tool_name.startswith(server):
@@ -194,6 +208,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--executor", required=True)
     ap.add_argument("--num-tasks", type=int, default=30)
     ap.add_argument("--skip-tasks", type=int, default=0)
+    ap.add_argument("--task-indices-file", type=Path)
     ap.add_argument("--seed", type=int, default=20260724)
     ap.add_argument("--base-url", default="http://127.0.0.1:8317/v1")
     ap.add_argument("--api-key-env", default="CLIPROXYAPI_API_KEY")
@@ -217,10 +232,26 @@ def main() -> None:
         if args.dataset != "mcp-atlas":
             raise SystemExit("--mcp-read-only is valid only for mcp-atlas")
         all_tasks = [task for task in source_tasks if is_mcp_read_only(task)]
-    tasks = select_stratified_window(
-        all_tasks, args.dataset, args.num_tasks, args.seed, args.skip_tasks
-    )
-    expected = min(args.num_tasks, max(0, len(all_tasks) - args.skip_tasks))
+    explicit_indices: list[int] | None = None
+    indices_file_sha256: str | None = None
+    if args.task_indices_file:
+        if args.skip_tasks or args.mcp_read_only:
+            raise SystemExit(
+                "--task-indices-file cannot be combined with --skip-tasks or --mcp-read-only"
+            )
+        explicit_indices, indices_file_sha256 = load_task_indices(args.task_indices_file)
+        if args.num_tasks not in (0, len(explicit_indices)):
+            raise SystemExit(
+                f"--num-tasks={args.num_tasks} does not match "
+                f"{len(explicit_indices)} explicit indices"
+            )
+        tasks = _load_dataset_tasks(args.dataset, 0, indices=explicit_indices)
+        expected = len(explicit_indices)
+    else:
+        tasks = select_stratified_window(
+            all_tasks, args.dataset, args.num_tasks, args.seed, args.skip_tasks
+        )
+        expected = min(args.num_tasks, max(0, len(all_tasks) - args.skip_tasks))
     if not tasks or len(tasks) != expected:
         raise SystemExit(f"selected {len(tasks)} tasks, expected {expected}")
 
@@ -232,7 +263,14 @@ def main() -> None:
         "num_tasks": len(tasks),
         "skip_tasks": args.skip_tasks,
         "seed": args.seed,
-        "selection": "deterministic round-robin over dataset-specific strata",
+        "selection": (
+            "explicit dataset indices in manifest order"
+            if explicit_indices is not None
+            else "deterministic round-robin over dataset-specific strata"
+        ),
+        "task_indices": explicit_indices,
+        "task_indices_file": str(args.task_indices_file) if args.task_indices_file else None,
+        "task_indices_file_sha256": indices_file_sha256,
         "mcp_read_only_subset": bool(args.mcp_read_only),
         "task_ids": task_ids,
         "task_manifest_sha256": stable_hash("\n".join(task_ids)),
@@ -245,6 +283,9 @@ def main() -> None:
     run_name = f"{args.dataset}_{args.variant}_{args.planner.replace('/', '_')}_to_{args.executor.replace('/', '_')}"
     if args.skip_tasks:
         run_name += f"_skip{args.skip_tasks}"
+    if explicit_indices is not None:
+        assert indices_file_sha256 is not None
+        run_name += f"_indices{len(explicit_indices)}_{indices_file_sha256[:8]}"
     out = args.output_root / run_name
     out.mkdir(parents=True, exist_ok=True)
     spec = {
