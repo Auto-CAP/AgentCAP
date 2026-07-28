@@ -1,0 +1,74 @@
+{
+  "title": "AgentCARD cross-benchmark prompt-scaffold control on standard MCP-ATLAS free-60",
+  "status": "frozen_before_any_mcp60_agent_outcome",
+  "created_utc": "2026-07-28T02:47:12+00:00",
+  "code_commit": "317ffd6db916139c3981ab9c98570efb3cf4905e",
+  "benchmark": {
+    "name": "MCP-ATLAS",
+    "hf_dataset": "ScaleAI/mcp-atlas",
+    "hf_cached_snapshot": "b5bcde2236c0b8772020e13dea4e481241e78677",
+    "hf_execution_mode": "offline cached snapshot",
+    "task_set": "repository standard free-60",
+    "task_indices_file": "benchmarks/mcp_atlas_free_60.json",
+    "task_indices_file_sha256": "717f792f71b5fe25dbac31c937c74fba0fb0f68d4893ff813a6057f854f23f21",
+    "task_manifest_sha256": "64bdd8c876db03b7dbc3efe7aeec5692c6ec8100697b3760c55703156df84ce8",
+    "num_tasks_per_arm": 60,
+    "mcp_server_submodule_commit": "93097d10131b359e616408959085a3ea03a1d208",
+    "mcp_prompt_data_root": "/root/agentcard_rebuttal/mcp_atlas_data"
+  },
+  "arms": [
+    {"scaffold": "submitted", "planner": "gpt-5.4", "executor": "gpt-5.4-mini"},
+    {"scaffold": "submitted", "planner": "gpt-5.4-mini", "executor": "gpt-5.4"},
+    {"scaffold": "langchain-v0.0.354-native", "planner": "gpt-5.4", "executor": "gpt-5.4-mini"},
+    {"scaffold": "langchain-v0.0.354-native", "planner": "gpt-5.4-mini", "executor": "gpt-5.4"}
+  ],
+  "scaffolds": {
+    "submitted": {
+      "planner_sha256": "e656ab211d4689896274441d350f0f8c9251459be3b9a98dc31b8b8117b6ac6f",
+      "executor_sha256": "309ae0e666823ead604eb7720e2e4be822a09328634e81c62d87c02dacd5ffdd"
+    },
+    "langchain-v0.0.354-native": {
+      "upstream_commit": "6e90b7a91bba16d84689d07d1016a941eddf4f64",
+      "license": "MIT",
+      "planner_sha256": "0217ce3fc21d65f7fc5f3d23ae19e875aa4c89107280a5538c77b78d7bdbbadd",
+      "executor_sha256": "ef6c8deda0e50071e9ad1fd8fad06a60ba1424be4e792ac4e1bead13b6b6cd38"
+    }
+  },
+  "execution": {
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "max_tool_turns": 20,
+    "task_tool_policy": "only each task's declared ENABLED_TOOLS",
+    "seed": 20260724,
+    "arm_order": [
+      "submitted:gpt-5.4->gpt-5.4-mini",
+      "submitted:gpt-5.4-mini->gpt-5.4",
+      "langchain:gpt-5.4->gpt-5.4-mini",
+      "langchain:gpt-5.4-mini->gpt-5.4"
+    ],
+    "stopping_rule": "exactly 60 tasks per arm and all four arms; no extension based on observed outcomes",
+    "total_new_task_runs": 240
+  },
+  "evaluation": {
+    "online_evaluation": "deferred; raw answers and trajectories only",
+    "posthoc_evaluator": "GTFA claim coverage",
+    "posthoc_judge_model": "google/gemini-3.1-flash-lite",
+    "posthoc_judge_temperature": 0.0,
+    "claim_scores": {"fulfilled": 1.0, "partially_fulfilled": 0.5, "not_fulfilled": 0.0},
+    "task_pass_threshold": 0.75,
+    "judge_requirement": "No MCP-60 accuracy is reportable until the frozen judge is available and all 240 responses are judged under the same endpoint/configuration."
+  },
+  "known_environment_constraint": {
+    "github_credentials": "configured",
+    "brave_credentials": "unavailable before launch",
+    "affected_tasks": 2,
+    "policy": "Keep both tasks in all four arms and in the denominator. Tool unavailability is disclosed; no replacement tasks are selected."
+  },
+  "analysis": {
+    "primary": "Within each scaffold, paired gpt-5.4-planner minus gpt-5.4-executor comparison on all 60 task IDs.",
+    "report": ["arm score/60", "paired delta", "paired 95% bootstrap interval", "planner-only and executor-only counts", "two-sided exact McNemar p"],
+    "cross_benchmark": "Report FinanceBench and MCP-ATLAS separately; no pooled accuracy and no benchmark selection after results.",
+    "failure_policy": "Agent or tool failures score zero. Any model-endpoint auth/5xx/timeout or MCP-server outage makes the complete four-arm matrix infrastructure-invalid; partial arms are retained as an incident and not used for comparison.",
+    "reporting_rule": "Report every frozen arm and both benchmarks, including null or unfavorable outcomes."
+  }
+}
