@@ -8,6 +8,7 @@ from scripts.rebuttal_prompt_ablation import (
     prompt_provenance,
     is_mcp_read_only,
     select_stratified,
+    select_stratified_window,
     stable_hash,
     task_stratum,
 )
@@ -38,6 +39,25 @@ def test_finance_selection_round_robins_question_types():
     for item in selected:
         counts[task_stratum("financebench", item)] += 1
     assert counts == {"A": 4, "B": 4}
+
+
+def test_stratified_holdout_window_is_deterministic_and_disjoint():
+    tasks = [task(f"{kind}{i}", kind) for kind in "ABC" for i in range(20)]
+    first = select_stratified_window(tasks, "financebench", n=12, seed=19, skip=0)
+    holdout = select_stratified_window(tasks, "financebench", n=24, seed=19, skip=12)
+    repeated = select_stratified_window(
+        list(reversed(tasks)), "financebench", n=24, seed=19, skip=12
+    )
+
+    first_ids = [x.task_id for x in first]
+    holdout_ids = [x.task_id for x in holdout]
+    assert set(first_ids).isdisjoint(holdout_ids)
+    assert holdout_ids == [x.task_id for x in repeated]
+    assert len(holdout_ids) == len(set(holdout_ids)) == 24
+    assert {
+        kind: sum(task_stratum("financebench", x) == kind for x in holdout)
+        for kind in "ABC"
+    } == {"A": 8, "B": 8, "C": 8}
 
 
 def test_mcp_stratum_uses_tool_server_set():

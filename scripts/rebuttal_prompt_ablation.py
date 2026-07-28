@@ -125,9 +125,8 @@ def task_stratum(dataset: str, task: Any) -> str:
     return "+".join(servers) or "no-tools"
 
 
-def select_stratified(tasks: Sequence[Any], dataset: str, n: int, seed: int) -> list[Any]:
-    if n <= 0 or n >= len(tasks):
-        return list(tasks)
+def stratified_order(tasks: Sequence[Any], dataset: str, seed: int) -> list[Any]:
+    """Return every task in a deterministic, stratum-round-robin order."""
     groups: dict[str, list[Any]] = defaultdict(list)
     for task in tasks:
         groups[task_stratum(dataset, task)].append(task)
@@ -137,17 +136,34 @@ def select_stratified(tasks: Sequence[Any], dataset: str, n: int, seed: int) -> 
         queues[key] = deque(values)
     selected: list[Any] = []
     ordered_groups = sorted(queues)
-    while len(selected) < n:
+    while len(selected) < len(tasks):
         progressed = False
         for key in ordered_groups:
             if queues[key]:
                 selected.append(queues[key].popleft())
                 progressed = True
-                if len(selected) == n:
-                    break
         if not progressed:
             break
     return selected
+
+
+def select_stratified(tasks: Sequence[Any], dataset: str, n: int, seed: int) -> list[Any]:
+    ordered = stratified_order(tasks, dataset, seed)
+    if n <= 0 or n >= len(ordered):
+        return ordered
+    return ordered[:n]
+
+
+def select_stratified_window(
+    tasks: Sequence[Any], dataset: str, n: int, seed: int, skip: int = 0
+) -> list[Any]:
+    """Select a disjoint window from the deterministic stratified task order."""
+    if skip < 0:
+        raise ValueError("skip must be non-negative")
+    ordered = stratified_order(tasks, dataset, seed)
+    if n <= 0:
+        return ordered[skip:]
+    return ordered[skip : skip + n]
 
 
 def endpoint(name: str, base_url: str, api_key: str) -> ModelEndpoint:
@@ -177,6 +193,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--planner", required=True)
     ap.add_argument("--executor", required=True)
     ap.add_argument("--num-tasks", type=int, default=30)
+    ap.add_argument("--skip-tasks", type=int, default=0)
     ap.add_argument("--seed", type=int, default=20260724)
     ap.add_argument("--base-url", default="http://127.0.0.1:8317/v1")
     ap.add_argument("--api-key-env", default="CLIPROXYAPI_API_KEY")
@@ -200,9 +217,12 @@ def main() -> None:
         if args.dataset != "mcp-atlas":
             raise SystemExit("--mcp-read-only is valid only for mcp-atlas")
         all_tasks = [task for task in source_tasks if is_mcp_read_only(task)]
-    tasks = select_stratified(all_tasks, args.dataset, args.num_tasks, args.seed)
-    if len(tasks) != min(args.num_tasks, len(all_tasks)):
-        raise SystemExit(f"selected {len(tasks)} tasks, expected {min(args.num_tasks, len(all_tasks))}")
+    tasks = select_stratified_window(
+        all_tasks, args.dataset, args.num_tasks, args.seed, args.skip_tasks
+    )
+    expected = min(args.num_tasks, max(0, len(all_tasks) - args.skip_tasks))
+    if not tasks or len(tasks) != expected:
+        raise SystemExit(f"selected {len(tasks)} tasks, expected {expected}")
 
     task_ids = [str(t.task_id) for t in tasks]
     manifest = {
@@ -210,6 +230,7 @@ def main() -> None:
         "source_dataset_tasks_available": len(source_tasks),
         "dataset_tasks_available": len(all_tasks),
         "num_tasks": len(tasks),
+        "skip_tasks": args.skip_tasks,
         "seed": args.seed,
         "selection": "deterministic round-robin over dataset-specific strata",
         "mcp_read_only_subset": bool(args.mcp_read_only),
@@ -222,6 +243,8 @@ def main() -> None:
         manifest["strata_counts"][key] = manifest["strata_counts"].get(key, 0) + 1
 
     run_name = f"{args.dataset}_{args.variant}_{args.planner.replace('/', '_')}_to_{args.executor.replace('/', '_')}"
+    if args.skip_tasks:
+        run_name += f"_skip{args.skip_tasks}"
     out = args.output_root / run_name
     out.mkdir(parents=True, exist_ok=True)
     spec = {
