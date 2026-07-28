@@ -1,0 +1,10 @@
+{
+  "title": "FinanceBench holdout-60 replication pre-arm health-gate incident",
+  "status": "no_outcomes_generated",
+  "recorded_utc": "2026-07-28T04:32:00+00:00",
+  "run_root": "/root/agentcard_rebuttal/prompt_ablation_langchain_holdout60_replication1_20260728",
+  "event": "Immediately after restarting CLIProxyAPI, the first gpt-5.4 warm-up probe returned HTTP 502 and the next four returned HTTP 200.",
+  "tasks_started": 0,
+  "task_outcomes_generated": 0,
+  "policy": "Do not classify a pre-arm readiness failure as a benchmark replication. Use a readiness gate requiring five consecutive HTTP 200 responses per model before the first task; any infrastructure error after arm start still invalidates the full matrix."
+}
