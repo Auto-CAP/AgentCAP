@@ -1,0 +1,64 @@
+{
+  "title": "FinanceBench holdout-60 prompt-control infrastructure incident",
+  "status": "infrastructure_invalid_not_for_analysis",
+  "recorded_utc": "2026-07-28T04:30:52+00:00",
+  "run_root": "/root/agentcard_rebuttal/prompt_ablation_langchain_holdout60_20260727",
+  "preregistration": "docs/rebuttal_prompt_control_holdout60_preregistration_20260728.json",
+  "task_manifest_sha256": "7c2f288e137b96f6c75c040887e64619952329f309399690f606da5af7b89831",
+  "arms": [
+    {
+      "scaffold": "submitted",
+      "planner": "gpt-5.4",
+      "executor": "gpt-5.4-mini",
+      "coverage": "60/60",
+      "infrastructure_errors": 0,
+      "started_utc": "2026-07-28T02:06:33+00:00",
+      "finished_utc": "2026-07-28T02:49:19+00:00"
+    },
+    {
+      "scaffold": "submitted",
+      "planner": "gpt-5.4-mini",
+      "executor": "gpt-5.4",
+      "coverage": "60/60",
+      "infrastructure_errors": 0,
+      "started_utc": "2026-07-28T02:49:21+00:00",
+      "finished_utc": "2026-07-28T03:38:56+00:00"
+    },
+    {
+      "scaffold": "langchain-v0.0.354-native",
+      "planner": "gpt-5.4",
+      "executor": "gpt-5.4-mini",
+      "coverage": "60/60",
+      "infrastructure_errors": 0,
+      "started_utc": "2026-07-28T03:38:58+00:00",
+      "finished_utc": "2026-07-28T04:15:37+00:00"
+    },
+    {
+      "scaffold": "langchain-v0.0.354-native",
+      "planner": "gpt-5.4-mini",
+      "executor": "gpt-5.4",
+      "coverage": "60/60",
+      "infrastructure_errors": 44,
+      "started_utc": "2026-07-28T04:15:39+00:00",
+      "first_error": "planner_request_failed: chat failed (503): auth_unavailable for provider codex and model gpt-5.4-mini"
+    }
+  ],
+  "diagnosis": {
+    "proxy_observation": "One 408 was followed by 44 concurrent 503 responses within the same logged second; CLIProxy reported no auth available for gpt-5.4-mini.",
+    "credential_file": "present, not disabled, and not expired",
+    "gpt_5_4_during_incident": "5/5 HTTP 200",
+    "gpt_5_4_mini_during_incident": "0/5 HTTP 200; 5/5 HTTP 503",
+    "classification": "model-route infrastructure failure, not task/model outcome"
+  },
+  "mcp_queue": {
+    "status": "health_gate_failed_before_first task",
+    "outcomes_generated": 0,
+    "reason": "gpt-5.4-mini returned HTTP 503"
+  },
+  "recovery": {
+    "action": "Restarted the existing local CLIProxyAPI service to reload the credential pool and clear in-memory unavailability state.",
+    "gpt_5_4_post_restart": "10/10 HTTP 200",
+    "gpt_5_4_mini_post_restart": "10/10 HTTP 200"
+  },
+  "analysis_policy": "No accuracy or paired comparison from this matrix is reportable. Retain all artifacts as an incident. Start a complete four-arm replication after recovery; do not selectively rerun the affected arm."
+}
