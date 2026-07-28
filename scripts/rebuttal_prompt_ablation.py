@@ -115,6 +115,14 @@ def load_task_indices(path: Path) -> tuple[list[int], str]:
     return indices, hashlib.sha256(raw).hexdigest()
 
 
+def defer_task_evaluation(task: Any) -> None:
+    config = dict(task.eval_config or {})
+    evaluator = config.pop("type", None)
+    if evaluator:
+        config["deferred_evaluator"] = evaluator
+    task.eval_config = config
+
+
 def tool_server(tool_name: str) -> str:
     for server in sorted(READ_ONLY_MCP_SERVERS, key=len, reverse=True):
         if tool_name.startswith(server):
@@ -209,6 +217,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--num-tasks", type=int, default=30)
     ap.add_argument("--skip-tasks", type=int, default=0)
     ap.add_argument("--task-indices-file", type=Path)
+    ap.add_argument("--defer-evaluation", action="store_true")
     ap.add_argument("--seed", type=int, default=20260724)
     ap.add_argument("--base-url", default="http://127.0.0.1:8317/v1")
     ap.add_argument("--api-key-env", default="CLIPROXYAPI_API_KEY")
@@ -254,6 +263,9 @@ def main() -> None:
         expected = min(args.num_tasks, max(0, len(all_tasks) - args.skip_tasks))
     if not tasks or len(tasks) != expected:
         raise SystemExit(f"selected {len(tasks)} tasks, expected {expected}")
+    if args.defer_evaluation:
+        for task in tasks:
+            defer_task_evaluation(task)
 
     task_ids = [str(t.task_id) for t in tasks]
     manifest = {
@@ -272,6 +284,7 @@ def main() -> None:
         "task_indices_file": str(args.task_indices_file) if args.task_indices_file else None,
         "task_indices_file_sha256": indices_file_sha256,
         "mcp_read_only_subset": bool(args.mcp_read_only),
+        "evaluation_deferred": bool(args.defer_evaluation),
         "mcp_prompt_data_root": (
             os.environ.get("MCP_PROMPT_DATA_ROOT")
             if args.dataset == "mcp-atlas"

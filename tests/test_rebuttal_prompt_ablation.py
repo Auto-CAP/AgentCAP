@@ -4,6 +4,7 @@ from scripts.aggregate_rebuttal_prompt_ablation import exact_mcnemar, paired_boo
 from scripts.rebuttal_prompt_ablation import (
     LANGCHAIN_EXEC,
     LANGCHAIN_PLAN,
+    defer_task_evaluation,
     load_task_indices,
     prompt_pair,
     prompt_provenance,
@@ -75,6 +76,15 @@ def test_explicit_task_indices_preserve_order_and_reject_duplicates(tmp_path):
         assert "unique" in str(exc)
     else:
         raise AssertionError("duplicate indices must be rejected")
+
+
+def test_deferred_evaluation_preserves_claims_but_disables_online_judge():
+    item = task("mcp-1")
+    item.eval_config = {"type": "gtfa", "gtfa_claims": ["claim one"]}
+    defer_task_evaluation(item)
+    assert item.eval_config["gtfa_claims"] == ["claim one"]
+    assert item.eval_config["deferred_evaluator"] == "gtfa"
+    assert "type" not in item.eval_config
 
 
 def test_mcp_stratum_uses_tool_server_set():
