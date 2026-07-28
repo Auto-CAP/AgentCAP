@@ -19,9 +19,19 @@ in ``strategies_sweagent.py`` (swe-rex sidecars) and
 ``evaluators_swebench.py`` (eval pods): per-task Job from the official
 swebench instance image + ``kubectl port-forward`` on an OS-assigned local
 port.
+
+DEPRECATED (retained as a fallback): the k8s implementation has moved to
+TEASBench (``teasbench.sandbox.k8s``), which owns deployment scenarios.
+Select it with ``--sandbox-provider
+teasbench.sandbox.k8s:InClusterK8sProvider``. See
+``docs/REMOVING_K8S_FROM_AGENTCAP.md``. :func:`get_sandbox_provider` and
+:func:`get_exec_provider` also accept any other dotted path
+``"package.module:ClassName"``, which is how TEASBench-owned providers are
+selected without AgentCAP importing or depending on TEASBench.
 """
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import socket
@@ -78,7 +88,11 @@ class SandboxProvider:
 
 
 class _K8sSidecar:
-    """One swe-rex sidecar pod running the official swebench instance image."""
+    """One swe-rex sidecar pod running the official swebench instance image.
+
+    DEPRECATED (retained as a fallback): moved to TEASBench
+    (``teasbench.sandbox.k8s``). See ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
+    """
 
     def __init__(self, namespace: str, image: str, instance_id: str):
         self.namespace = namespace
@@ -223,7 +237,14 @@ class _K8sSidecar:
 
 
 class K8sSandboxProvider(SandboxProvider):
-    """EIDF k8s implementation: sidecar Job + port-forward per acquire()."""
+    """EIDF k8s implementation: sidecar Job + port-forward per acquire().
+
+    DEPRECATED (retained as a fallback): the k8s implementation has moved to
+    TEASBench (``teasbench.sandbox.k8s``), which owns deployment scenarios.
+    Select it with ``--sandbox-provider
+    teasbench.sandbox.k8s:InClusterK8sProvider``. See
+    ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
+    """
 
     def __init__(self, namespace: Optional[str] = None):
         self.namespace = (namespace
@@ -299,17 +320,56 @@ _PROVIDERS = {
 }
 
 
+def _resolve_dotted_path(name: str, **kwargs: Any) -> Any:
+    """Import ``"package.module:ClassName"`` and instantiate it with **kwargs.
+
+    Shared by :func:`get_sandbox_provider` and :func:`get_exec_provider` —
+    this is how TEASBench-owned implementations (e.g.
+    ``teasbench.sandbox.k8s:InClusterK8sProvider``) are selected without
+    AgentCAP importing or depending on TEASBench.
+    """
+    module_name, _, class_name = name.partition(":")
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(
+            f"dotted-path provider '{name}': could not import module "
+            f"'{module_name}': {exc}"
+        ) from None
+    try:
+        cls = getattr(module, class_name)
+    except AttributeError as exc:
+        raise ValueError(
+            f"dotted-path provider '{name}': module '{module_name}' has no "
+            f"attribute '{class_name}': {exc}"
+        ) from None
+    return cls(**kwargs)
+
+
 def get_sandbox_provider(name: str, **kwargs: Any) -> SandboxProvider:
-    """Resolve a provider by registry name, or by http(s) URL (external
-    broker, e.g. TEASBench)."""
+    """Resolve a sandbox provider by http(s) URL, dotted path, or registry name.
+
+    Resolution order:
+      1. ``name`` starts with ``http://`` / ``https://`` -> HttpSandboxProvider
+         (external broker, e.g. TEASBench).
+      2. ``name`` contains ``":"`` -> dotted path
+         ``"package.module:ClassName"``; the module is imported and the
+         class instantiated with **kwargs (see :func:`_resolve_dotted_path`).
+         This is how TEASBench's own providers (e.g.
+         ``teasbench.sandbox.k8s:InClusterK8sProvider``) are selected.
+      3. else -> ``_PROVIDERS`` registry lookup (built-in name, e.g. "k8s").
+    """
     if name.startswith(("http://", "https://")):
         return HttpSandboxProvider(name)
+    if ":" in name:
+        return _resolve_dotted_path(name, **kwargs)
     try:
         cls = _PROVIDERS[name]
     except KeyError:
         raise ValueError(f"unknown sandbox provider '{name}'. "
-                         f"Available: {sorted(_PROVIDERS)} or an http(s) "
-                         f"broker URL") from None
+                         f"Available: {sorted(_PROVIDERS)}, an http(s) "
+                         f"broker URL, or a dotted path "
+                         f"'package.module:ClassName'") from None
     return cls(**kwargs)
 
 
@@ -318,8 +378,46 @@ def get_sandbox_provider(name: str, **kwargs: Any) -> SandboxProvider:
 # image). Used by the swebench-k8s evaluator; same extraction rationale.
 # ---------------------------------------------------------------------------
 
+class ExecHandle:
+    """A running container supporting file upload + command execution.
+
+    Mirrors SandboxEndpoint/SandboxProvider on the eval side. K8sExecContainer
+    below already satisfies this shape (cp/exec/stop) without changes.
+    """
+
+    def cp(self, local_path: str, remote_path: str, timeout: int = 300) -> None:
+        raise NotImplementedError
+
+    def exec(self, command: str, timeout: int = 300) -> subprocess.CompletedProcess:
+        raise NotImplementedError
+
+    def stop(self) -> None:
+        raise NotImplementedError
+
+
+class ExecProvider:
+    """Provides exec containers (upload files / run commands) from images.
+
+    Mirrors SandboxProvider; used by SWEBenchK8sEvaluator (and any
+    TEASBench-side eval provider) instead of constructing an exec container
+    class directly.
+    """
+
+    def acquire_exec(self, image: str, label: str = "") -> ExecHandle:
+        raise NotImplementedError
+
+    def release_exec(self, handle: ExecHandle) -> None:
+        raise NotImplementedError
+
+
 class K8sExecContainer:
-    """A pod from an instance image supporting cp/exec, for harness eval."""
+    """A pod from an instance image supporting cp/exec, for harness eval.
+
+    DEPRECATED (retained as a fallback): the k8s implementation has moved to
+    TEASBench (``teasbench.sandbox.k8s``), which owns deployment scenarios.
+    Select it with ``--exec-provider teasbench.sandbox.k8s:InClusterK8sProvider``.
+    See ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
+    """
 
     def __init__(self, namespace: str, image: str):
         self.namespace = namespace
@@ -379,3 +477,59 @@ class K8sExecContainer:
                          "--wait=false", "--ignore-not-found=true")
             except Exception:
                 pass
+
+
+class K8sExecProvider(ExecProvider):
+    """EIDF k8s implementation: wraps K8sExecContainer.
+
+    acquire_exec constructs the container and starts it, cleaning up the Job
+    if start() fails partway through (mirroring K8sSandboxProvider.acquire);
+    release_exec stops it.
+
+    DEPRECATED (retained as a fallback): the k8s implementation has moved to
+    TEASBench (``teasbench.sandbox.k8s``), which owns deployment scenarios.
+    Select it with ``--exec-provider teasbench.sandbox.k8s:InClusterK8sProvider``.
+    See ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
+    """
+
+    def __init__(self, namespace: Optional[str] = None):
+        self.namespace = (namespace
+                          or os.environ.get("SWEBENCH_K8S_NAMESPACE", "eidf230ns"))
+
+    def acquire_exec(self, image: str, label: str = "") -> K8sExecContainer:
+        box = K8sExecContainer(self.namespace, image)
+        try:
+            box.start()
+        except Exception:
+            box.stop()
+            raise
+        return box
+
+    def release_exec(self, handle: K8sExecContainer) -> None:
+        if handle is not None:
+            handle.stop()
+
+
+_EXEC_PROVIDERS = {
+    "k8s": K8sExecProvider,
+}
+
+
+def get_exec_provider(name: str, **kwargs: Any) -> ExecProvider:
+    """Resolve an exec provider by dotted path or registry name.
+
+    Same resolution as :func:`get_sandbox_provider` minus the http(s) case
+    (no HTTP broker analogue exists for exec containers):
+      1. ``name`` contains ``":"`` -> dotted path
+         ``"package.module:ClassName"`` (see :func:`_resolve_dotted_path`).
+      2. else -> ``_EXEC_PROVIDERS`` registry lookup (built-in name, e.g. "k8s").
+    """
+    if ":" in name:
+        return _resolve_dotted_path(name, **kwargs)
+    try:
+        cls = _EXEC_PROVIDERS[name]
+    except KeyError:
+        raise ValueError(f"unknown exec provider '{name}'. "
+                         f"Available: {sorted(_EXEC_PROVIDERS)} or a dotted "
+                         f"path 'package.module:ClassName'") from None
+    return cls(**kwargs)

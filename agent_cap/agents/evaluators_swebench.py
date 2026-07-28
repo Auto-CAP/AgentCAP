@@ -19,13 +19,22 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from agent_cap.agents.evaluators import EvalResult, register_evaluator
 
 
 @register_evaluator("swebench")
 class SWEBenchEvaluator:
+    """Official grading via `swebench.harness.run_evaluation` (needs a local
+    docker daemon by default).
+
+    Set env SWEBENCH_HARNESS_MODAL=1 to pass `--modal true` to the harness
+    instead, which grades each instance in a Modal sandbox rather than a
+    local docker container. This is what the archived Vast.ai runs did by
+    hand (see TEAS_Results_Private/agentic/vastai/.../run.sh).
+    """
+
     def __init__(
         self,
         dataset: str = "princeton-nlp/SWE-bench_Lite",
@@ -77,6 +86,8 @@ class SWEBenchEvaluator:
             "--run_id", self.run_id,
             "--cache_level", "instance",
         ]
+        if os.environ.get("SWEBENCH_HARNESS_MODAL") == "1":
+            cmd += ["--modal", "true"]
         log_path = out_dir / "swebench_eval.log"
         with open(log_path, "w") as lf:
             subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, timeout=3600 * 6)
@@ -97,24 +108,31 @@ class SWEBenchEvaluator:
         return results
 
 
+@register_evaluator("swebench-remote")
 @register_evaluator("swebench-k8s")
 class SWEBenchK8sEvaluator(SWEBenchEvaluator):
     """Official SWE-bench grading without a docker daemon.
 
-    Per prediction: run the official instance image as a K8s pod, apply the
-    model patch (git apply, then `patch --fuzz=5` fallback — same as the
-    harness), execute the TestSpec eval script, pull the log back, and grade
-    it locally with `swebench.harness.grading.get_eval_report`. Semantics
-    match `swebench.harness.run_evaluation`.
+    Per prediction: acquire an exec container from the official instance
+    image (via an exec provider — see agent_cap.agents.sandbox_providers),
+    apply the model patch (git apply, then `patch --fuzz=5` fallback — same
+    as the harness), execute the TestSpec eval script, pull the log back,
+    and grade it locally with `swebench.harness.grading.get_eval_report`.
+    Semantics match `swebench.harness.run_evaluation`.
 
-    Env knobs: SWEBENCH_K8S_NAMESPACE (default eidf230ns),
-    SWEBENCH_EVAL_TIMEOUT (per-instance test timeout, default 1800s).
+    Registered as both "swebench-k8s" (original name) and "swebench-remote"
+    (substrate-neutral alias — the exec provider need not be k8s).
+
+    Env knobs: AGENTCAP_EXEC_PROVIDER (exec provider name/dotted-path,
+    default "k8s" — see sandbox_providers.get_exec_provider),
+    SWEBENCH_K8S_NAMESPACE (default eidf230ns, read by the built-in "k8s"
+    exec provider), SWEBENCH_EVAL_TIMEOUT (per-instance test timeout,
+    default 1800s).
     """
 
     def finalize(self, out_dir: Path) -> Dict[str, Dict[str, Any]]:
         if not self._buffer:
             return {}
-        import subprocess as sp
         import time
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -122,9 +140,7 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
         from swebench.harness.grading import get_eval_report
         from swebench.harness.test_spec.test_spec import make_test_spec
 
-        namespace = os.environ.get("SWEBENCH_K8S_NAMESPACE", "eidf230ns")
         eval_timeout = int(os.environ.get("SWEBENCH_EVAL_TIMEOUT", "1800"))
-        queue = f"{namespace}-user-queue"
 
         preds = [
             {"instance_id": iid, "model_patch": patch, "model_name_or_path": self.model_name}
@@ -136,11 +152,9 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
         ds = load_dataset(self.dataset, split=split)
         inst_map = {ex["instance_id"]: ex for ex in ds}
 
-        def kubectl(*args: str, input_text: Optional[str] = None, timeout: int = 300):
-            return sp.run(["kubectl", "-n", namespace, *args],
-                          input=input_text, capture_output=True, text=True, timeout=timeout)
+        from agent_cap.agents.sandbox_providers import get_exec_provider
 
-        from agent_cap.agents.sandbox_providers import K8sExecContainer
+        provider = get_exec_provider(os.environ.get("AGENTCAP_EXEC_PROVIDER", "k8s"))
 
         def eval_one(iid: str, patch: str) -> Dict[str, Any]:
             inst = inst_map.get(iid)
@@ -151,10 +165,10 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
             inst_dir = out_dir / "eval_k8s" / iid
             inst_dir.mkdir(parents=True, exist_ok=True)
 
-            box = K8sExecContainer(namespace, image)
+            box = None
             try:
                 try:
-                    box.start()
+                    box = provider.acquire_exec(image, iid)
                 except Exception as exc:
                     return {"resolved": False, "details": {"error": str(exc)[:200]}}
 
@@ -196,7 +210,8 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
             except Exception as exc:
                 return {"resolved": False, "details": {"error": str(exc)[:300]}}
             finally:
-                box.stop()
+                if box is not None:
+                    provider.release_exec(box)
 
         results: Dict[str, Dict[str, Any]] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
