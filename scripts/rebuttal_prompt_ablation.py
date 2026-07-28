@@ -272,6 +272,11 @@ def main() -> None:
         "task_indices_file": str(args.task_indices_file) if args.task_indices_file else None,
         "task_indices_file_sha256": indices_file_sha256,
         "mcp_read_only_subset": bool(args.mcp_read_only),
+        "mcp_prompt_data_root": (
+            os.environ.get("MCP_PROMPT_DATA_ROOT")
+            if args.dataset == "mcp-atlas"
+            else None
+        ),
         "task_ids": task_ids,
         "task_manifest_sha256": stable_hash("\n".join(task_ids)),
         "strata_counts": {},
