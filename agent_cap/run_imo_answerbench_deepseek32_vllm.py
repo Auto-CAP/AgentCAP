@@ -230,7 +230,7 @@ def write_metrics_file(
     total_output_tokens = int(sum(output_tokens_list))
     total_tool_calls = int(sum(tool_calls_list))
 
-    num_requests_list = [1 for _ in results]
+    num_requests_list = [int(r.get("num_requests", 1)) for r in results]
     total_requests = int(sum(num_requests_list))
 
     input_tokens_per_request = []
@@ -1613,6 +1613,7 @@ def run_deepseek32_attempt(
     total_output_tokens = 0
     total_decode_time_s = 0.0
     total_prefill_time_s = 0.0
+    first_turn_ttft_s = 0.0
     total_cached_tokens = 0
 
     tool_call_count = 0
@@ -1684,6 +1685,8 @@ def run_deepseek32_attempt(
             cached_tokens_this_request = int(request_result["cached_tokens"])
 
             prefill_time_s_this_request = float(request_result["prefill_time_s"])
+            if first_turn_ttft_s == 0.0:
+                first_turn_ttft_s = prefill_time_s_this_request
             decode_time_s_this_request = float(request_result["decode_time_s"])
 
             total_input_tokens += input_tokens_this_request
@@ -1836,7 +1839,10 @@ def run_deepseek32_attempt(
             judge,
         )
 
-        avg_ttft_ms = 1000.0 * total_prefill_time_s
+        # ttft_ms is the task's time to FIRST token (first turn's prefill wait); the
+        # accumulated prefill across all turns is prefill_total_s below — one field
+        # cannot serve both readings.
+        avg_ttft_ms = 1000.0 * first_turn_ttft_s
         avg_tpot_ms = (
             1000.0 * total_decode_time_s / total_output_tokens
             if total_output_tokens > 0
@@ -1859,6 +1865,7 @@ def run_deepseek32_attempt(
             "output_tokens": total_output_tokens,
             "latency_ms": (time.time() - t0) * 1000.0,
             "ttft_ms": avg_ttft_ms,
+            "prefill_total_s": total_prefill_time_s,
             "tpot_ms_avg": avg_tpot_ms,
             "tpot_ms_p99": 0.0,
             "errors": errors,
