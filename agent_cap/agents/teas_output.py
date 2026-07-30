@@ -12,8 +12,12 @@ TEAS_Development_Results_Private (e.g. .../swe-bench-lite/b300x4/...) exactly.
 Hardware/scenario facts the CLI cannot know come from env vars (set by the
 launch script): TEAS_GPU_TYPE, TEAS_NUM_GPUS, TEAS_TP, TEAS_ENGINE,
 TEAS_ENGINE_VERSION, TEAS_MODEL_NAME, TEAS_PRECISION, TEAS_CPU_TYPE,
-TEAS_NUM_CPUS, TEAS_BACKEND. Missing values degrade to "unknown"/0 rather
-than failing the run.
+TEAS_NUM_CPUS, TEAS_BACKEND, TEAS_BASE_URL, TEAS_MCP_SERVER_URL,
+TEAS_CONCURRENCY, TEAS_OBSERVED_MAX_CONCURRENCY,
+TEAS_REASONING_PARSER, TEAS_TOOL_CALL_PARSER, TEAS_MCP_TOOL_COUNT,
+TEAS_MCP_ENABLED_SERVERS, TEAS_MCP_ATLAS_COMMIT, TEAS_MCP_DATA_DIR,
+and TEAS_TASK_INDICES_SHA256.
+Missing values degrade to stable defaults rather than failing the run.
 """
 from __future__ import annotations
 
@@ -210,19 +214,43 @@ def write_teas_outputs(
         },
         "system_environment": ({
             "inference_engine": engine,
-            "base_url": "http://localhost:8000/v1",
+            "base_url": env("TEAS_BASE_URL", "http://localhost:8000/v1"),
             "is_local": True,
             "backend": env("TEAS_BACKEND", "mcp-atlas-localmcp"),
             "dataset": dataset,
             "num_examples": n,
+            "tensor_parallel_size": int(env("TEAS_TP", env("TEAS_NUM_GPUS", "0"))),
             "max_model_len": 131072,
             "streaming": True,
             "timestamp": ts,
             "agentcap_strategy": "single",
+            "concurrency": int(env("TEAS_CONCURRENCY", "1")),
+            "observed_max_concurrency": int(
+                env("TEAS_OBSERVED_MAX_CONCURRENCY", "0")
+            ),
+            "mcp_server_url": env("TEAS_MCP_SERVER_URL", "http://localhost:1984"),
+            "mcp_tool_count": int(env("TEAS_MCP_TOOL_COUNT", "0")),
+            "mcp_enabled_servers": [
+                item
+                for item in env("TEAS_MCP_ENABLED_SERVERS", "").split(",")
+                if item
+            ],
+            "mcp_atlas_commit": env("TEAS_MCP_ATLAS_COMMIT", "unknown"),
+            "mcp_data_dir": env("TEAS_MCP_DATA_DIR", "unknown"),
+            "task_indices_sha256": env("TEAS_TASK_INDICES_SHA256", "unknown"),
+            "reasoning_parser": env(
+                "TEAS_REASONING_PARSER",
+                "gpt-oss" if engine == "sglang" else "openai_gptoss",
+            ),
+            "tool_call_parser": env(
+                "TEAS_TOOL_CALL_PARSER",
+                "gpt-oss" if engine == "sglang" else "openai",
+            ),
+            "agentcap_commit": env("TEAS_AGENTCAP_COMMIT", "unknown"),
             "sweagent_streaming_patch": None,
         } if is_mcp else {
             "inference_engine": engine,
-            "base_url": "http://localhost:8000/v1",
+            "base_url": env("TEAS_BASE_URL", "http://localhost:8000/v1"),
             "is_local": True,
             "backend": env("TEAS_BACKEND", "swebench-k8s"),
             "dataset": dataset,

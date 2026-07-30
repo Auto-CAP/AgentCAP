@@ -283,6 +283,8 @@ def completion_streaming(
             "agent_cap.sweagent_streaming requires api_base; pass it via "
             "--agent.model.api_base."
         )
+    if api_key is None:
+        api_key = os.environ.get("OPENAI_API_KEY")
     url = api_base.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key and api_key not in ("dummy", ""):
