@@ -4,24 +4,30 @@ from agent_cap.agents.metrics import aggregate_agent_metrics
 from agent_cap.agents.teas_output import write_teas_outputs
 
 
-def test_swebench_metadata_records_requested_and_observed_concurrency(
-    monkeypatch, tmp_path
-):
+def test_swebench_metadata_records_requested_and_observed_concurrency(monkeypatch, tmp_path):
     monkeypatch.setenv("TEAS_ENGINE", "vllm")
     monkeypatch.setenv("TEAS_CONCURRENCY", "4")
     monkeypatch.setenv("TEAS_OBSERVED_MAX_CONCURRENCY", "4")
 
     write_teas_outputs(
         tmp_path,
-        [{"task_id": "example", "e2e_latency_s": 1.0}],
+        [
+            {
+                "task_id": "example",
+                "e2e_latency_s": 1.0,
+                "eval_passed": False,
+                "eval_details": {
+                    "evaluator": "swebench",
+                    "instance_id": "example",
+                },
+            }
+        ],
         dataset="swe-bench-lite",
         wall_time_s=1.0,
         timestamp="20260731_000000",
     )
 
-    metadata = json.loads(
-        (tmp_path / "metadata_swe-bench-lite_20260731_000000.json").read_text()
-    )
+    metadata = json.loads((tmp_path / "metadata_swe-bench-lite_20260731_000000.json").read_text())
     system_environment = metadata["system_environment"]
     assert system_environment["concurrency"] == 4
     assert system_environment["observed_max_concurrency"] == 4

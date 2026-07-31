@@ -169,6 +169,20 @@ def aggregate_agent_metrics(
             if isinstance(details, Mapping) and details.get("evaluator"):
                 inferred_evaluator = str(details["evaluator"])
                 break
+    if inferred_evaluator == "swebench":
+        quality_is_verified = bool(rows) and all(
+            isinstance(row.get("eval_passed"), bool)
+            and isinstance(row.get("eval_details"), Mapping)
+            and row["eval_details"].get("evaluator") == "swebench"
+            and row["eval_details"].get("instance_id") == row.get("task_id")
+            for row in rows
+        )
+        if not quality_is_verified:
+            # Generation rows use false/zero placeholders before the official
+            # harness finishes. Reporting those as measured quality is worse
+            # than explicitly marking quality pending.
+            scores = []
+            passes = []
 
     per_role: Dict[str, Dict[str, Any]] = {}
     for row in rows:
