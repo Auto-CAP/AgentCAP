@@ -254,7 +254,6 @@ def aggregate_agent_metrics(
         },
         "hardware": {
             "gpu_type": hw.get("gpu_type", "unknown"),
-            "num_gpus": int(hw.get("num_gpus", 0) or 0),
             "cpu_type": hw.get("cpu_type", "unknown"),
             "num_cpus": int(hw.get("num_cpus", 0) or 0),
             # The generic CLI does not yet run live GPU/CPU samplers; keep the

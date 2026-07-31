@@ -261,6 +261,10 @@ def write_teas_outputs(
             "streaming": True,
             "timestamp": ts,
             "agentcap_strategy": "sweagent",
+            "concurrency": int(env("TEAS_CONCURRENCY", "1")),
+            "observed_max_concurrency": int(
+                env("TEAS_OBSERVED_MAX_CONCURRENCY", "0")
+            ),
             "sweagent_streaming_patch": "AGENTCAP_STREAMING_PATCH_APPLIED",
             "reasoning_parser": "gpt-oss" if engine == "sglang" else "openai_gptoss",
             "tool_call_parser": "gpt-oss" if engine == "sglang" else "openai",
