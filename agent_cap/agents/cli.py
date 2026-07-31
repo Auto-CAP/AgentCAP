@@ -747,11 +747,19 @@ def _print_summary(results: List[Dict[str, Any]], evaluator_name: Optional[str])
         return
     scores = [float(r.get("eval_score") or 0.0) for r in results if r.get("eval_score") is not None]
     passes = [bool(r.get("eval_passed")) for r in results if r.get("eval_passed") is not None]
+    pass_rate = sum(passes) / max(len(passes), 1) if passes else None
     line = f"FINAL: n={n}"
-    if scores:
+    if evaluator_name == "gtfa" and pass_rate is not None:
+        line += f"  acc={pass_rate:.3f}"
+        if scores:
+            line += (
+                f"  mean_coverage_score="
+                f"{sum(scores) / max(len(scores), 1):.3f}"
+            )
+    elif scores:
         line += f"  acc={sum(scores) / max(len(scores), 1):.3f}"
-    if passes:
-        line += f"  task_coverage={sum(passes) / max(len(passes), 1):.3f}"
+    if pass_rate is not None:
+        line += f"  task_coverage={pass_rate:.3f}"
     if evaluator_name:
         line += f"  evaluator={evaluator_name}"
     print(line, file=sys.stderr)

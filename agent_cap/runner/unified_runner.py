@@ -792,17 +792,46 @@ def compute_aggregated_metrics(
             "total_tool_calls": total_tool_calls,
         },
         "quality": {
-            "acc": round(
-                sum(float(r.eval_score) for r in results if r.eval_score is not None)
-                / max(sum(1 for r in results if r.eval_score is not None), 1),
-                3,
-            )
-            if any(r.eval_score is not None for r in results)
-            else None,
+            "acc": (
+                round(
+                    sum(1 for r in results if r.eval_passed)
+                    / max(
+                        sum(1 for r in results if r.eval_passed is not None),
+                        1,
+                    ),
+                    4,
+                )
+                if any(
+                    isinstance(r.eval_details, dict)
+                    and r.eval_details.get("evaluator") == "gtfa"
+                    for r in results
+                )
+                and any(r.eval_passed is not None for r in results)
+                else (
+                    round(
+                        sum(
+                            float(r.eval_score)
+                            for r in results
+                            if r.eval_score is not None
+                        )
+                        / max(
+                            sum(
+                                1
+                                for r in results
+                                if r.eval_score is not None
+                            ),
+                            1,
+                        ),
+                        3,
+                    )
+                    if any(r.eval_score is not None for r in results)
+                    else None
+                )
+            ),
             "task_coverage": round(
                 sum(1 for r in results if r.eval_passed)
                 / max(sum(1 for r in results if r.eval_passed is not None), 1),
-                3,
+                4,
             )
             if any(r.eval_passed is not None for r in results)
             else None,

@@ -184,6 +184,18 @@ def aggregate_agent_metrics(
             scores = []
             passes = []
 
+    # MCP-Atlas/GTFA's published accuracy is task pass rate: a task passes
+    # when its claim-coverage score reaches the evaluator threshold.  The mean
+    # fractional claim-coverage score is useful diagnostic data, but must not
+    # be placed in quality.acc.
+    pass_rate = (
+        sum(1 for passed in passes if passed) / len(passes) if passes else None
+    )
+    mean_eval_score = _safe_mean(scores) if scores else None
+    quality_acc = (
+        pass_rate if inferred_evaluator == "gtfa" else mean_eval_score
+    )
+
     per_role: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         for role, usage in _per_role_usage(row).items():
@@ -261,9 +273,9 @@ def aggregate_agent_metrics(
             "per_role": per_role,
         },
         "quality": {
-            "acc": round(sum(scores) / max(len(scores), 1), 3) if scores else None,
-            "task_coverage": round(sum(1 for p in passes if p) / max(len(passes), 1), 3)
-            if passes else None,
+            "acc": round(quality_acc, 4) if quality_acc is not None else None,
+            "task_coverage": round(pass_rate, 4)
+            if pass_rate is not None else None,
             "evaluator": inferred_evaluator,
         },
         "hardware": {

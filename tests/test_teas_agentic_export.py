@@ -195,6 +195,37 @@ def test_unverified_generic_swebench_metrics_mark_quality_pending():
     }
 
 
+def test_generic_gtfa_metrics_use_pass_rate_as_accuracy():
+    rows = [_row("task-a"), _row("task-b")]
+    rows[0].update(
+        {
+            "eval_passed": True,
+            "eval_score": 1.0,
+            "eval_details": {"evaluator": "gtfa"},
+        }
+    )
+    rows[1].update(
+        {
+            "eval_passed": False,
+            "eval_score": 0.5,
+            "eval_details": {"evaluator": "gtfa"},
+        }
+    )
+
+    metrics = aggregate_agent_metrics(
+        rows,
+        wall_time_s=1.0,
+        evaluator_name="gtfa",
+        hardware_info={},
+    )
+
+    assert metrics["quality"] == {
+        "acc": 0.5,
+        "task_coverage": 0.5,
+        "evaluator": "gtfa",
+    }
+
+
 def test_mcp_metrics_include_task_level_e2e_latencies(monkeypatch, tmp_path):
     _complete_env(monkeypatch)
     rows = [_row("task-a"), _row("task-b")]

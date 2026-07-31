@@ -215,20 +215,21 @@ async def _run(args: argparse.Namespace) -> None:
         )
         for t in tasks
     ]
-    acc = sum(
+    mean_eval_score = sum(
         0.0
         if not str(r.get("output_text", "") or "").strip()
         else float(r.get("eval_score", 0.0) or 0.0)
         for r in ordered
     ) / max(len(ordered), 1)
     total = len(ordered)
-    task_coverage = (
+    pass_rate = (
         (sum(1 for r in ordered if bool(r.get("eval_passed", False))) / total)
         if total
         else 0.0
     )
     print(
-        f"FINAL: acc={acc:.3f}, task_coverage={task_coverage:.3f}, evaluated={total}/{total}"
+        f"FINAL: acc={pass_rate:.3f}, task_coverage={pass_rate:.3f}, "
+        f"mean_coverage_score={mean_eval_score:.3f}, evaluated={total}/{total}"
     )
 
 

@@ -824,6 +824,14 @@ def compute_team_metrics(
         evaluator = eval_details.get("evaluator")
     else:
         evaluator = None
+    pass_rate = (
+        sum(1 for passed in eval_passed if passed) / len(eval_passed)
+        if eval_passed
+        else None
+    )
+    mean_eval_score = (
+        sum(eval_scores) / len(eval_scores) if eval_scores else None
+    )
 
     computed_metrics: Dict[str, Any] = {
         "performance": {
@@ -879,12 +887,18 @@ def compute_team_metrics(
             "per_role": role_totals,
         },
         "quality": {
-            "acc": round(sum(eval_scores) / len(eval_scores), 3)
-            if eval_scores
-            else None,
+            "acc": (
+                round(pass_rate, 4)
+                if evaluator == "gtfa" and pass_rate is not None
+                else (
+                    round(mean_eval_score, 3)
+                    if mean_eval_score is not None
+                    else None
+                )
+            ),
             "task_coverage": (
-                round(sum(1 for passed in eval_passed if passed) / len(eval_passed), 3)
-                if eval_passed
+                round(pass_rate, 4)
+                if pass_rate is not None
                 else None
             ),
             "evaluator": evaluator,
