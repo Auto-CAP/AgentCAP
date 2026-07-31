@@ -215,8 +215,34 @@ def resolve_quality(
             )
         passed = sum(bool(row["eval_passed"]) for row in rows)
 
+    if dataset.startswith("mcp-atlas"):
+        coverage_scores = []
+        for row in rows:
+            score = row.get("eval_score")
+            details = row.get("eval_details")
+            coverage_score = (
+                details.get("coverage_score")
+                if isinstance(details, Mapping)
+                else None
+            )
+            if (
+                isinstance(score, bool)
+                or not isinstance(score, (int, float))
+                or isinstance(coverage_score, bool)
+                or not isinstance(coverage_score, (int, float))
+                or abs(float(score) - float(coverage_score)) > 1e-9
+            ):
+                raise TeasOutputError(
+                    "MCP-Atlas quality requires a numeric GTFA coverage_score "
+                    "matching eval_score for every task"
+                )
+            coverage_scores.append(float(coverage_score))
+        acc = round(sum(coverage_scores) / total, 3)
+    else:
+        acc = round(passed / total, 4)
+
     return {
-        "acc": round(passed / total, 4),
+        "acc": acc,
         "total_examples": total,
         "passed": passed,
     }
