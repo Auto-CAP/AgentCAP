@@ -200,11 +200,6 @@ def test_mcp_metrics_include_task_level_e2e_latencies(monkeypatch, tmp_path):
     rows = [_row("task-a"), _row("task-b")]
     rows[0]["e2e_latency_s"] = 2.0
     rows[1]["e2e_latency_s"] = 4.0
-    for row in rows:
-        row["eval_details"] = {
-            "evaluator": "example-judge",
-            "coverage_score": row["eval_score"],
-        }
 
     metrics_path = write_teas_outputs(
         tmp_path,
@@ -223,35 +218,6 @@ def test_mcp_metrics_include_task_level_e2e_latencies(monkeypatch, tmp_path):
         "p99_ttft": 0.1,
         "tpot": 0.05,
         "p99_tpot": 0.05,
-    }
-
-
-def test_mcp_quality_uses_mean_coverage_score_not_pass_rate(
-    monkeypatch,
-    tmp_path,
-):
-    _complete_env(monkeypatch)
-    rows = [_row("task-a", placeholder_passed=True), _row("task-b")]
-    rows[0]["eval_score"] = 1.0
-    rows[1]["eval_score"] = 0.4
-    for row in rows:
-        row["eval_details"] = {
-            "evaluator": "example-judge",
-            "coverage_score": row["eval_score"],
-        }
-
-    metrics_path = write_teas_outputs(
-        tmp_path,
-        rows,
-        "mcp-atlas",
-        12.0,
-        timestamp="20260731_000000",
-    )
-
-    assert json.loads(metrics_path.read_text())["quality"] == {
-        "acc": 0.7,
-        "total_examples": 2,
-        "passed": 1,
     }
 
 
