@@ -347,25 +347,16 @@ def write_teas_outputs(
     tot_cached, tot_reqs = usage("cached_tokens"), usage("requests")
     tot_tools = sum(r.get("tool_calls", 0) for r in rows)
 
-    if is_mcp:
-        perf = {
-            "total_wall_time_min": round(wall_time_s / 60.0, 2),
-            "ttft": round(sum(ttfts) / max(len(ttfts), 1), 6),
-            "p99_ttft": round(_pct(ttfts, 0.99), 6),
-            "tpot": round(sum(tpots) / max(len(tpots), 1), 6),
-            "p99_tpot": round(_pct(tpots, 0.99), 6),
-        }
-    else:
-        perf = {
-            "total_wall_time_min": round(wall_time_s / 60.0, 2),
-            "avg_e2e_latency_s": round(sum(e2e) / max(n, 1), 2),
-            "p50_e2e_latency_s": round(_pct(e2e, 0.5), 2),
-            "p99_e2e_latency_s": round(_pct(e2e, 0.99), 2),
-            "ttft": round(sum(ttfts) / max(len(ttfts), 1), 6),
-            "p99_ttft": round(_pct(ttfts, 0.99), 6),
-            "tpot": round(sum(tpots) / max(len(tpots), 1), 6),
-            "p99_tpot": round(_pct(tpots, 0.99), 6),
-        }
+    perf = {
+        "total_wall_time_min": round(wall_time_s / 60.0, 2),
+        "avg_e2e_latency_s": round(sum(e2e) / max(n, 1), 2),
+        "p50_e2e_latency_s": round(_pct(e2e, 0.5), 2),
+        "p99_e2e_latency_s": round(_pct(e2e, 0.99), 2),
+        "ttft": round(sum(ttfts) / max(len(ttfts), 1), 6),
+        "p99_ttft": round(_pct(ttfts, 0.99), 6),
+        "tpot": round(sum(tpots) / max(len(tpots), 1), 6),
+        "p99_tpot": round(_pct(tpots, 0.99), 6),
+    }
     metrics = {
         "performance": perf,
         "agentic": {

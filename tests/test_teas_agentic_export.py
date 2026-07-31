@@ -195,6 +195,32 @@ def test_unverified_generic_swebench_metrics_mark_quality_pending():
     }
 
 
+def test_mcp_metrics_include_task_level_e2e_latencies(monkeypatch, tmp_path):
+    _complete_env(monkeypatch)
+    rows = [_row("task-a"), _row("task-b")]
+    rows[0]["e2e_latency_s"] = 2.0
+    rows[1]["e2e_latency_s"] = 4.0
+
+    metrics_path = write_teas_outputs(
+        tmp_path,
+        rows,
+        "mcp-atlas",
+        12.0,
+        timestamp="20260731_000000",
+    )
+
+    assert json.loads(metrics_path.read_text())["performance"] == {
+        "total_wall_time_min": 0.2,
+        "avg_e2e_latency_s": 3.0,
+        "p50_e2e_latency_s": 3.0,
+        "p99_e2e_latency_s": 3.98,
+        "ttft": 0.1,
+        "p99_ttft": 0.1,
+        "tpot": 0.05,
+        "p99_tpot": 0.05,
+    }
+
+
 def test_canonical_output_data_restores_order_after_concurrent_completion(
     tmp_path,
 ):
