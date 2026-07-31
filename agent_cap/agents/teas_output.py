@@ -214,6 +214,7 @@ def write_teas_outputs(
         },
         "system_environment": ({
             "inference_engine": engine,
+            "inference_engine_version": env("TEAS_ENGINE_VERSION", "unknown"),
             "base_url": env("TEAS_BASE_URL", "http://localhost:8000/v1"),
             "is_local": True,
             "backend": env("TEAS_BACKEND", "mcp-atlas-localmcp"),
@@ -250,6 +251,7 @@ def write_teas_outputs(
             "sweagent_streaming_patch": None,
         } if is_mcp else {
             "inference_engine": engine,
+            "inference_engine_version": env("TEAS_ENGINE_VERSION", "unknown"),
             "base_url": env("TEAS_BASE_URL", "http://localhost:8000/v1"),
             "is_local": True,
             "backend": env("TEAS_BACKEND", "swebench-k8s"),
