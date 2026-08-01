@@ -8,6 +8,9 @@ patches each row's eval fields in results.jsonl.
 
 Registered name: "swebench".
 
+Set evaluator config ``runtime=modal`` (for example,
+``--judge runtime=modal``) to use Modal instead of the default Docker harness.
+
 `task_meta` must include `eval_config.instance_id` (set by the
 unified_runner swe_bench_lite/pro loader).
 """
@@ -46,11 +49,18 @@ class SWEBenchEvaluator:
         run_id: str = "agentcap_unified",
         max_workers: int = 8,
         model_name: str = "agentcap-unified",
+        runtime: str = "docker",
     ) -> None:
         self.dataset = dataset
         self.run_id = run_id
         self.max_workers = int(max_workers)
         self.model_name = str(model_name).replace("/", "-").replace(":", "-")
+        self.runtime = str(runtime).strip().lower().replace("_", "-")
+        if self.runtime not in {"docker", "modal"}:
+            raise ValueError(
+                f"unsupported SWE-bench evaluator runtime: {runtime!r}; "
+                "expected 'docker' or 'modal'"
+            )
         self._buffer: Dict[str, str] = {}
         self._lock = threading.Lock()
 
@@ -89,18 +99,32 @@ class SWEBenchEvaluator:
         ]
         preds_path = out_dir / "predictions.json"
         preds_path.write_text(json.dumps(preds, indent=2))
+        runner_module = (
+            "agent_cap.agents.swebench_modal_compat"
+            if self.runtime == "modal"
+            else "swebench.harness.run_evaluation"
+        )
         cmd = [
-            sys.executable, "-m", "swebench.harness.run_evaluation",
+            sys.executable, "-m", runner_module,
             "--dataset_name", self.dataset,
             "--predictions_path", str(preds_path),
             "--max_workers", str(self.max_workers),
             "--run_id", run_id,
             "--cache_level", "instance",
         ]
+        if self.runtime == "modal":
+            cmd.extend(["--modal", "True"])
         log_path = out_dir / "swebench_eval.log"
         with open(log_path, "w") as lf:
-            subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, timeout=3600 * 6)
-        reports_dir = Path("logs/run_evaluation") / run_id
+            subprocess.run(
+                cmd,
+                cwd=out_dir if self.runtime == "modal" else None,
+                stdout=lf,
+                stderr=subprocess.STDOUT,
+                timeout=3600 * 6,
+            )
+        reports_root = out_dir if self.runtime == "modal" else Path()
+        reports_dir = reports_root / "logs/run_evaluation" / run_id
         results: Dict[str, Dict[str, Any]] = {}
         if reports_dir.exists():
             for model_dir in reports_dir.glob("*"):
