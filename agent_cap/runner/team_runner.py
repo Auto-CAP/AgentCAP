@@ -42,6 +42,7 @@ try:
 except ImportError:
     psutil = None
 
+from agent_cap.agents.metrics import normalized_evaluator
 from agent_cap.server.gpu_monitor import GPUMetricsSummary, GPUMonitor
 
 
@@ -820,10 +821,10 @@ def compute_team_metrics(
     eval_details = (
         getattr(first_eval_result, "eval_details", None) if first_eval_result else None
     )
-    if isinstance(eval_details, dict) and eval_scores:
-        evaluator = eval_details.get("evaluator")
+    if eval_scores:
+        evaluator, eval_judge = normalized_evaluator(eval_details)
     else:
-        evaluator = None
+        evaluator, eval_judge = None, None
     pass_rate = (
         sum(1 for passed in eval_passed if passed) / len(eval_passed)
         if eval_passed
@@ -902,6 +903,7 @@ def compute_team_metrics(
                 else None
             ),
             "evaluator": evaluator,
+            "eval_judge": eval_judge,
         },
         "hardware": {
             "gpu_type": hw_info.get("gpu_type", "unknown"),

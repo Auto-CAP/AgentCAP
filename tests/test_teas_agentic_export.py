@@ -192,6 +192,7 @@ def test_unverified_generic_swebench_metrics_mark_quality_pending():
         "acc": None,
         "task_coverage": None,
         "evaluator": "swebench",
+        "eval_judge": None,
     }
 
 
@@ -223,6 +224,50 @@ def test_generic_gtfa_metrics_use_pass_rate_as_accuracy():
         "acc": 0.5,
         "task_coverage": 0.5,
         "evaluator": "gtfa",
+        "eval_judge": None,
+    }
+
+
+def test_real_gtfa_details_shape_uses_pass_rate_without_explicit_name():
+    """The inferred path must survive what GTFAEvaluator actually writes."""
+    details = {
+        "evaluator": "gtfa",
+        "eval_judge": "google/gemini-3.1-flash-lite",
+        "per_claim": [],
+        "coverage_score": 0.8,
+    }
+    rows = [_row("task-a"), _row("task-b")]
+    rows[0].update({"eval_passed": True, "eval_score": 0.8, "eval_details": dict(details)})
+    rows[1].update({"eval_passed": False, "eval_score": 0.6, "eval_details": dict(details)})
+
+    metrics = aggregate_agent_metrics(rows, wall_time_s=1.0, hardware_info={})
+
+    assert metrics["quality"] == {
+        "acc": 0.5,
+        "task_coverage": 0.5,
+        "evaluator": "gtfa",
+        "eval_judge": "google/gemini-3.1-flash-lite",
+    }
+
+
+def test_legacy_gtfa_rows_with_judge_model_in_evaluator_use_pass_rate():
+    """Pre-fix result files carried the judge model id in the evaluator field."""
+    details = {
+        "evaluator": "google/gemini-3.1-flash-lite",
+        "per_claim": [],
+        "coverage_score": 0.8,
+    }
+    rows = [_row("task-a"), _row("task-b")]
+    rows[0].update({"eval_passed": True, "eval_score": 0.8, "eval_details": dict(details)})
+    rows[1].update({"eval_passed": False, "eval_score": 0.6, "eval_details": dict(details)})
+
+    metrics = aggregate_agent_metrics(rows, wall_time_s=1.0, hardware_info={})
+
+    assert metrics["quality"] == {
+        "acc": 0.5,
+        "task_coverage": 0.5,
+        "evaluator": "gtfa",
+        "eval_judge": "google/gemini-3.1-flash-lite",
     }
 
 
@@ -313,3 +358,158 @@ def test_export_creates_exactly_the_current_four_file_leaf(monkeypatch, tmp_path
         "quality"
     ]
     assert list(quality) == ["acc", "total_examples", "passed"]
+
+
+def _mcp_source(tmp_path, eval_details):
+    source = tmp_path / "source"
+    source.mkdir()
+    rows = [_row("task-a")]
+    rows[0]["eval_passed"] = True
+    rows[0]["eval_details"] = eval_details
+    run_script = source / "run.sh"
+    run_script.write_text(
+        "#!/usr/bin/env bash\n"
+        "agent-cap --engine vllm --model unsloth/gpt-oss-120b "
+        "--dataset mcp-atlas-bench --concurrency 4\n",
+        encoding="utf-8",
+    )
+    return source, rows, run_script
+
+
+def test_mcp_export_attests_evaluator_and_judge(monkeypatch, tmp_path):
+    _complete_env(monkeypatch)
+    source, rows, run_script = _mcp_source(
+        tmp_path,
+        {
+            "evaluator": "gtfa",
+            "eval_judge": "google/gemini-3.1-flash-lite",
+            "per_claim": [],
+            "coverage_score": 1.0,
+        },
+    )
+
+    destination = tmp_path / "leaf"
+    export_teas_leaf(
+        source,
+        destination,
+        rows,
+        "mcp-atlas-bench",
+        120.0,
+        run_script=run_script,
+        timestamp="20260731_000000",
+    )
+
+    environment = json.loads(
+        (destination / "metadata_mcp-atlas-bench_20260731_000000.json").read_text()
+    )["system_environment"]
+    assert environment["evaluator"] == "gtfa"
+    assert environment["eval_judge"] == "google/gemini-3.1-flash-lite"
+
+
+def test_mcp_export_recovers_judge_from_legacy_evaluator_field(monkeypatch, tmp_path):
+    _complete_env(monkeypatch)
+    source, rows, run_script = _mcp_source(
+        tmp_path,
+        {
+            "evaluator": "google/gemini-3.1-flash-lite",
+            "per_claim": [],
+            "coverage_score": 1.0,
+        },
+    )
+
+    destination = tmp_path / "leaf"
+    export_teas_leaf(
+        source,
+        destination,
+        rows,
+        "mcp-atlas-bench",
+        120.0,
+        run_script=run_script,
+        timestamp="20260731_000000",
+    )
+
+    environment = json.loads(
+        (destination / "metadata_mcp-atlas-bench_20260731_000000.json").read_text()
+    )["system_environment"]
+    assert environment["evaluator"] == "gtfa"
+    assert environment["eval_judge"] == "google/gemini-3.1-flash-lite"
+
+
+def test_mcp_export_ignores_leading_failure_rows_for_attestation(monkeypatch, tmp_path):
+    """A first-position errored task must not become the run's evaluator."""
+    _complete_env(monkeypatch)
+    source, rows, run_script = _mcp_source(
+        tmp_path,
+        {"evaluator": "skipped", "reason": "task errored"},
+    )
+    judged = _row("task-b")
+    judged["eval_passed"] = True
+    judged["eval_details"] = {
+        "evaluator": "gtfa",
+        "eval_judge": "google/gemini-3.1-flash-lite",
+        "per_claim": [],
+        "coverage_score": 1.0,
+    }
+    rows.append(judged)
+
+    destination = tmp_path / "leaf"
+    export_teas_leaf(
+        source,
+        destination,
+        rows,
+        "mcp-atlas-bench",
+        120.0,
+        run_script=run_script,
+        timestamp="20260731_000000",
+    )
+
+    environment = json.loads(
+        (destination / "metadata_mcp-atlas-bench_20260731_000000.json").read_text()
+    )["system_environment"]
+    assert environment["evaluator"] == "gtfa"
+    assert environment["eval_judge"] == "google/gemini-3.1-flash-lite"
+
+
+def test_judge_is_found_past_a_judgeless_first_row():
+    """A pre-evaluation failure at position 0 must not lose the judge."""
+    rows = [_row("task-a"), _row("task-b")]
+    rows[0].update(
+        {"eval_passed": False, "eval_score": 0.0, "eval_details": {"evaluator": "gtfa"}}
+    )
+    rows[1].update(
+        {
+            "eval_passed": True,
+            "eval_score": 1.0,
+            "eval_details": {
+                "evaluator": "gtfa",
+                "eval_judge": "google/gemini-3.1-flash-lite",
+                "per_claim": [],
+                "coverage_score": 1.0,
+            },
+        }
+    )
+
+    metrics = aggregate_agent_metrics(rows, wall_time_s=1.0, hardware_info={})
+
+    assert metrics["quality"] == {
+        "acc": 0.5,
+        "task_coverage": 0.5,
+        "evaluator": "gtfa",
+        "eval_judge": "google/gemini-3.1-flash-lite",
+    }
+
+
+def test_mcp_export_refuses_unattested_judge(monkeypatch, tmp_path):
+    _complete_env(monkeypatch)
+    source, rows, run_script = _mcp_source(tmp_path, {"evaluator": "gtfa"})
+
+    with pytest.raises(TeasOutputError, match="eval_judge"):
+        export_teas_leaf(
+            source,
+            tmp_path / "leaf",
+            rows,
+            "mcp-atlas-bench",
+            120.0,
+            run_script=run_script,
+            timestamp="20260731_000000",
+        )

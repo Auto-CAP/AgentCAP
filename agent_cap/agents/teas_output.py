@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from agent_cap.agents.metrics import resolve_rows_evaluator
 from agent_cap.utils.precision import resolve_precision, normalize_model_id
 
 
@@ -458,6 +459,16 @@ def write_teas_outputs(
         metadata["system_environment"][
             "observed_max_simultaneous_llm_requests"
         ] = int(observed_llm_concurrency)
+    if is_mcp:
+        evaluator_scheme, eval_judge = resolve_rows_evaluator(
+            [r.get("eval_details") for r in rows]
+        )
+        # None values are omitted rather than written, so a metadata_template
+        # can still attest the judge for runs whose rows predate the field.
+        if evaluator_scheme is not None:
+            metadata["system_environment"]["evaluator"] = evaluator_scheme
+        if eval_judge is not None:
+            metadata["system_environment"]["eval_judge"] = eval_judge
     if metadata_template:
         generated_metadata = metadata
         metadata = dict(metadata_template)
@@ -603,6 +614,13 @@ def validate_teas_leaf(
         raise TeasOutputError("metadata dataset does not match export dataset")
     if environment.get("num_examples") != len(source_rows):
         raise TeasOutputError("metadata example count does not match result rows")
+    if dataset.startswith("mcp-atlas"):
+        for name in ("evaluator", "eval_judge"):
+            value = environment.get(name)
+            if not isinstance(value, str) or not value or value == "unknown":
+                raise TeasOutputError(
+                    f"mcp-atlas leaves must attest {name} in system_environment"
+                )
 
     by_example: Dict[int, List[int]] = {}
     detailed_totals = {

@@ -38,6 +38,7 @@ try:
 except ImportError:
     psutil = None
 
+from agent_cap.agents.metrics import resolve_rows_evaluator
 from agent_cap.server.gpu_monitor import GPUMetricsSummary, GPUMonitor
 from agent_cap.utils.precision import resolve_precision, normalize_model_id
 
@@ -739,6 +740,10 @@ def compute_aggregated_metrics(
 
     cpu_vals = [float(v) for v in (cpu_samples or [])]
 
+    evaluator, eval_judge = resolve_rows_evaluator(
+        [r.eval_details for r in results]
+    )
+
     return {
         "performance": {
             "e2e_s": wall_time,
@@ -801,11 +806,7 @@ def compute_aggregated_metrics(
                     ),
                     4,
                 )
-                if any(
-                    isinstance(r.eval_details, dict)
-                    and r.eval_details.get("evaluator") == "gtfa"
-                    for r in results
-                )
+                if evaluator == "gtfa"
                 and any(r.eval_passed is not None for r in results)
                 else (
                     round(
@@ -835,15 +836,8 @@ def compute_aggregated_metrics(
             )
             if any(r.eval_passed is not None for r in results)
             else None,
-            "evaluator": next(
-                (
-                    r.eval_details.get("evaluator")
-                    for r in results
-                    if isinstance(r.eval_details, dict)
-                    and r.eval_details.get("evaluator")
-                ),
-                None,
-            ),
+            "evaluator": evaluator,
+            "eval_judge": eval_judge,
         },
         "hardware": {
             "gpu_type": hw_info.get("gpu_type", "unknown"),
