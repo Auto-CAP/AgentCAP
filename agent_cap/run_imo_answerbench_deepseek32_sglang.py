@@ -25,6 +25,7 @@ from openai import OpenAI
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
 from agent_cap.runner.unified_runner import collect_hardware_info
+from agent_cap.utils.package_version import get_package_version
 
 
 SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
@@ -157,6 +158,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     print("collecting hardware info...", flush=True)
     hw_info = collect_hardware_info_rocm_fallback()
     print("successfully collected hardware info.", flush=True)
+    sglang_version = get_package_version("sglang")
 
     model_name = Path(args.model_path).name
     dataset_name = "imo_answerbench"
@@ -196,6 +198,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         },
         "system_environment": {
             "inference_engine": _env_str("INFERENCE_ENGINE", "sglang"),
+            "sglang_version": sglang_version,
             "is_local": _env_bool("IS_LOCAL", True),
             "dataset": dataset_name,
             "num_examples": args.num_tasks,
@@ -217,6 +220,9 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
                 "dataset": dataset_name,
                 "num_examples": args.num_tasks,
                 "status": "initialized",
+                "hardware": {
+                    "sglang_version": sglang_version,
+                },
             },
             f,
             indent=4,
@@ -394,6 +400,7 @@ def write_metrics_file(
         "hardware": {
             "gpu_type": _env_str("GPU_TYPE", "unknown"),
             "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
+            "sglang_version": get_package_version("sglang"),
             "avg_gpu_utilization_pct": "",
             "peak_gpu_memory_used_mb": "",
             "avg_cpu_utilization_pct": "",

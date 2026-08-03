@@ -30,6 +30,8 @@ import importlib.util
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
 from agent_cap.runner.unified_runner import collect_hardware_info
+from agent_cap.utils.package_version import get_package_version
+from agent_cap.utils.resume import recover_num_requests
 
 
 SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
@@ -121,6 +123,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     hw_info = collect_hardware_info()
+    vllm_version = get_package_version("vllm")
 
     model_name = Path(args.model_path).name
     dataset_name = "imo_answerbench"
@@ -153,6 +156,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         },
         "system_environment": {
             "inference_engine": _env_str("INFERENCE_ENGINE", "vllm"),
+            "vllm_version": vllm_version,
             "is_local": _env_bool("IS_LOCAL", True),
             "dataset": dataset_name,
             "num_examples": args.num_tasks,
@@ -173,6 +177,9 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
                 "dataset": dataset_name,
                 "num_examples": args.num_tasks,
                 "status": "initialized",
+                "hardware": {
+                    "vllm_version": vllm_version,
+                },
             },
             f,
             indent=4,
@@ -347,6 +354,7 @@ def write_metrics_file(
         "hardware": {
             "gpu_type": _env_str("GPU_TYPE", "unknown"),
             "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
+            "vllm_version": get_package_version("vllm"),
             "avg_gpu_utilization_pct": "",
             "peak_gpu_memory_used_mb": "",
             "avg_cpu_utilization_pct": "",
@@ -2034,6 +2042,291 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
         for ans, cnt in answer_counter.most_common(10):
             print(f"  {ans}: {cnt}")
 
+<<<<<<< HEAD
+=======
+def wait_for_external_vllm_server(
+    host: str,
+    port: int,
+    timeout_s: int,
+    expected_model: Optional[str] = None,
+) -> None:
+    client_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    models_url = f"http://{client_host}:{port}/v1/models"
+
+    print(
+        f"Waiting for externally managed vLLM server at {models_url}...",
+        flush=True,
+    )
+
+    deadline = time.monotonic() + timeout_s
+    last_error: Optional[BaseException] = None
+
+    while time.monotonic() < deadline:
+        try:
+            response = requests.get(models_url, timeout=5)
+            response.raise_for_status()
+
+            payload = response.json()
+
+            model_ids = [
+                item.get("id")
+                for item in payload.get("data", [])
+                if isinstance(item, dict)
+            ]
+
+            print("External vLLM server is ready.", flush=True)
+            print(f"Models reported by server: {model_ids}", flush=True)
+
+            if expected_model and expected_model not in model_ids:
+                print(
+                    f"WARNING: requested model name {expected_model!r} was not "
+                    f"reported by /v1/models. Reported names: {model_ids}",
+                    flush=True,
+                )
+
+            return
+
+        except Exception as exc:
+            last_error = exc
+            time.sleep(1)
+
+    raise RuntimeError(
+        f"External vLLM server did not become ready within {timeout_s} seconds. "
+        f"Last error: {type(last_error).__name__}: {last_error}"
+    )
+
+
+
+def _read_jsonl(path: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line_number, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"Invalid JSON in {path} at line {line_number}: {exc}"
+                ) from exc
+            if not isinstance(row, dict):
+                raise RuntimeError(
+                    f"Expected a JSON object in {path} at line {line_number}."
+                )
+            rows.append(row)
+    return rows
+
+
+def _latest_detailed_attempt(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep the latest request-index sequence for one benchmark example."""
+    if not rows:
+        return []
+
+    attempt_starts = [
+        idx
+        for idx, row in enumerate(rows)
+        if int(row.get("request_index", 0)) == 0
+    ]
+    if len(attempt_starts) <= 1:
+        return rows
+
+    return rows[attempt_starts[-1] :]
+
+
+def load_existing_results_for_resume(
+    *,
+    tasks: List[Any],
+    output_paths: Dict[str, str],
+) -> tuple[List[Dict[str, Any]], set[str], float]:
+    output_rows = _read_jsonl(output_paths["output_data_path"])
+    detailed_rows = _read_jsonl(output_paths["detailed_results_path"])
+
+    details_by_example: Dict[int, List[Dict[str, Any]]] = {}
+    for row in detailed_rows:
+        example_index = int(row.get("example_index", -1))
+        details_by_example.setdefault(example_index, []).append(row)
+
+    indexed_results: List[tuple[int, Dict[str, Any]]] = []
+    completed_task_ids: set[str] = set()
+    seen_indexes: set[int] = set()
+    recovered_num_requests_count = 0
+
+    for row in output_rows:
+        index = int(row["index"])
+        task_id = str(row["task_id"])
+
+        if index in seen_indexes:
+            raise RuntimeError(
+                f"Duplicate completed output index {index} in "
+                f"{output_paths['output_data_path']}"
+            )
+        if task_id in completed_task_ids:
+            raise RuntimeError(
+                f"Duplicate completed task_id {task_id!r} in "
+                f"{output_paths['output_data_path']}"
+            )
+        if index < 0 or index >= len(tasks):
+            raise RuntimeError(
+                f"Stored result index {index} is outside the newly loaded task list "
+                f"of length {len(tasks)}. Use the same --num-tasks and --seed."
+            )
+
+        task = tasks[index]
+        if str(task.id) != task_id:
+            raise RuntimeError(
+                "Resume validation failed: the stored task order does not match "
+                "the newly loaded benchmark. "
+                f"At index {index}, stored task_id={task_id!r}, "
+                f"new task_id={str(task.id)!r}. "
+                "Use exactly the same --num-tasks and --seed as the original run."
+            )
+
+        task_details = sorted(
+            _latest_detailed_attempt(details_by_example.get(index, [])),
+            key=lambda item: int(item.get("request_index", 0)),
+        )
+
+        response_text = str(row.get("output_text") or "")
+        output_tokens = int(row.get("output_tokens", 0))
+        total_prefill_time_s = sum(
+            float(item.get("prefill_time_s", 0.0)) for item in task_details
+        )
+        total_decode_time_s = sum(
+            float(item.get("decode_time_s", 0.0)) for item in task_details
+        )
+        total_cached_tokens = sum(
+            int(item.get("cached_tokens", 0)) for item in task_details
+        )
+
+        raw_errors = row.get("errors", [])
+        if isinstance(raw_errors, list):
+            errors = [str(item) for item in raw_errors]
+        elif raw_errors in (None, ""):
+            errors = []
+        else:
+            errors = [str(raw_errors)]
+
+        score = float(row.get("eval_score", 0.0))
+        expected = (task.eval_config or {}).get("expected")
+        if row.get("num_requests") is None:
+            recovered_num_requests_count += 1
+        num_requests = recover_num_requests(
+            row,
+            task_details,
+            context=f"Resume output row for task_id={task_id!r} at index {index}",
+        )
+
+        result = {
+            "task_id": task.id,
+            "task_name": task.name,
+            "category": task.category,
+            "expected": expected,
+            "predicted": _scan_for_answer(response_text),
+            "score": score,
+            "correct": score >= 1.0,
+            "response": response_text,
+            "tool_calls": int(row.get("tool_call_count", 0)),
+            "num_requests": num_requests,
+            "tool_latencies_ms": [],
+            "input_tokens": int(row.get("input_tokens", 0)),
+            "output_tokens": output_tokens,
+            "latency_ms": float(row.get("e2e_latency_s", 0.0)) * 1000.0,
+            "ttft_ms": total_prefill_time_s * 1000.0,
+            "tpot_ms_avg": (
+                total_decode_time_s * 1000.0 / output_tokens
+                if output_tokens > 0
+                else 0.0
+            ),
+            "tpot_ms_p99": 0.0,
+            "errors": errors,
+            "judge_equivalent": bool(row.get("eval_passed", False)),
+            "judge_response": row.get("eval_details"),
+            "judge_status_code": None,
+            "judge_attempts": 1 if row.get("eval_details") is not None else 0,
+            "detailed_rows": task_details,
+            "total_cached_tokens": total_cached_tokens,
+            "finish_reason": row.get("finish_reason"),
+        }
+
+        indexed_results.append((index, result))
+        seen_indexes.add(index)
+        completed_task_ids.add(task_id)
+
+    indexed_results.sort(key=lambda item: item[0])
+    existing_results = [result for _, result in indexed_results]
+
+    if recovered_num_requests_count:
+        print(
+            "Recovered num_requests from detailed request indexes for "
+            f"{recovered_num_requests_count} legacy output row(s).",
+            flush=True,
+        )
+
+    prior_wall_time_s: Optional[float] = None
+    try:
+        with open(output_paths["metrics_path"], "r", encoding="utf-8") as f:
+            existing_metrics = json.load(f)
+        performance = existing_metrics.get("performance", {})
+        if isinstance(performance, dict) and "e2e_s" in performance:
+            prior_wall_time_s = float(performance["e2e_s"])
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        prior_wall_time_s = None
+
+    if prior_wall_time_s is None:
+        prior_wall_time_s = sum(
+            float(result["latency_ms"]) / 1000.0 for result in existing_results
+        )
+        print(
+            "WARNING: the crashed run did not contain a completed/checkpointed "
+            "overall wall-time metric. Using the sum of completed per-task "
+            f"latencies ({prior_wall_time_s:.2f}s) as the prior wall-time estimate.",
+            flush=True,
+        )
+
+    print(
+        f"Loaded {len(existing_results)} completed tasks from the resume directory.",
+        flush=True,
+    )
+
+    return existing_results, completed_task_ids, prior_wall_time_s
+
+def build_failed_task_result(
+    *,
+    task: Any,
+    error_message: str,
+    latency_ms: float,
+    finish_reason: str = "unhandled_task_exception",
+) -> Dict[str, Any]:
+    expected = (task.eval_config or {}).get("expected")
+
+    return {
+        "task_id": task.id,
+        "task_name": task.name,
+        "category": task.category,
+        "expected": expected,
+        "predicted": None,
+        "score": 0.0,
+        "correct": False,
+        "response": "",
+        "tool_calls": 0,
+        "num_requests": 0,
+        "tool_latencies_ms": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "latency_ms": latency_ms,
+        "ttft_ms": 0.0,
+        "tpot_ms_avg": 0.0,
+        "tpot_ms_p99": 0.0,
+        "errors": [error_message],
+        "judge_equivalent": False,
+        "judge_response": f"Evaluation skipped: {error_message}",
+        "judge_status_code": None,
+        "judge_attempts": 0,
+        "detailed_rows": [],
+        "total_cached_tokens": 0,
+        "finish_reason": finish_reason,
+    }
+>>>>>>> 33a60c5 (modified code to record engine version)
 
 async def async_main(
     args: argparse.Namespace,

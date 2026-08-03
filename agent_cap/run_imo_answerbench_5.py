@@ -30,6 +30,8 @@ from huggingface_hub import snapshot_download
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
 from agent_cap.runner.unified_runner import collect_hardware_info
+from agent_cap.utils.package_version import get_package_version
+from agent_cap.utils.resume import recover_num_requests
 from openai_harmony import (
     HarmonyEncodingName,
     load_harmony_encoding,
@@ -246,6 +248,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     print('collecting hardware info...', flush=True)
     hw_info = collect_hardware_info_rocm_fallback()
     print('successfully collected hardware info.', flush=True)
+    sglang_version = get_package_version("sglang")
     model_identifier = args.model_path or args.served_model_name
     model_name = Path(model_identifier.rstrip("/")).name or args.served_model_name
     dataset_name = "imo_answerbench"
@@ -302,6 +305,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         },
         "system_environment": {
             "inference_engine": _env_str("INFERENCE_ENGINE", "sglang"),
+            "sglang_version": sglang_version,
             "is_local": _env_bool("IS_LOCAL", True),
             "dataset": dataset_name,
             "num_examples": args.num_tasks,
@@ -323,6 +327,9 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
                 "dataset": dataset_name,
                 "num_examples": args.num_tasks,
                 "status": "initialized",
+                "hardware": {
+                    "sglang_version": sglang_version,
+                },
             },
             f,
             indent=4,
@@ -448,6 +455,7 @@ def write_metrics_file(
         "hardware": {
             "gpu_type": _env_str("GPU_TYPE", "unknown"),
             "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
+            "sglang_version": get_package_version("sglang"),
             "avg_gpu_utilization_pct": "",
             "peak_gpu_memory_used_mb": "",
             "avg_cpu_utilization_pct": "",
@@ -2413,6 +2421,7 @@ def load_existing_results_for_resume(
     indexed_results: List[tuple[int, Dict[str, Any]]] = []
     completed_task_ids: set[str] = set()
     seen_indexes: set[int] = set()
+    recovered_num_requests_count = 0
 
     # Validate output rows first. These task-level rows are the commit marker:
     # a detailed row without a corresponding output row is treated as orphaned
@@ -2505,6 +2514,13 @@ def load_existing_results_for_resume(
 
         score = float(row.get("eval_score", 0.0))
         expected = (task.eval_config or {}).get("expected")
+        if row.get("num_requests") is None:
+            recovered_num_requests_count += 1
+        num_requests = recover_num_requests(
+            row,
+            task_details,
+            context=f"Resume output row for task_id={task_id!r} at index {index}",
+        )
 
         result = {
             "task_id": task.id,
@@ -2516,7 +2532,7 @@ def load_existing_results_for_resume(
             "correct": score >= 1.0,
             "response": response_text,
             "tool_calls": int(row.get("tool_call_count", 0)),
-            "num_requests": int(row.get("num_requests", 1)),
+            "num_requests": num_requests,
             "tool_latencies_ms": [],
             "input_tokens": int(row.get("input_tokens", 0)),
             "output_tokens": output_tokens,
@@ -2541,6 +2557,13 @@ def load_existing_results_for_resume(
 
     indexed_results.sort(key=lambda item: item[0])
     existing_results = [result for _, result in indexed_results]
+
+    if recovered_num_requests_count:
+        print(
+            "Recovered num_requests from detailed request indexes for "
+            f"{recovered_num_requests_count} legacy output row(s).",
+            flush=True,
+        )
 
     prior_wall_time_s: Optional[float] = None
     try:

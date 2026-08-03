@@ -326,6 +326,7 @@ def write_teas_outputs(
     destination_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.get
     engine = env("TEAS_ENGINE", "unknown")
+    engine_version = env("TEAS_ENGINE_VERSION", "unknown")
     ts = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
     suffix = f"{dataset}_{ts}"
     is_mcp = dataset.startswith("mcp-atlas")
@@ -377,7 +378,7 @@ def write_teas_outputs(
         "hardware": {
             "gpu_type": env("TEAS_GPU_TYPE", "unknown"),
             "num_gpus": int(env("TEAS_NUM_GPUS", "0")),
-            f"{engine}_version": env("TEAS_ENGINE_VERSION", "unknown"),
+            f"{engine}_version": engine_version,
             "streaming": True,
         },
     }
@@ -434,8 +435,13 @@ def write_teas_outputs(
             "sweagent_streaming_patch": None,
         } if is_mcp else {
             "inference_engine": engine,
+<<<<<<< HEAD
             "inference_engine_version": env("TEAS_ENGINE_VERSION", "unknown"),
             "base_url": env("TEAS_BASE_URL", "http://localhost:8000/v1"),
+=======
+            f"{engine}_version": engine_version,
+            "base_url": "http://localhost:8000/v1",
+>>>>>>> e04aeae (modified code to record engine version)
             "is_local": True,
             "backend": env("TEAS_BACKEND", "swebench-k8s"),
             "dataset": dataset,
