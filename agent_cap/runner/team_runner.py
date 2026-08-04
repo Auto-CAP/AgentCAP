@@ -42,6 +42,7 @@ try:
 except ImportError:
     psutil = None
 
+from agent_cap.agents.metrics import normalized_evaluator
 from agent_cap.server.gpu_monitor import GPUMetricsSummary, GPUMonitor
 
 
@@ -820,10 +821,18 @@ def compute_team_metrics(
     eval_details = (
         getattr(first_eval_result, "eval_details", None) if first_eval_result else None
     )
-    if isinstance(eval_details, dict) and eval_scores:
-        evaluator = eval_details.get("evaluator")
+    if eval_scores:
+        evaluator, eval_judge = normalized_evaluator(eval_details)
     else:
-        evaluator = None
+        evaluator, eval_judge = None, None
+    pass_rate = (
+        sum(1 for passed in eval_passed if passed) / len(eval_passed)
+        if eval_passed
+        else None
+    )
+    mean_eval_score = (
+        sum(eval_scores) / len(eval_scores) if eval_scores else None
+    )
 
     computed_metrics: Dict[str, Any] = {
         "performance": {
@@ -879,15 +888,22 @@ def compute_team_metrics(
             "per_role": role_totals,
         },
         "quality": {
-            "acc": round(sum(eval_scores) / len(eval_scores), 3)
-            if eval_scores
-            else None,
+            "acc": (
+                round(pass_rate, 4)
+                if evaluator == "gtfa" and pass_rate is not None
+                else (
+                    round(mean_eval_score, 3)
+                    if mean_eval_score is not None
+                    else None
+                )
+            ),
             "task_coverage": (
-                round(sum(1 for passed in eval_passed if passed) / len(eval_passed), 3)
-                if eval_passed
+                round(pass_rate, 4)
+                if pass_rate is not None
                 else None
             ),
             "evaluator": evaluator,
+            "eval_judge": eval_judge,
         },
         "hardware": {
             "gpu_type": hw_info.get("gpu_type", "unknown"),

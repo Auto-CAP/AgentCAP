@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -22,6 +23,19 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from agent_cap.agents.evaluators import EvalResult, register_evaluator
+
+
+def unique_run_id(base: str, out_dir: Path) -> str:
+    """A per-run swebench run_id derived from the run's output directory.
+
+    swebench.harness caches results by (run_id, model_name_or_path, instance);
+    a shared/constant run_id makes every run after the first report "already
+    run, skipping" and reuse the first run's results. out_dir encodes
+    model/hw/timestamp, so it disambiguates runs.
+    """
+    tag = re.sub(r"[^A-Za-z0-9_.-]+", "-",
+                 "_".join(Path(out_dir).resolve().parts[-5:])).strip("-")
+    return f"{base}__{tag}" if tag else base
 
 
 @register_evaluator("swebench")
@@ -72,6 +86,12 @@ class SWEBenchEvaluator:
     def finalize(self, out_dir: Path) -> Dict[str, Dict[str, Any]]:
         if not self._buffer:
             return {}
+        # Unique run_id per run. swebench.harness caches results by
+        # (run_id, model_name_or_path, instance) under logs/run_evaluation/,
+        # so a shared/constant run_id makes every run after the first report
+        # "N instances already run, skipping" and silently reuse the first
+        # run's results (identical acc across models).
+        run_id = unique_run_id(self.run_id, out_dir)
         preds = [
             {"instance_id": iid, "model_patch": patch, "model_name_or_path": self.model_name}
             for iid, patch in self._buffer.items()
@@ -83,7 +103,7 @@ class SWEBenchEvaluator:
             "--dataset_name", self.dataset,
             "--predictions_path", str(preds_path),
             "--max_workers", str(self.max_workers),
-            "--run_id", self.run_id,
+            "--run_id", run_id,
             "--cache_level", "instance",
         ]
         if os.environ.get("SWEBENCH_HARNESS_MODAL") == "1":
@@ -91,7 +111,7 @@ class SWEBenchEvaluator:
         log_path = out_dir / "swebench_eval.log"
         with open(log_path, "w") as lf:
             subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, timeout=3600 * 6)
-        reports_dir = Path("logs/run_evaluation") / self.run_id
+        reports_dir = Path("logs/run_evaluation") / run_id
         results: Dict[str, Dict[str, Any]] = {}
         if reports_dir.exists():
             for model_dir in reports_dir.glob("*"):

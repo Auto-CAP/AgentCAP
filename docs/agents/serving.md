@@ -171,8 +171,11 @@ python -m agent_cap.agents --strategy single \
   --task "..."
 ```
 
-Auto-routing picks `protocol=harmony` based on the model name pattern
-`(?i)gpt-?oss`. `--engine` picks the wire format inside harmony.
+This runs the default `openai` protocol: gpt-oss does not auto-route to
+harmony, so add `--protocol harmony` when the raw token-level decode path is
+what you want (see `docs/agents/protocols.md`). `--engine` picks the wire
+format inside harmony: the sglang path streams and reports a measured TTFT,
+while the vLLM path returns whole responses and reports no TTFT.
 
 ## Tool-parser quick reference
 

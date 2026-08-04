@@ -511,7 +511,9 @@ async def _run_async(args: argparse.Namespace) -> int:
         "per_instance_call_limit": args.sweagent_call_limit,
         "output_dir": str(out_dir) if out_dir else "/tmp/sweagent_out",
     }
-    sem = asyncio.Semaphore(max(1, int(args.concurrency)))
+    requested_concurrency = max(1, int(args.concurrency))
+    sem = asyncio.Semaphore(requested_concurrency)
+    observed_max_concurrency = 0
     write_lock = asyncio.Lock()
 
     async def run_all(llm, session=None) -> List[Dict[str, Any]]:
@@ -522,6 +524,7 @@ async def _run_async(args: argparse.Namespace) -> int:
         out_f = output_data_path.open("w", encoding="utf-8") if output_data_path else None
 
         async def _run_one(i: int, task: Task) -> None:
+            nonlocal observed_max_concurrency
             if task.task_id in done:
                 row = done[task.task_id]
                 results[i] = row
@@ -537,6 +540,15 @@ async def _run_async(args: argparse.Namespace) -> int:
                 _emit_progress(i, task, row)
                 return
             async with sem:
+                # The semaphore value has already been decremented on entry.
+                # Recording its occupancy here proves the requested task
+                # concurrency was actually reached, rather than merely
+                # preserving the CLI argument in metadata.
+                active_now = requested_concurrency - sem._value
+                observed_max_concurrency = max(
+                    observed_max_concurrency,
+                    active_now,
+                )
                 if hasattr(tools, "set_task_allowlist"):
                     unified = (task.metadata or {}).get("_unified_task")
                     et = getattr(unified, "enabled_tools", None) if unified else None
@@ -609,6 +621,9 @@ async def _run_async(args: argparse.Namespace) -> int:
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             results = await run_all(None, session=session)
     generation_wall_time_s = time.perf_counter() - run_started_at
+    os.environ["TEAS_OBSERVED_MAX_CONCURRENCY"] = str(
+        observed_max_concurrency
+    )
 
     if evaluator is not None and hasattr(evaluator, "finalize") and out_dir is not None:
         print(f"\nRunning batch evaluator: {evaluator_name}", file=sys.stderr)
@@ -747,11 +762,19 @@ def _print_summary(results: List[Dict[str, Any]], evaluator_name: Optional[str])
         return
     scores = [float(r.get("eval_score") or 0.0) for r in results if r.get("eval_score") is not None]
     passes = [bool(r.get("eval_passed")) for r in results if r.get("eval_passed") is not None]
+    pass_rate = sum(passes) / max(len(passes), 1) if passes else None
     line = f"FINAL: n={n}"
-    if scores:
+    if evaluator_name == "gtfa" and pass_rate is not None:
+        line += f"  acc={pass_rate:.3f}"
+        if scores:
+            line += (
+                f"  mean_coverage_score="
+                f"{sum(scores) / max(len(scores), 1):.3f}"
+            )
+    elif scores:
         line += f"  acc={sum(scores) / max(len(scores), 1):.3f}"
-    if passes:
-        line += f"  task_coverage={sum(passes) / max(len(passes), 1):.3f}"
+    if pass_rate is not None:
+        line += f"  task_coverage={pass_rate:.3f}"
     if evaluator_name:
         line += f"  evaluator={evaluator_name}"
     print(line, file=sys.stderr)

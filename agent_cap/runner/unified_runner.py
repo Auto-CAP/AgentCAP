@@ -38,6 +38,7 @@ try:
 except ImportError:
     psutil = None
 
+from agent_cap.agents.metrics import resolve_rows_evaluator
 from agent_cap.server.gpu_monitor import GPUMetricsSummary, GPUMonitor
 from agent_cap.utils.precision import resolve_precision, normalize_model_id
 
@@ -739,6 +740,10 @@ def compute_aggregated_metrics(
 
     cpu_vals = [float(v) for v in (cpu_samples or [])]
 
+    evaluator, eval_judge = resolve_rows_evaluator(
+        [r.eval_details for r in results]
+    )
+
     return {
         "performance": {
             "e2e_s": wall_time,
@@ -792,29 +797,47 @@ def compute_aggregated_metrics(
             "total_tool_calls": total_tool_calls,
         },
         "quality": {
-            "acc": round(
-                sum(float(r.eval_score) for r in results if r.eval_score is not None)
-                / max(sum(1 for r in results if r.eval_score is not None), 1),
-                3,
-            )
-            if any(r.eval_score is not None for r in results)
-            else None,
+            "acc": (
+                round(
+                    sum(1 for r in results if r.eval_passed)
+                    / max(
+                        sum(1 for r in results if r.eval_passed is not None),
+                        1,
+                    ),
+                    4,
+                )
+                if evaluator == "gtfa"
+                and any(r.eval_passed is not None for r in results)
+                else (
+                    round(
+                        sum(
+                            float(r.eval_score)
+                            for r in results
+                            if r.eval_score is not None
+                        )
+                        / max(
+                            sum(
+                                1
+                                for r in results
+                                if r.eval_score is not None
+                            ),
+                            1,
+                        ),
+                        3,
+                    )
+                    if any(r.eval_score is not None for r in results)
+                    else None
+                )
+            ),
             "task_coverage": round(
                 sum(1 for r in results if r.eval_passed)
                 / max(sum(1 for r in results if r.eval_passed is not None), 1),
-                3,
+                4,
             )
             if any(r.eval_passed is not None for r in results)
             else None,
-            "evaluator": next(
-                (
-                    r.eval_details.get("evaluator")
-                    for r in results
-                    if isinstance(r.eval_details, dict)
-                    and r.eval_details.get("evaluator")
-                ),
-                None,
-            ),
+            "evaluator": evaluator,
+            "eval_judge": eval_judge,
         },
         "hardware": {
             "gpu_type": hw_info.get("gpu_type", "unknown"),

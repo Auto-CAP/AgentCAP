@@ -230,7 +230,8 @@ Be rigorous but fair in your assessment. Focus on whether the response conveys t
         coverage_score = round(total_score / len(claims), 3) if claims else 0.0
         avg_confidence = total_confidence / len(claims) if claims else 0.5
         return {
-            "evaluator": self.judge_model,
+            "evaluator": "gtfa",
+            "eval_judge": self.judge_model,
             "per_claim": per_claim,
             "coverage_score": coverage_score,
             "total_claims": len(claims),
@@ -252,6 +253,8 @@ Be rigorous but fair in your assessment. Focus on whether the response conveys t
                 passed=True,
                 score=1.0,
                 details={
+                    "evaluator": "gtfa",
+                    "eval_judge": self.judge_model,
                     "per_claim": [],
                     "coverage_score": None,
                     "fully_covered_claims": 0,
@@ -278,6 +281,8 @@ Be rigorous but fair in your assessment. Focus on whether the response conveys t
                 passed=False,
                 score=0.0,
                 details={
+                    "evaluator": "gtfa",
+                    "eval_judge": self.judge_model,
                     "per_claim": per_claim,
                     "coverage_score": 0.0,
                     "fully_covered_claims": 0,

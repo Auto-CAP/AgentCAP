@@ -152,12 +152,12 @@ class HarmonyClient:
         t0 = time.perf_counter()
 
         if engine == "sglang":
-            token_ids, completion_text, raw, usage_in, usage_out = await self._call_sglang(
-                endpoint=endpoint, prompt_ids=prompt_ids,
+            token_ids, completion_text, raw, usage_in, usage_out, ttft_s = (
+                await self._call_sglang(endpoint=endpoint, prompt_ids=prompt_ids)
             )
         else:
-            token_ids, completion_text, raw, usage_in, usage_out = await self._call_vllm(
-                endpoint=endpoint, prompt_ids=prompt_ids,
+            token_ids, completion_text, raw, usage_in, usage_out, ttft_s = (
+                await self._call_vllm(endpoint=endpoint, prompt_ids=prompt_ids)
             )
 
         elapsed = time.perf_counter() - t0
@@ -194,7 +194,15 @@ class HarmonyClient:
             ),
             requests=1,
         )
-        return LLMReply(assistant=assistant, usage=usage, latency_s=elapsed, raw=raw)
+        # Unmeasurable TTFT (the vLLM path, or a stream with no chunk boundary)
+        # keeps the framework-wide 0.0 default rather than reporting a first
+        # token that never arrived; only a measured value is passed on.
+        if ttft_s is None:
+            return LLMReply(assistant=assistant, usage=usage, latency_s=elapsed, raw=raw)
+        return LLMReply(
+            assistant=assistant, usage=usage, latency_s=elapsed, raw=raw,
+            ttft_s=ttft_s, decode_s=max(0.0, elapsed - ttft_s),
+        )
 
     async def _call_vllm(
         self, *, endpoint: ModelEndpoint, prompt_ids: List[int],
@@ -220,7 +228,11 @@ class HarmonyClient:
             except (TypeError, ValueError):
                 token_ids = []
         completion_text = (choices[0].get("text", "") if choices else "") or ""
-        return token_ids, completion_text, raw, len(prompt_ids), len(token_ids)
+        # This path stays a single response: Harmony decoding needs the response
+        # token ids, which /completions only returns whole. TTFT is therefore
+        # unmeasurable here and reported as None (published as null) rather than
+        # as a 0.0 that would read as an instant first token.
+        return token_ids, completion_text, raw, len(prompt_ids), len(token_ids), None
 
     async def _call_sglang(
         self, *, endpoint: ModelEndpoint, prompt_ids: List[int],
@@ -244,9 +256,14 @@ class HarmonyClient:
             "input_ids": [int(t) for t in prompt_ids],
             "rid": str(_uuid.uuid4()),
             "sampling_params": sampling_params,
-            "stream": False,
+            # Streamed so the first chunk gives a real time-to-first-token; the
+            # chunks carry cumulative text/output_ids, so the decoded result is
+            # the same as the single-response form.
+            "stream": True,
         }
-        raw = await self._post_json(url, payload, endpoint.api_key, "sglang /generate")
+        raw, ttft_s = await self._post_stream(
+            url, payload, endpoint.api_key, "sglang /generate",
+        )
 
         text = raw.get("text", "") or ""
         output_ids = raw.get("output_ids") or []
@@ -258,7 +275,49 @@ class HarmonyClient:
         meta = raw.get("meta_info") or {}
         usage_in = int(meta.get("prompt_tokens", len(prompt_ids)) or len(prompt_ids))
         usage_out = int(meta.get("completion_tokens", len(output_ids)) or len(output_ids))
-        return output_ids, text, raw, usage_in, usage_out
+        return output_ids, text, raw, usage_in, usage_out, ttft_s
+
+    async def _post_stream(
+        self, url: str, payload: Dict[str, Any], api_key: str, label: str,
+    ):
+        """Consume an SSE stream; return (last full chunk, seconds to first chunk).
+
+        SGLang streams cumulative chunks, so the last one carries the whole
+        response. Returns ttft None if no chunk ever arrived to time.
+        """
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if self._session is None:
+            raise RuntimeError("HarmonyClient: no aiohttp session")
+
+        t0 = time.perf_counter()
+        first_chunk_s: Optional[float] = None
+        latest: Dict[str, Any] = {}
+
+        async with self._session.post(url, json=payload, headers=headers) as resp:
+            if resp.status >= 400:
+                text = await resp.text()
+                raise RuntimeError(f"{label} failed ({resp.status}): {text[:500]}")
+            async for raw_line in resp.content:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                data_str = line[len("data:"):].strip() if line.startswith("data:") else line
+                if data_str == "[DONE]":
+                    break
+                if first_chunk_s is None:
+                    first_chunk_s = time.perf_counter() - t0
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(chunk, dict):
+                    latest = chunk
+
+        if not latest:
+            raise RuntimeError(f"{label} streamed no usable chunk")
+        return latest, first_chunk_s
 
     async def _post_json(
         self, url: str, payload: Dict[str, Any], api_key: str, label: str,

@@ -112,6 +112,54 @@ def _per_role_usage(row: Mapping[str, Any]) -> Mapping[str, Any]:
     return usage if isinstance(usage, Mapping) else {}
 
 
+def normalized_evaluator(details: Any) -> tuple[str | None, str | None]:
+    """Return ``(scheme, judge)`` from an ``eval_details`` mapping.
+
+    Legacy GTFA rows carry the judge model id in the ``evaluator`` field
+    instead of the scheme name; they are recognizable by their claim-level
+    payload, and the misplaced id is recovered as the judge identity.
+    """
+    if not isinstance(details, Mapping):
+        return None, None
+    scheme = details.get("evaluator")
+    scheme = str(scheme) if scheme else None
+    judge = details.get("eval_judge")
+    judge = str(judge) if judge else None
+    if (
+        scheme is not None
+        and scheme != "gtfa"
+        and (
+            details.get("per_claim") is not None
+            or details.get("coverage_score") is not None
+        )
+    ):
+        judge = judge or scheme
+        scheme = "gtfa"
+    return scheme, judge
+
+
+def resolve_rows_evaluator(
+    details_list: Sequence[Any],
+) -> tuple[str | None, str | None]:
+    """Best ``(scheme, judge)`` across a run's rows.
+
+    Failure rows (e.g. ``evaluator: "skipped"``) can precede judged rows, so a
+    gtfa-schemed row wins over any other scheme and the judge is the first one
+    any row attests.
+    """
+    scheme = None
+    judge = None
+    for details in details_list:
+        row_scheme, row_judge = normalized_evaluator(details)
+        if row_scheme is not None and (
+            scheme is None or (scheme != "gtfa" and row_scheme == "gtfa")
+        ):
+            scheme = row_scheme
+        if judge is None and row_judge is not None:
+            judge = row_judge
+    return scheme, judge
+
+
 def aggregate_agent_metrics(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -162,13 +210,36 @@ def aggregate_agent_metrics(
         if r.get("eval_passed") is not None
     ]
 
-    inferred_evaluator = evaluator_name
-    if inferred_evaluator is None:
-        for row in rows:
-            details = row.get("eval_details")
-            if isinstance(details, Mapping) and details.get("evaluator"):
-                inferred_evaluator = str(details["evaluator"])
-                break
+    scheme, eval_judge = resolve_rows_evaluator(
+        [row.get("eval_details") for row in rows]
+    )
+    inferred_evaluator = evaluator_name if evaluator_name is not None else scheme
+    if inferred_evaluator == "swebench":
+        quality_is_verified = bool(rows) and all(
+            isinstance(row.get("eval_passed"), bool)
+            and isinstance(row.get("eval_details"), Mapping)
+            and row["eval_details"].get("evaluator") == "swebench"
+            and row["eval_details"].get("instance_id") == row.get("task_id")
+            for row in rows
+        )
+        if not quality_is_verified:
+            # Generation rows use false/zero placeholders before the official
+            # harness finishes. Reporting those as measured quality is worse
+            # than explicitly marking quality pending.
+            scores = []
+            passes = []
+
+    # MCP-Atlas/GTFA's published accuracy is task pass rate: a task passes
+    # when its claim-coverage score reaches the evaluator threshold.  The mean
+    # fractional claim-coverage score is useful diagnostic data, but must not
+    # be placed in quality.acc.
+    pass_rate = (
+        sum(1 for passed in passes if passed) / len(passes) if passes else None
+    )
+    mean_eval_score = _safe_mean(scores) if scores else None
+    quality_acc = (
+        pass_rate if inferred_evaluator == "gtfa" else mean_eval_score
+    )
 
     per_role: Dict[str, Dict[str, Any]] = {}
     for row in rows:
@@ -247,14 +318,14 @@ def aggregate_agent_metrics(
             "per_role": per_role,
         },
         "quality": {
-            "acc": round(sum(scores) / max(len(scores), 1), 3) if scores else None,
-            "task_coverage": round(sum(1 for p in passes if p) / max(len(passes), 1), 3)
-            if passes else None,
+            "acc": round(quality_acc, 4) if quality_acc is not None else None,
+            "task_coverage": round(pass_rate, 4)
+            if pass_rate is not None else None,
             "evaluator": inferred_evaluator,
+            "eval_judge": eval_judge,
         },
         "hardware": {
             "gpu_type": hw.get("gpu_type", "unknown"),
-            "num_gpus": int(hw.get("num_gpus", 0) or 0),
             "cpu_type": hw.get("cpu_type", "unknown"),
             "num_cpus": int(hw.get("num_cpus", 0) or 0),
             # The generic CLI does not yet run live GPU/CPU samplers; keep the

@@ -152,8 +152,12 @@ class SWEAgentStrategy(Strategy):
             ]
             if deployment == "modal":
                 deploy_args += [
-                    "--env.deployment.deployment_timeout", "14400",
-                    "--env.deployment.runtime_timeout", "900",
+                    "--env.deployment.startup_timeout",
+                    os.environ.get("SWEAGENT_MODAL_STARTUP_TIMEOUT", "3600"),
+                    "--env.deployment.deployment_timeout",
+                    os.environ.get("SWEAGENT_MODAL_DEPLOYMENT_TIMEOUT", "28800"),
+                    "--env.deployment.runtime_timeout",
+                    os.environ.get("SWEAGENT_MODAL_RUNTIME_TIMEOUT", "3600"),
                 ]
 
         cmd = [
