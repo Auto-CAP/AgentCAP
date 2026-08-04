@@ -210,6 +210,39 @@ def _p99(values: List[float]) -> float:
     return float(statistics.quantiles(values, n=100, method="inclusive")[98])
 
 
+def _max_input_tokens_by_task(detailed_results_path: str) -> Dict[int, int]:
+    """Largest single-request input length per task, from the per-request records.
+
+    The aggregation rows carry only per-task totals, so the maximum cannot be
+    derived from them: on a single-request task the two coincide, and on every
+    other task the total exceeds any individual request. Read the per-request
+    file this run already writes and take the real maximum. An empty mapping
+    means the field cannot be measured and must be published as null.
+    """
+    by_task: Dict[int, int] = {}
+    try:
+        with open(detailed_results_path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if "request_index" not in row:
+                    return {}
+                task = row.get("example_index")
+                tokens = int(row.get("input_tokens") or 0)
+                if task is None:
+                    continue
+                if tokens > by_task.get(task, -1):
+                    by_task[task] = tokens
+    except OSError:
+        return {}
+    return by_task
+
+
 def write_metrics_file(
     results: List[Dict[str, Any]],
     wall_time_s: float,
@@ -244,7 +277,19 @@ def write_metrics_file(
 
         input_tokens_per_request.append(total_in / reqs)
         output_tokens_per_request.append(total_out / reqs)
-        max_input_tokens_per_request_list.append(float(total_in))
+        # max input per request is not derivable from a task total; filled in below
+
+    _max_by_task = _max_input_tokens_by_task(
+        output_paths.get("detailed_results_path", "")
+    )
+    # A task that recorded no requests contributed nothing to the token totals
+    # either, so it carries 0 here for the same reason. An empty mapping means
+    # the per-request records are absent entirely and the field is not measurable.
+    max_input_tokens_per_request_list = (
+        [float(_max_by_task.get(k, 0)) for k in range(len(results))]
+        if _max_by_task
+        else []
+    )
 
     decode_time_s_list = [
         (float(r["tpot_ms_avg"]) / 1000.0) * int(r["output_tokens"])
@@ -282,7 +327,11 @@ def write_metrics_file(
             "avg_num_requests": _safe_mean([float(x) for x in num_requests_list]),
             "avg_input_tokens_per_request": _safe_mean(input_tokens_per_request),
             "avg_output_tokens_per_request": _safe_mean(output_tokens_per_request),
-            "avg_max_input_tokens_per_request": _safe_mean(max_input_tokens_per_request_list),
+            "avg_max_input_tokens_per_request": (
+                _safe_mean(max_input_tokens_per_request_list)
+                if max_input_tokens_per_request_list
+                else None
+            ),
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
             "total_cached_tokens": 0,
