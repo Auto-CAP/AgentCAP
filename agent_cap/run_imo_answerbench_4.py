@@ -28,6 +28,7 @@ from huggingface_hub import snapshot_download
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
 from agent_cap.runner.unified_runner import collect_hardware_info
+from agent_cap.utils.package_version import get_package_version
 from openai_harmony import (
     HarmonyEncodingName,
     load_harmony_encoding,
@@ -192,6 +193,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     hw_info = collect_hardware_info_rocm_fallback()
+    vllm_version = get_package_version("vllm")
 
     model_name = Path(args.model_path).name
     dataset_name = "imo_answerbench"
@@ -225,6 +227,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         },
         "system_environment": {
             "inference_engine": _env_str("INFERENCE_ENGINE", "vllm"),
+            "vllm_version": vllm_version,
             "is_local": _env_bool("IS_LOCAL", True),
             "dataset": dataset_name,
             "num_examples": args.num_tasks,
@@ -245,6 +248,9 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
                 "dataset": dataset_name,
                 "num_examples": args.num_tasks,
                 "status": "initialized",
+                "hardware": {
+                    "vllm_version": vllm_version,
+                },
             },
             f,
             indent=4,
@@ -282,39 +288,6 @@ def _p99(values: List[float]) -> float:
     return float(statistics.quantiles(values, n=100, method="inclusive")[98])
 
 
-def _max_input_tokens_by_task(detailed_results_path: str) -> Dict[int, int]:
-    """Largest single-request input length per task, from the per-request records.
-
-    The aggregation rows carry only per-task totals, so the maximum cannot be
-    derived from them: on a single-request task the two coincide, and on every
-    other task the total exceeds any individual request. Read the per-request
-    file this run already writes and take the real maximum. An empty mapping
-    means the field cannot be measured and must be published as null.
-    """
-    by_task: Dict[int, int] = {}
-    try:
-        with open(detailed_results_path, "r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if "request_index" not in row:
-                    return {}
-                task = row.get("example_index")
-                tokens = int(row.get("input_tokens") or 0)
-                if task is None:
-                    continue
-                if tokens > by_task.get(task, -1):
-                    by_task[task] = tokens
-    except OSError:
-        return {}
-    return by_task
-
-
 def write_metrics_file(
     results: List[Dict[str, Any]],
     wall_time_s: float,
@@ -335,7 +308,7 @@ def write_metrics_file(
     total_output_tokens = int(sum(output_tokens_list))
     total_tool_calls = int(sum(tool_calls_list))
 
-    num_requests_list = [int(r.get("num_requests", 1)) for r in results]
+    num_requests_list = [int(r["num_requests"]) for r in results]
     total_requests = int(sum(num_requests_list))
 
     input_tokens_per_request = []
@@ -343,25 +316,14 @@ def write_metrics_file(
     max_input_tokens_per_request_list = []
 
     for r in results:
-        reqs = 1
+        reqs = int(r["num_requests"])
         total_in = int(r["input_tokens"])
         total_out = int(r["output_tokens"])
 
-        input_tokens_per_request.append(total_in / reqs)
-        output_tokens_per_request.append(total_out / reqs)
-        # max input per request is not derivable from a task total; filled in below
-
-    _max_by_task = _max_input_tokens_by_task(
-        output_paths.get("detailed_results_path", "")
-    )
-    # A task that recorded no requests contributed nothing to the token totals
-    # either, so it carries 0 here for the same reason. An empty mapping means
-    # the per-request records are absent entirely and the field is not measurable.
-    max_input_tokens_per_request_list = (
-        [float(_max_by_task.get(k, 0)) for k in range(len(results))]
-        if _max_by_task
-        else []
-    )
+        if reqs > 0:
+            input_tokens_per_request.append(total_in / reqs)
+            output_tokens_per_request.append(total_out / reqs)
+        max_input_tokens_per_request_list.append(float(total_in))
 
     decode_time_s_list = [
         (float(r["tpot_ms_avg"]) / 1000.0) * int(r["output_tokens"])
@@ -399,11 +361,7 @@ def write_metrics_file(
             "avg_num_requests": _safe_mean([float(x) for x in num_requests_list]),
             "avg_input_tokens_per_request": _safe_mean(input_tokens_per_request),
             "avg_output_tokens_per_request": _safe_mean(output_tokens_per_request),
-            "avg_max_input_tokens_per_request": (
-                _safe_mean(max_input_tokens_per_request_list)
-                if max_input_tokens_per_request_list
-                else None
-            ),
+            "avg_max_input_tokens_per_request": _safe_mean(max_input_tokens_per_request_list),
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
             "total_cached_tokens": 0,
@@ -419,6 +377,7 @@ def write_metrics_file(
         "hardware": {
             "gpu_type": _env_str("GPU_TYPE", "unknown"),
             "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
+            "vllm_version": get_package_version("vllm"),
             "avg_gpu_utilization_pct": "",
             "peak_gpu_memory_used_mb": "",
             "avg_cpu_utilization_pct": "",

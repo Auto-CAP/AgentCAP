@@ -219,6 +219,10 @@ def merge_results(output_dir, total, passes, patches, args):
         "temperature": 0.0,
         "num_tasks": total,
         "timestamp": timestamp,
+        "system_environment": {
+            "inference_engine": args.serving_engine,
+            "vllm_version": merged_metrics["hardware"]["vllm_version"],
+        },
     }
 
     with open(output_dir / f"metadata_{sfx}.json", "w") as f:

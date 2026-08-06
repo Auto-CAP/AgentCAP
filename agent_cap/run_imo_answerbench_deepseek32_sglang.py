@@ -2,14 +2,12 @@ import argparse
 import asyncio
 import contextlib
 import json
-import math
 import os
 import re
 import signal
 import statistics
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
 from collections import Counter
@@ -18,20 +16,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 import requests
-import aiohttp
-# from google import genai
-from math_verify import parse, verify
-from openai import OpenAI, BadRequestError
 from huggingface_hub import snapshot_download
-from transformers import AutoTokenizer
-import copy
-import importlib.util
+from math_verify import parse, verify
+from openai import OpenAI
+
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
 from agent_cap.runner.unified_runner import collect_hardware_info
 from agent_cap.utils.package_version import get_package_version
-from agent_cap.utils.resume import recover_num_requests
 
 
 SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
@@ -42,25 +36,6 @@ SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise a
 - Put the final answer inside \\boxed{...}.
 - The final answer may be an integer, fraction, expression, tuple, sequence, set, or other mathematical object, depending on the problem.
 - Do not put anything except the final answer inside the final \\boxed{...}.
-"""
-
-JUDGE_PROMPT = """You are a strict mathematical answer equivalence judge.
-
-Determine whether the following two final answers are mathematically equivalent.
-
-Rules:
-- Focus only on whether the predicted answer and expected answer represent the same mathematical value.
-- Ignore formatting differences like whitespace, commas, LaTeX wrappers, or extra prose.
-- If they represent the same integer or the same mathematical expression/value, return equivalent=true.
-- If they do not represent the same value, return equivalent=false.
-- Return ONLY valid JSON with this exact schema:
-{{"equivalent": true_or_false, "reason": "short reason"}}
-
-Predicted answer:
-{predicted}
-
-Expected answer:
-{expected}
 """
 
 
@@ -119,19 +94,86 @@ def infer_model_precision(model_path: str) -> str:
     return "unknown"
 
 
+def collect_hardware_info_rocm_fallback() -> Dict[str, Any]:
+    try:
+        hw_info = collect_hardware_info()
+        if hw_info.get("gpu_type") not in (None, "", "unknown"):
+            return hw_info
+    except Exception:
+        hw_info = {}
+
+    rocr_visible = os.getenv("ROCR_VISIBLE_DEVICES", "")
+    hip_visible = os.getenv("HIP_VISIBLE_DEVICES", "")
+
+    gpu_type = "unknown"
+    num_gpus = 0
+
+    try:
+        proc = subprocess.run(
+            ["rocminfo"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=20,
+        )
+        text = proc.stdout
+        if "gfx950" in text:
+            gpu_type = "AMD Instinct MI35x / gfx950"
+        elif "gfx942" in text:
+            gpu_type = "AMD Instinct MI300/MI325 / gfx942"
+        elif "AMD Instinct" in text:
+            gpu_type = "AMD Instinct"
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.run(
+            ["python", "-c", "import torch; print(torch.cuda.device_count())"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=20,
+        )
+        num_gpus = int(proc.stdout.strip().splitlines()[-1])
+    except Exception:
+        if rocr_visible:
+            num_gpus = len([x for x in rocr_visible.split(",") if x.strip()])
+        else:
+            num_gpus = 0
+
+    hw_info.update(
+        {
+            "gpu_type": hw_info.get("gpu_type") or gpu_type,
+            "num_gpus": hw_info.get("num_gpus") or num_gpus,
+            "rocr_visible_devices": rocr_visible,
+            "hip_visible_devices": hip_visible,
+        }
+    )
+    return hw_info
+
+
 def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    hw_info = collect_hardware_info()
-    vllm_version = get_package_version("vllm")
+    print("collecting hardware info...", flush=True)
+    hw_info = collect_hardware_info_rocm_fallback()
+    print("successfully collected hardware info.", flush=True)
+    sglang_version = get_package_version("sglang")
 
     model_name = Path(args.model_path).name
     dataset_name = "imo_answerbench"
     gpu_shortform = str(hw_info.get("gpu_type", "unknown")).replace(" ", "-")
     number_of_gpus = int(hw_info.get("num_gpus", 0))
 
+    output_root = Path(
+        _env_str(
+            "OUTPUT_ROOT",
+            "/workspace/outputs/TEAS_Development_Results_Private/agentic_results/amd/sglang",
+        )
+    )
+
     results_dir = (
-        Path("/develop-pvc/outputs/TEAS_Development_Results_Private/agentic_results/eidf/vllm")
+        output_root
         / model_name
         / dataset_name
         / f"{gpu_shortform}-x-{number_of_gpus}"
@@ -155,14 +197,15 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
             "precision": infer_model_precision(args.model_path),
         },
         "system_environment": {
-            "inference_engine": _env_str("INFERENCE_ENGINE", "vllm"),
-            "vllm_version": vllm_version,
+            "inference_engine": _env_str("INFERENCE_ENGINE", "sglang"),
+            "sglang_version": sglang_version,
             "is_local": _env_bool("IS_LOCAL", True),
             "dataset": dataset_name,
             "num_examples": args.num_tasks,
             "max_turns": args.max_turns,
             "max_tokens": args.max_tokens,
             "temperature": args.temperature,
+            "top_p": args.top_p,
             "timestamp": timestamp,
         },
     }
@@ -178,7 +221,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
                 "num_examples": args.num_tasks,
                 "status": "initialized",
                 "hardware": {
-                    "vllm_version": vllm_version,
+                    "sglang_version": sglang_version,
                 },
             },
             f,
@@ -203,10 +246,6 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
 
 def _safe_mean(values: List[float]) -> float:
     return statistics.mean(values) if values else 0.0
-
-
-def _safe_sum(values: List[float]) -> float:
-    return float(sum(values)) if values else 0.0
 
 
 def _p99(values: List[float]) -> float:
@@ -265,10 +304,12 @@ def write_metrics_file(
     input_tokens_list = [int(r["input_tokens"]) for r in results]
     output_tokens_list = [int(r["output_tokens"]) for r in results]
     tool_calls_list = [int(r["tool_calls"]) for r in results]
+    cached_tokens_list = [int(r.get("total_cached_tokens", 0)) for r in results]
 
     total_input_tokens = int(sum(input_tokens_list))
     total_output_tokens = int(sum(output_tokens_list))
     total_tool_calls = int(sum(tool_calls_list))
+    total_cached_tokens = int(sum(cached_tokens_list))
 
     num_requests_list = [int(r.get("num_requests", 1)) for r in results]
     total_requests = int(sum(num_requests_list))
@@ -278,10 +319,9 @@ def write_metrics_file(
     max_input_tokens_per_request_list = []
 
     for r in results:
-        reqs = 1
+        reqs = max(1, int(r.get("num_requests", 1)))
         total_in = int(r["input_tokens"])
         total_out = int(r["output_tokens"])
-
         input_tokens_per_request.append(total_in / reqs)
         output_tokens_per_request.append(total_out / reqs)
         # max input per request is not derivable from a task total; filled in below
@@ -307,6 +347,12 @@ def write_metrics_file(
     acc = (
         float(sum(float(r["score"]) for r in results)) / total_examples
         if total_examples > 0
+        else 0.0
+    )
+
+    avg_cache_hit_rate = (
+        float(total_cached_tokens) / float(total_input_tokens)
+        if total_input_tokens > 0
         else 0.0
     )
 
@@ -341,8 +387,8 @@ def write_metrics_file(
             ),
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
-            "total_cached_tokens": 0,
-            "avg_cache_hit_rate": 0.0,
+            "total_cached_tokens": total_cached_tokens,
+            "avg_cache_hit_rate": avg_cache_hit_rate,
             "total_requests": total_requests,
             "total_tool_calls": total_tool_calls,
         },
@@ -354,7 +400,7 @@ def write_metrics_file(
         "hardware": {
             "gpu_type": _env_str("GPU_TYPE", "unknown"),
             "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
-            "vllm_version": get_package_version("vllm"),
+            "sglang_version": get_package_version("sglang"),
             "avg_gpu_utilization_pct": "",
             "peak_gpu_memory_used_mb": "",
             "avg_cpu_utilization_pct": "",
@@ -367,11 +413,8 @@ def write_metrics_file(
 
     print(f"Wrote metrics file: {metrics_path}")
 
-def append_output_data_row(
-    result: Dict[str, Any],
-    index: int,
-    output_data_path: str,
-) -> None:
+
+def append_output_data_row(result: Dict[str, Any], index: int, output_data_path: str) -> None:
     row = {
         "index": index - 1,
         "task_id": result["task_id"],
@@ -379,9 +422,9 @@ def append_output_data_row(
         "output_tokens": result["output_tokens"],
         "tool_call_count": result["tool_calls"],
         "num_requests": result["num_requests"],
-        "finish_reason": result.get("finish_reason"),
         "e2e_latency_s": float(result["latency_ms"]) / 1000.0,
         "output_text": result["response"],
+        "reasoning_text": result.get("reasoning", ""),
         "errors": result["errors"],
         "eval_passed": result["judge_equivalent"],
         "eval_score": result["score"],
@@ -391,312 +434,14 @@ def append_output_data_row(
     with open(output_data_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-def append_detailed_result_rows(
-    detailed_rows: List[Dict[str, Any]],
-    detailed_results_path: str,
-) -> None:
+
+def append_detailed_result_rows(detailed_rows: List[Dict[str, Any]], detailed_results_path: str) -> None:
     with open(detailed_results_path, "a", encoding="utf-8") as f:
         for row in detailed_rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-_DSV32_ENCODER_MODULE = None
-
-
-def _load_dsv32_encoder(tokenizer: Any):
-    global _DSV32_ENCODER_MODULE
-
-    if _DSV32_ENCODER_MODULE is not None:
-        return _DSV32_ENCODER_MODULE
-
-    model_path = (
-        getattr(tokenizer, "_agentcap_model_path", None)
-        or getattr(tokenizer, "name_or_path", "")
-    )
-    encoder_path = Path(model_path) / "encoding" / "encoding_dsv32.py"
-
-    if not encoder_path.is_file():
-        return None
-
-    spec = importlib.util.spec_from_file_location(
-        "agentcap_encoding_dsv32",
-        str(encoder_path),
-    )
-    if spec is None or spec.loader is None:
-        return None
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    _DSV32_ENCODER_MODULE = module
-    return module
-
-def _looks_like_unparsed_deepseek_tool_call(text: str) -> bool:
-    """
-    Detect cases where DeepSeek-V3.2 emitted raw DSML/tool-call markup,
-    but vLLM did not parse it into structured tool_calls.
-    """
-    if not text:
-        return False
-
-    markers = [
-        "<｜DSML｜function_calls>",
-        "<｜DSML｜invoke",
-        "<｜DSML｜channel",
-        "<｜DSML｜tool",
-        "<function_calls>",
-        "</function_calls>",
-        "<tool_call>",
-        "</tool_call>",
-    ]
-    return any(marker in text for marker in markers)
-
-def _count_prompt_tokens_with_dsv32_encoder(
-    *,
-    tokenizer: Any,
-    messages: List[Dict[str, Any]],
-    tools: List[Dict[str, Any]],
-    enable_thinking: bool,
-) -> Optional[int]:
-    encoder = _load_dsv32_encoder(tokenizer)
-    if encoder is None:
-        return None
-
-    messages_for_encoding = copy.deepcopy(messages)
-
-    # The official encoder renders tools when they are attached to a message.
-    # The usual place is the system message.
-    if tools:
-        system_message = None
-        for message in messages_for_encoding:
-            if message.get("role") == "system":
-                system_message = message
-                break
-
-        if system_message is None:
-            messages_for_encoding.insert(
-                0,
-                {
-                    "role": "system",
-                    "content": "",
-                    "tools": tools,
-                },
-            )
-        else:
-            system_message["tools"] = tools
-
-    prompt = encoder.encode_messages(
-        messages_for_encoding,
-        thinking_mode="thinking" if enable_thinking else "chat",
-        drop_thinking=True,
-        add_default_bos_token=True,
-    )
-
-    return len(tokenizer.encode(prompt, add_special_tokens=False))
-
-def _count_prompt_tokens_with_tokenizer(
-    *,
-    tokenizer: Any,
-    messages: List[Dict[str, Any]],
-    tools: List[Dict[str, Any]],
-    enable_thinking: bool,
-) -> int:
-    """
-    Count prompt tokens.
-
-    DeepSeek-V3.2 does not ship a normal Hugging Face/Jinja chat_template,
-    so tokenizer.apply_chat_template(...) fails. For DeepSeek-V3.2, use the
-    official encoding/encoding_dsv32.py encoder when available.
-    """
-
-    if not getattr(tokenizer, "chat_template", None):
-        dsv32_count = _count_prompt_tokens_with_dsv32_encoder(
-            tokenizer=tokenizer,
-            messages=messages,
-            tools=tools,
-            enable_thinking=enable_thinking,
-        )
-        if dsv32_count is not None:
-            return dsv32_count
-
-        # Last-resort conservative fallback. This is less exact, but avoids
-        # crashing before the request is sent.
-        raw = json.dumps(
-            {
-                "messages": messages,
-                "tools": tools,
-                "thinking": enable_thinking,
-            },
-            ensure_ascii=False,
-        )
-        return len(tokenizer.encode(raw, add_special_tokens=False)) + 2048
-
-    try:
-        token_ids = tokenizer.apply_chat_template(
-            messages,
-            tools=tools if tools else None,
-            tokenize=True,
-            add_generation_prompt=True,
-            thinking=enable_thinking,
-        )
-    except TypeError:
-        token_ids = tokenizer.apply_chat_template(
-            messages,
-            tools=tools if tools else None,
-            tokenize=True,
-            add_generation_prompt=True,
-        )
-
-    if hasattr(token_ids, "shape"):
-        return int(token_ids.shape[-1])
-
-    if token_ids and isinstance(token_ids[0], list):
-        return len(token_ids[0])
-
-    return len(token_ids)
-
-
-def _clamp_max_tokens_for_context(
-    *,
-    requested_max_tokens: int,
-    context_tokens: int,
-    tokenizer: Any,
-    messages: List[Dict[str, Any]],
-    tools: List[Dict[str, Any]],
-    enable_thinking: bool,
-    safety_margin_tokens: int = 1024,
-) -> int:
-    prompt_tokens = _count_prompt_tokens_with_tokenizer(
-        tokenizer=tokenizer,
-        messages=messages,
-        tools=tools,
-        enable_thinking=enable_thinking,
-    )
-
-    available_for_output = context_tokens - prompt_tokens - safety_margin_tokens
-    effective_max_tokens = min(requested_max_tokens, available_for_output)
-
-    if effective_max_tokens < 1:
-        raise ValueError(
-            f"Prompt is too long for context window. "
-            f"context_tokens={context_tokens}, "
-            f"estimated_prompt_tokens={prompt_tokens}, "
-            f"safety_margin_tokens={safety_margin_tokens}"
-        )
-
-    if effective_max_tokens != requested_max_tokens:
-        print(
-            f"[max_tokens clamp] requested={requested_max_tokens}, "
-            f"prompt_tokens={prompt_tokens}, "
-            f"context_tokens={context_tokens}, "
-            f"effective={effective_max_tokens}",
-            flush=True,
-        )
-
-    return int(effective_max_tokens)
-
-_DSML_TOKEN = "｜DSML｜"
-
-
-def _coerce_dsml_param(value: str, string_attr: Optional[str]) -> Any:
-    if string_attr == "true":
-        return value
-
-    value_stripped = value.strip()
-
-    if string_attr == "false":
-        try:
-            return json.loads(value_stripped)
-        except Exception:
-            pass
-
-        lowered = value_stripped.lower()
-        if lowered == "true":
-            return True
-        if lowered == "false":
-            return False
-        if lowered == "null":
-            return None
-
-        try:
-            return int(value_stripped)
-        except Exception:
-            pass
-
-        try:
-            return float(value_stripped)
-        except Exception:
-            pass
-
-    return value
-
-
-def parse_raw_deepseek32_dsml_tool_calls(text: str) -> List[Dict[str, Any]]:
-    """
-    Recover DeepSeek-V3.2 DSML tool calls when vLLM leaks them into content/reasoning
-    instead of returning structured tool_calls.
-    """
-    if not text:
-        return []
-
-    dsml = re.escape(_DSML_TOKEN)
-
-    invoke_re = re.compile(
-        rf"<(?:{dsml})?invoke\s+name=[\"']([^\"']+)[\"']\s*>\s*(.*?)\s*</(?:{dsml})?invoke>",
-        re.DOTALL,
-    )
-
-    param_re = re.compile(
-        rf"<(?:{dsml})?parameter\s+name=[\"']([^\"']+)[\"'](?:\s+string=[\"'](true|false)[\"'])?\s*>\s*(.*?)\s*</(?:{dsml})?parameter>",
-        re.DOTALL,
-    )
-
-    recovered: List[Dict[str, Any]] = []
-
-    for idx, invoke_match in enumerate(invoke_re.finditer(text)):
-        function_name = invoke_match.group(1).strip()
-        invoke_body = invoke_match.group(2)
-
-        args: Dict[str, Any] = {}
-        for param_match in param_re.finditer(invoke_body):
-            param_name = param_match.group(1).strip()
-            string_attr = param_match.group(2)
-            param_value = param_match.group(3)
-            args[param_name] = _coerce_dsml_param(param_value, string_attr)
-
-        recovered.append(
-            {
-                "id": f"call_raw_dsml_{idx}",
-                "type": "function",
-                "function": {
-                    "name": function_name,
-                    "arguments": json.dumps(args, ensure_ascii=False),
-                },
-            }
-        )
-
-    return recovered
-
-
-def strip_raw_deepseek32_dsml_blocks(text: str) -> str:
-    if not text:
-        return text
-
-    dsml = re.escape(_DSML_TOKEN)
-
-    pattern = re.compile(
-        rf"<(?:{dsml})?function_calls>\s*.*?\s*</(?:{dsml})?function_calls>",
-        re.DOTALL,
-    )
-
-    return pattern.sub("", text).strip()
-
 
 class SyncMathPythonBackend:
-    """
-    Thin synchronous wrapper around MathPythonBackend so the custom Harmony loop
-    can call it directly in the same style as your AIMO3 notebook.
-    """
-
     def __init__(
         self,
         startup_timeout: float = 30.0,
@@ -722,7 +467,6 @@ class SyncMathPythonBackend:
         if result.success:
             return result.output
 
-        # AIMO3-style: feed tool failure back to the model as tool output
         output = result.output or "Unknown tool error."
         if not str(output).startswith("[ERROR]"):
             output = f"[ERROR] {output}"
@@ -750,9 +494,7 @@ class OpenRouterEquivalenceJudge:
         self.backoff_cap_s = backoff_cap_s
 
         if not self.api_key:
-            raise ValueError(
-                "OpenRouter API key not found. Set OPENROUTER_API_KEY or pass api_key explicitly."
-            )
+            raise ValueError("OpenRouter API key not found. Set OPENROUTER_API_KEY.")
 
     def _extract_json_bool(self, text: str) -> Optional[bool]:
         text = text.strip()
@@ -778,23 +520,12 @@ class OpenRouterEquivalenceJudge:
             return True
         if '"equivalent": false' in lowered or lowered.startswith("no"):
             return False
-
         return None
 
     def _compute_backoff_seconds(self, attempt: int) -> float:
-        """
-        Linear backoff:
-        attempt=1 -> 20s
-        attempt=2 -> 40s
-        attempt>=3 -> 60s (cap)
-        """
         return min(self.backoff_start_s * attempt, self.backoff_cap_s)
 
-    def judge_equivalence(
-        self,
-        predicted: Optional[str],
-        expected: Optional[str],
-    ) -> Dict[str, Any]:
+    def judge_equivalence(self, predicted: Optional[str], expected: Optional[str]) -> Dict[str, Any]:
         if predicted is None or expected is None:
             return {
                 "equivalent": False,
@@ -824,22 +555,15 @@ Expected answer:
 
         payload = {
             "model": self.model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
         }
-
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
 
         last_error = None
-
         for attempt in range(1, self.max_retries + 1):
             try:
                 response = requests.post(
@@ -849,23 +573,19 @@ Expected answer:
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-
                 data = response.json()
                 text = data["choices"][0]["message"]["content"]
                 equivalent = self._extract_json_bool(text)
-
                 return {
                     "equivalent": bool(equivalent) if equivalent is not None else False,
                     "raw_response": text,
                     "status_code": response.status_code,
                     "response_json": data,
                 }
-
             except requests.exceptions.RequestException as exc:
                 last_error = exc
                 status_code = None
                 response_json = None
-
                 if getattr(exc, "response", None) is not None:
                     status_code = exc.response.status_code
                     try:
@@ -885,17 +605,12 @@ Expected answer:
 
                 return {
                     "equivalent": False,
-                    "raw_response": (
-                        f"Judge failed after {self.max_retries} attempts: "
-                        f"{type(exc).__name__}: {exc}"
-                    ),
+                    "raw_response": f"Judge failed after {self.max_retries} attempts: {type(exc).__name__}: {exc}",
                     "status_code": status_code,
                     "response_json": response_json,
                 }
-
             except Exception as exc:
                 last_error = exc
-
                 if attempt < self.max_retries:
                     sleep_s = self._compute_backoff_seconds(attempt)
                     print(
@@ -908,10 +623,7 @@ Expected answer:
 
                 return {
                     "equivalent": False,
-                    "raw_response": (
-                        f"Judge failed after {self.max_retries} attempts: "
-                        f"{type(exc).__name__}: {exc}"
-                    ),
+                    "raw_response": f"Judge failed after {self.max_retries} attempts: {type(exc).__name__}: {exc}",
                     "status_code": None,
                     "response_json": None,
                 }
@@ -919,8 +631,7 @@ Expected answer:
         return {
             "equivalent": False,
             "raw_response": (
-                f"Judge failed after {self.max_retries} attempts: "
-                f"{type(last_error).__name__}: {last_error}"
+                f"Judge failed after {self.max_retries} attempts: {type(last_error).__name__}: {last_error}"
                 if last_error is not None
                 else "Judge failed for unknown reason."
             ),
@@ -928,70 +639,18 @@ Expected answer:
             "response_json": None,
         }
 
-    async def judge_equivalence_async(
-        self,
-        predicted: Optional[str],
-        expected: Optional[str],
-    ) -> Dict[str, Any]:
-        return await asyncio.to_thread(self.judge_equivalence, predicted, expected)
-
-
-async def apply_llm_judgment(
-    result: Dict[str, Any],
-    judge,
-    max_retries: int = 5,
-) -> Dict[str, Any]:
-    predicted = result.get("predicted")
-    expected = result.get("expected")
-
-    result["rule_score"] = result["score"]
-    result["rule_correct"] = result["correct"]
-
-    last_raw_response = None
-    judge_equivalent = False
-    judge_attempts = 0
-
-    for attempt in range(1, max_retries + 1):
-        judge_attempts = attempt
-        try:
-            judge_eval = await judge.judge_equivalence_async(predicted, expected)
-            last_raw_response = judge_eval.get("raw_response")
-            judge_equivalent = bool(judge_eval.get("equivalent", False))
-
-            if judge_equivalent:
-                break
-        except Exception as exc:
-            last_raw_response = f"Judge attempt {attempt} failed: {exc}"
-
-    result["judge_equivalent"] = judge_equivalent
-    result["judge_response"] = last_raw_response
-    result["judge_attempts"] = judge_attempts
-
-    result["score"] = 1.0 if judge_equivalent else 0.0
-    result["correct"] = judge_equivalent
-
-    return result
 
 def resolve_model_path(model_path: str, local_model_root: Optional[str] = None) -> str:
-    """
-    If model_path is an existing local directory, return it unchanged.
-    Otherwise, treat it as a Hugging Face repo id and download it locally.
-
-    Examples:
-      - /workspace/models/unsloth/gpt-oss-120b   -> use as-is if it exists
-      - openai/gpt-oss-120b                      -> download from HF
-    """
     path_obj = Path(model_path)
     if path_obj.is_dir():
         resolved = str(path_obj.resolve())
         print(f"Using local model directory: {resolved}", flush=True)
         return resolved
 
-    # Choose a stable local destination for downloaded models
     if local_model_root is None:
         local_model_root = os.getenv("HF_LOCAL_MODEL_ROOT", "/workspace/models")
 
-    target_dir = Path(local_model_root) / model_path.split("/")[-1]
+    target_dir = Path(local_model_root) / model_path
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
     hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
@@ -1007,39 +666,50 @@ def resolve_model_path(model_path: str, local_model_root: Optional[str] = None) 
         token=hf_token,
         resume_download=True,
     )
-
     print(f"Downloaded model snapshot to: {resolved}", flush=True)
     return resolved
+
 
 @dataclass
 class RuntimeConfig:
     served_model_name: str
     model_path: str
     port: int
+    host: str
     seed: int
-    kv_cache_dtype: str
-    dtype: str
-    stream_interval: int
+    kv_cache_dtype: Optional[str]
+    dtype: Optional[str]
     context_tokens: int
-    batch_size: int
-    gpu_memory_utilization: float
+    batch_size: int  # benchmark metadata only; not passed as --max-total-tokens
+    mem_fraction_static: float
     tensor_parallel_size: int
     data_parallel_size: int
+    expert_parallel_size: int
     enable_expert_parallel: bool
-    tokenizer_mode: str
-    tool_call_parser: str
-    reasoning_parser: str
-    enable_auto_tool_choice: bool
+    enable_dp_attention: bool
+    tool_call_parser: Optional[str]
+    reasoning_parser: Optional[str]
+    chat_template: Optional[str]
     server_timeout: int
     preload_workers: int
     preload_model_weights: bool
+    log_level: str
+    chunked_prefill_size: Optional[int]
+    cuda_graph_max_bs: Optional[int]
+    max_running_requests: Optional[int]
+    trust_remote_code: bool
+    allow_auto_truncate: bool
+    enable_metrics: bool
+    extra_sglang_args: str
 
 
-class VLLMInfraDeepSeek32:
+class SGLangInfraDeepSeek32:
     def __init__(self, cfg: RuntimeConfig):
         self.cfg = cfg
         self.port = cfg.port
-        self.base_url = f"http://127.0.0.1:{cfg.port}/v1"
+        client_host = "127.0.0.1" if cfg.host in ("0.0.0.0", "::") else cfg.host
+        self.native_base_url = f"http://{client_host}:{cfg.port}"
+        self.openai_base_url = f"{self.native_base_url}/v1"
         self.server_process: Optional[subprocess.Popen] = None
         self.log_file = None
 
@@ -1049,10 +719,9 @@ class VLLMInfraDeepSeek32:
         else:
             print(
                 "Skipping model weight preload into OS page cache. "
-                "This is safer for very large models such as DeepSeek-V3.2.",
+                "This is safer for very large DeepSeek-V3.2 checkpoints.",
                 flush=True,
             )
-
         self.server_process = self._start_server()
         self._wait_for_server()
 
@@ -1073,16 +742,13 @@ class VLLMInfraDeepSeek32:
 
     def _preload_model_weights(self) -> None:
         if not os.path.isdir(self.cfg.model_path):
-            raise FileNotFoundError(
-                f"Resolved model path does not exist or is not a directory: {self.cfg.model_path}"
-            )
+            raise FileNotFoundError(f"Resolved model path does not exist: {self.cfg.model_path}")
 
-        print(f"Loading model weights from {self.cfg.model_path} into OS Page Cache...")
+        print(f"Loading model weights from {self.cfg.model_path} into OS Page Cache...", flush=True)
         start_time = time.time()
 
         files_to_load: List[str] = []
         total_size = 0
-
         for root, _, files in os.walk(self.cfg.model_path):
             for file_name in files:
                 file_path = os.path.join(root, file_name)
@@ -1100,66 +766,96 @@ class VLLMInfraDeepSeek32:
 
         elapsed = time.time() - start_time
         print(
-            f"Processed {len(files_to_load)} files "
-            f"({total_size / 1e9:.2f} GB) in {elapsed:.2f} seconds.\n",
+            f"Processed {len(files_to_load)} files ({total_size / 1e9:.2f} GB) "
+            f"in {elapsed:.2f} seconds.\n",
             flush=True,
         )
 
     def _start_server(self) -> subprocess.Popen:
+        env = os.environ.copy()
+        env["TRANSFORMERS_NO_TF"] = "1"
+        env["TRANSFORMERS_NO_FLAX"] = "1"
+
         cmd = [
             sys.executable,
             "-m",
-            "vllm.entrypoints.openai.api_server",
-            "--seed",
-            str(self.cfg.seed),
-            "--model",
+            "sglang.launch_server",
+            "--model-path",
             self.cfg.model_path,
             "--served-model-name",
             self.cfg.served_model_name,
-            "--max-num-seqs",
-            str(self.cfg.batch_size),
-            "--gpu-memory-utilization",
-            str(self.cfg.gpu_memory_utilization),
             "--host",
-            "127.0.0.1",
+            self.cfg.host,
             "--port",
             str(self.cfg.port),
-            "--dtype",
-            self.cfg.dtype,
-            "--kv-cache-dtype",
-            self.cfg.kv_cache_dtype,
-            "--max-model-len",
+            "--log-level",
+            self.cfg.log_level,
+            "--context-length",
             str(self.cfg.context_tokens),
-            "--stream-interval",
-            str(self.cfg.stream_interval),
-            "--tokenizer-mode",
-            self.cfg.tokenizer_mode,
-            "--tool-call-parser",
-            self.cfg.tool_call_parser,
-            "--reasoning-parser",
-            self.cfg.reasoning_parser,
-            "--disable-log-stats",
-            "--enable-prefix-caching",
-            "--trust_remote_code",
+            "--mem-fraction-static",
+            str(self.cfg.mem_fraction_static),
+            "--tp-size",
+            str(self.cfg.tensor_parallel_size),
+            "--random-seed",
+            str(self.cfg.seed),
         ]
 
-        if self.cfg.tensor_parallel_size > 1:
-            cmd.extend(["--tensor-parallel-size", str(self.cfg.tensor_parallel_size)])
-        else:
-            cmd.extend(["--tensor-parallel-size", "1"])
-
         if self.cfg.data_parallel_size > 1:
-            cmd.extend(["--data-parallel-size", str(self.cfg.data_parallel_size)])
+            cmd += ["--dp-size", str(self.cfg.data_parallel_size)]
+
+        if self.cfg.enable_dp_attention:
+            cmd.append("--enable-dp-attention")
 
         if self.cfg.enable_expert_parallel:
-            cmd.append("--enable-expert-parallel")
+            if self.cfg.expert_parallel_size > 0:
+                cmd += ["--ep-size", str(self.cfg.expert_parallel_size)]
+            else:
+                cmd += ["--ep-size", str(self.cfg.tensor_parallel_size)]
 
-        if self.cfg.enable_auto_tool_choice:
-            cmd.append("--enable-auto-tool-choice")
+        if self.cfg.trust_remote_code:
+            cmd.append("--trust-remote-code")
 
-        self.log_file = open("vllm_server_deepseek32.log", "w", encoding="utf-8")
+        if self.cfg.dtype:
+            cmd += ["--dtype", self.cfg.dtype]
 
-        print("Launching vLLM DeepSeek-V3.2:")
+        if self.cfg.kv_cache_dtype:
+            cmd += ["--kv-cache-dtype", self.cfg.kv_cache_dtype]
+
+        # Keep batch_size as benchmark metadata only. For SGLang serving concurrency,
+        # use --max-running-requests instead; do not map batch_size to --max-total-tokens.
+
+        if self.cfg.tool_call_parser:
+            cmd += ["--tool-call-parser", self.cfg.tool_call_parser]
+
+        if self.cfg.reasoning_parser:
+            cmd += ["--reasoning-parser", self.cfg.reasoning_parser]
+
+        if self.cfg.chat_template:
+            cmd += ["--chat-template", self.cfg.chat_template]
+
+        if self.cfg.chunked_prefill_size is not None:
+            cmd += ["--chunked-prefill-size", str(self.cfg.chunked_prefill_size)]
+
+        if self.cfg.cuda_graph_max_bs is not None:
+            cmd += ["--cuda-graph-max-bs", str(self.cfg.cuda_graph_max_bs)]
+
+        if self.cfg.max_running_requests is not None:
+            cmd += ["--max-running-requests", str(self.cfg.max_running_requests)]
+
+        if self.cfg.allow_auto_truncate:
+            cmd.append("--allow-auto-truncate")
+
+        if self.cfg.enable_metrics:
+            cmd.append("--enable-metrics")
+
+        if self.cfg.extra_sglang_args.strip():
+            import shlex
+
+            cmd.extend(shlex.split(self.cfg.extra_sglang_args))
+
+        self.log_file = open("sglang_server_deepseek32.log", "w", encoding="utf-8")
+
+        print("Launching SGLang DeepSeek-V3.2:")
         print(" ".join(cmd), flush=True)
 
         return subprocess.Popen(
@@ -1167,12 +863,13 @@ class VLLMInfraDeepSeek32:
             stdout=self.log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
 
     def _wait_for_server(self) -> None:
-        print("Waiting for vLLM server...", flush=True)
+        print("Waiting for SGLang server...", flush=True)
         start_time = time.time()
-        models_url = f"{self.base_url}/models"
+        models_url = f"{self.openai_base_url}/models"
 
         for i in range(self.cfg.server_timeout):
             if i % 100 == 0:
@@ -1183,24 +880,23 @@ class VLLMInfraDeepSeek32:
 
             return_code = self.server_process.poll()
             if return_code is not None:
-                self.log_file.flush()
-                with open("vllm_server_deepseek32.log", "r", encoding="utf-8", errors="ignore") as log_file:
+                if self.log_file is not None:
+                    self.log_file.flush()
+                with open("sglang_server_deepseek32.log", "r", encoding="utf-8", errors="ignore") as log_file:
                     logs = log_file.read()
-                raise RuntimeError(
-                    f"Server died with code {return_code}. Full logs:\n{logs}\n"
-                )
+                raise RuntimeError(f"SGLang server died with code {return_code}. Full logs:\n{logs}\n")
 
             try:
                 req = urllib.request.Request(models_url, method="GET")
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     if resp.status == 200:
                         elapsed = time.time() - start_time
-                        print(f"Server is ready (took {elapsed:.2f} seconds).\n", flush=True)
+                        print(f"SGLang server is ready (took {elapsed:.2f} seconds).\n", flush=True)
                         return
             except Exception:
                 time.sleep(1)
 
-        raise RuntimeError("Server failed to start: timeout.")
+        raise RuntimeError("SGLang server failed to start within timeout.")
 
 
 def last_boxed_only_string(text: str) -> Optional[str]:
@@ -1226,7 +922,6 @@ def last_boxed_only_string(text: str) -> Optional[str]:
                 if depth == 0:
                     return text[start : j + 1]
             j += 1
-
     return None
 
 
@@ -1257,35 +952,33 @@ def is_equiv(str1: str, str2: str, verbose: bool = False) -> bool:
         str1 = "$" + str1 + "$"
     if "$" not in str2:
         str2 = "$" + str2 + "$"
-
     gold = parse(str2)
     pred = parse(str1)
     return verify(gold, pred)
 
+
+def _scan_for_answer(text: str) -> Optional[str]:
+    boxed_content = extract_last_boxed_content(text)
+    if boxed_content is not None:
+        return boxed_content.strip()
+
+    matches = re.findall(r"final\s+answer\s+is\s*(.+)", text, re.IGNORECASE)
+    if matches:
+        return matches[-1].strip()
+
+    bold_matches = re.findall(r"(?:\*\*|__)\s*(.+?)\s*(?:\*\*|__)", text)
+    if bold_matches:
+        return bold_matches[-1].strip()
+
+    return None
+
+
 def compute_score(
     solution_str: str,
     ground_truth: str,
-    judge: "OpenRouterEquivalenceJudge",
+    judge: OpenRouterEquivalenceJudge,
 ) -> tuple[float, Optional[str], Dict[str, Any]]:
-    """
-    Extract predicted answer from solution_str, then ask the OpenRouter judge
-    whether it is equivalent to ground_truth.
-
-    Returns:
-        score: 1.0 if equivalent else 0.0
-        predicted: extracted predicted answer string, or None
-        judge_result: raw judge metadata dict
-    """
     predicted = _scan_for_answer(solution_str)
-
-    if predicted is None:
-        print("\n" + "=" * 100, flush=True)
-        print("[ANSWER EXTRACTION DEBUG]", flush=True)
-        print("_scan_for_answer returned None.", flush=True)
-        print("-" * 100, flush=True)
-        print("solution_str passed into _scan_for_answer:", flush=True)
-        print(solution_str, flush=True)
-        print("=" * 100 + "\n", flush=True)
 
     if predicted is None or ground_truth is None:
         return 0.0, predicted, {
@@ -1306,58 +999,19 @@ def compute_score(
             "status_code": None,
             "response_json": None,
         }
-    
-def compute_score_math_verify(solution_str: str, ground_truth: str) -> float:
-    retval = 0.0
-    try:
-        string_in_last_boxed = last_boxed_only_string(solution_str)
-        if string_in_last_boxed is not None:
-            answer = remove_boxed(string_in_last_boxed)
-            if is_equiv(answer, ground_truth):
-                retval = 1.0
-    except Exception as exc:
-        print(exc)
-
-    return retval
-
-
-def _scan_for_answer(text: str) -> Optional[str]:
-    """
-    Your previous answer scan, but returning string content rather than forcing int,
-    because IMO AnswerBench answers can be non-integers.
-    """
-    boxed_content = extract_last_boxed_content(text)
-    if boxed_content is not None:
-        return boxed_content.strip()
-
-    matches = re.findall(r'final\s+answer\s+is\s*(.+)', text, re.IGNORECASE)
-    if matches:
-        return matches[-1].strip()
-
-    bold_matches = re.findall(r'(?:\*\*|__)\s*(.+?)\s*(?:\*\*|__)', text)
-    if bold_matches:
-        return bold_matches[-1].strip()
-
-    return None
 
 
 def _task_message_to_openai(msg: Dict[str, Any]) -> Dict[str, Any]:
     role = msg["role"]
     content = msg["content"]
-
     if role not in {"system", "user", "assistant", "tool"}:
         raise ValueError(f"Unsupported benchmark message role: {role}")
-
-    return {
-        "role": role,
-        "content": content,
-    }
+    return {"role": role, "content": content}
 
 
 def _safe_json_loads_arguments(arguments: Optional[str]) -> Dict[str, Any]:
     if arguments is None or arguments.strip() == "":
         return {}
-
     try:
         parsed = json.loads(arguments)
         if isinstance(parsed, dict):
@@ -1365,42 +1019,6 @@ def _safe_json_loads_arguments(arguments: Optional[str]) -> Dict[str, Any]:
         return {"value": parsed}
     except Exception:
         return {"code": arguments}
-
-def _extract_tool_code_for_debug(function_name: str, tool_args: Dict[str, Any], arguments_str: str) -> str:
-    """
-    Best-effort extraction of the code sent to the Python tool.
-    """
-    if isinstance(tool_args, dict):
-        code = tool_args.get("code")
-        if code is not None:
-            return str(code)
-
-    # Fallback: print raw tool-call arguments if there is no "code" field.
-    return arguments_str or ""
-
-
-def _print_python_tool_error_debug(
-    *,
-    function_name: str,
-    tool_args: Dict[str, Any],
-    arguments_str: str,
-    tool_output: str,
-) -> None:
-    """
-    Print the Python code that caused a tool execution error.
-    """
-    code = _extract_tool_code_for_debug(function_name, tool_args, arguments_str)
-
-    print("\n" + "=" * 100, flush=True)
-    print("[PYTHON TOOL ERROR DEBUG]", flush=True)
-    print(f"function_name: {function_name}", flush=True)
-    print("-" * 100, flush=True)
-    print("Code / raw arguments sent to tool:", flush=True)
-    print(code, flush=True)
-    print("-" * 100, flush=True)
-    print("Tool output:", flush=True)
-    print(tool_output, flush=True)
-    print("=" * 100 + "\n", flush=True)
 
 
 def _get_usage_int(usage: Any, name: str, default: int = 0) -> int:
@@ -1413,11 +1031,9 @@ def _get_usage_int(usage: Any, name: str, default: int = 0) -> int:
 def _get_cached_tokens_from_usage(usage: Any) -> int:
     if usage is None:
         return 0
-
     details = getattr(usage, "prompt_tokens_details", None)
     if details is None:
         return 0
-
     cached = getattr(details, "cached_tokens", None)
     return int(cached) if cached is not None else 0
 
@@ -1462,50 +1078,46 @@ def _build_tool_definitions(backend: SyncMathPythonBackend) -> List[Dict[str, An
     ]
 
 
-def stream_deepseek32_chat_completion(
+def _build_extra_body(enable_thinking: bool, separate_reasoning: bool, stream_reasoning: bool) -> Dict[str, Any]:
+    extra_body: Dict[str, Any] = {
+        "chat_template_kwargs": {
+            "thinking": enable_thinking,
+        }
+    }
+    if separate_reasoning:
+        extra_body["separate_reasoning"] = True
+        extra_body["stream_reasoning"] = stream_reasoning
+    return extra_body
+
+
+def stream_deepseek32_sglang_chat_completion(
     *,
     client: OpenAI,
     model: str,
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
     max_tokens: int,
-    context_tokens: int,
-    tokenizer: Any,
     temperature: float,
+    top_p: float,
     seed: int,
     enable_thinking: bool,
+    separate_reasoning: bool,
+    stream_reasoning: bool,
 ) -> Dict[str, Any]:
-    """
-    Stream one /v1/chat/completions request and accumulate:
-      - visible content
-      - reasoning content
-      - function tool calls
-      - token usage if vLLM returns it
-      - TTFT / decode timing
-    """
-
-    effective_max_tokens = _clamp_max_tokens_for_context(
-        requested_max_tokens=max_tokens,
-        context_tokens=context_tokens,
-        tokenizer=tokenizer,
-        messages=messages,
-        tools=tools,
-        enable_thinking=enable_thinking,
-    )
-
-    request_kwargs = {
+    request_kwargs: Dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "max_tokens": effective_max_tokens,
+        "max_tokens": max_tokens,
         "temperature": temperature,
+        "top_p": top_p,
         "seed": seed,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "extra_body": {
-            "chat_template_kwargs": {
-                "thinking": enable_thinking,
-            }
-        },
+        "extra_body": _build_extra_body(
+            enable_thinking=enable_thinking,
+            separate_reasoning=separate_reasoning,
+            stream_reasoning=stream_reasoning,
+        ),
     }
 
     if tools:
@@ -1553,8 +1165,8 @@ def stream_deepseek32_chat_completion(
                 got_meaningful_delta = True
 
             reasoning_delta = (
-                getattr(delta, "reasoning", None)
-                or getattr(delta, "reasoning_content", None)
+                getattr(delta, "reasoning_content", None)
+                or getattr(delta, "reasoning", None)
             )
             if reasoning_delta:
                 reasoning_chunks.append(reasoning_delta)
@@ -1570,10 +1182,7 @@ def stream_deepseek32_chat_completion(
                     tool_call_parts[idx] = {
                         "id": None,
                         "type": "function",
-                        "function": {
-                            "name": "",
-                            "arguments": "",
-                        },
+                        "function": {"name": "", "arguments": ""},
                     }
 
                 tc_id = getattr(tc, "id", None)
@@ -1612,13 +1221,10 @@ def stream_deepseek32_chat_completion(
         function_name = item["function"]["name"]
         if not function_name:
             continue
-
         if not item["id"]:
             item["id"] = f"call_{idx}"
-
         if not item["function"].get("arguments"):
             item["function"]["arguments"] = "{}"
-
         tool_calls.append(_normalise_tool_call_for_history(item))
 
     prompt_tokens = _get_usage_int(final_usage, "prompt_tokens", 0)
@@ -1639,17 +1245,16 @@ def stream_deepseek32_chat_completion(
     }
 
 
-def run_deepseek32_attempt(
+def run_deepseek32_sglang_attempt(
     *,
     task: Any,
     example_index: int,
     client: OpenAI,
     model: str,
     max_turns: int,
-    context_tokens: int,
-    tokenizer: Any,
     max_tokens: int,
     temperature: float,
+    top_p: float,
     startup_timeout: float,
     exec_timeout: float,
     preload: str,
@@ -1657,6 +1262,8 @@ def run_deepseek32_attempt(
     seed: int,
     judge: OpenRouterEquivalenceJudge,
     enable_thinking: bool,
+    separate_reasoning: bool,
+    stream_reasoning: bool,
 ) -> Dict[str, Any]:
     backend = SyncMathPythonBackend(
         startup_timeout=startup_timeout,
@@ -1676,9 +1283,9 @@ def run_deepseek32_attempt(
     tool_call_count = 0
     errors: List[str] = []
     response_text = ""
+    reasoning_text = ""
     num_requests = 0
     detailed_rows: List[Dict[str, Any]] = []
-    last_finish_reason = None
 
     backend.setup(task.eval_config or {})
 
@@ -1686,56 +1293,30 @@ def run_deepseek32_attempt(
         tools = _build_tool_definitions(backend)
 
         messages: List[Dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            }
+            {"role": "system", "content": SYSTEM_PROMPT},
         ]
-
         messages.extend(_task_message_to_openai(m) for m in task.messages)
 
         for turn_idx in range(max_turns):
             num_requests += 1
 
-            request_result = stream_deepseek32_chat_completion(
+            request_result = stream_deepseek32_sglang_chat_completion(
                 client=client,
                 model=model,
                 messages=messages,
                 tools=tools,
                 max_tokens=max_tokens,
-                context_tokens=context_tokens,
-                tokenizer=tokenizer,
                 temperature=temperature,
+                top_p=top_p,
                 seed=seed,
                 enable_thinking=enable_thinking,
+                separate_reasoning=separate_reasoning,
+                stream_reasoning=stream_reasoning,
             )
 
             content = request_result["content"]
             reasoning = request_result["reasoning"]
             tool_calls = request_result["tool_calls"]
-
-            finish_reason = request_result.get("finish_reason")
-            last_finish_reason = finish_reason
-            combined_text = "\n".join(x for x in [reasoning, content] if x)
-
-            if not tool_calls and _looks_like_unparsed_deepseek_tool_call(combined_text):
-                recovered_tool_calls = parse_raw_deepseek32_dsml_tool_calls(combined_text)
-
-                if recovered_tool_calls:
-                    errors.append(
-                        "Recovered raw DeepSeek-V3.2 DSML tool call after vLLM returned tool_calls=[]."
-                    )
-                    print(
-                        f"[raw DSML recovery] recovered {len(recovered_tool_calls)} tool call(s)",
-                        flush=True,
-                    )
-                    tool_calls = recovered_tool_calls
-                    content = strip_raw_deepseek32_dsml_blocks(content or "") or None
-                else:
-                    errors.append(
-                        "Raw DeepSeek-V3.2 DSML/tool-call tags appeared, but fallback parser failed."
-                    )
-
 
             input_tokens_this_request = int(request_result["prompt_tokens"])
             output_tokens_this_request = int(request_result["completion_tokens"])
@@ -1757,7 +1338,6 @@ def run_deepseek32_attempt(
                 if output_tokens_this_request > 0
                 else 0.0
             )
-
             output_throughput_tok_s_this_request = (
                 output_tokens_this_request / decode_time_s_this_request
                 if decode_time_s_this_request > 0
@@ -1780,16 +1360,16 @@ def run_deepseek32_attempt(
                     "output_throughput_tok_s": output_throughput_tok_s_this_request,
                     "has_tool_calls": has_tool_calls_this_request,
                     "num_tool_calls": num_tool_calls_this_request,
-                    "finish_reason": finish_reason,
+                    "finish_reason": request_result.get("finish_reason"),
                 }
             )
 
             if not content and not reasoning and not tool_calls:
-                errors.append(
-                    f"Model returned no streamed content, reasoning, or tool calls. "
-                    f"finish_reason={finish_reason!r}"
-                )
+                errors.append("Model returned no streamed content, reasoning, or tool calls.")
                 break
+
+            if reasoning:
+                reasoning_text += reasoning
 
             if tool_calls:
                 assistant_message = {
@@ -1808,41 +1388,22 @@ def run_deepseek32_attempt(
                         tool_output = backend.execute_tool(function_name, tool_args)
                     except Exception as exc:
                         tool_output = f"[ERROR] Tool execution failed: {type(exc).__name__}: {exc}"
-                        # _print_python_tool_error_debug(
-                        #     function_name=function_name,
-                        #     tool_args=tool_args,
-                        #     arguments_str=arguments_str,
-                        #     tool_output=tool_output,
-                        # )
 
                     tool_call_count += 1
-
                     print(
-                        f"[run_imo_answerbench_deepseek32_vllm.py] "
+                        f"[run_imo_answerbench_deepseek32_sglang.py] "
                         f"tool called {tool_call_count} times: {function_name}",
                         flush=True,
                     )
 
                     if "[ERROR] Execution timed out" in tool_output:
                         errors.append("Python tool timeout")
-                        # _print_python_tool_error_debug(
-                        #     function_name=function_name,
-                        #     tool_args=tool_args,
-                        #     arguments_str=arguments_str,
-                        #     tool_output=tool_output,
-                        # )
                     elif (
                         tool_output.startswith("[ERROR]")
                         or "Traceback" in tool_output
                         or "Error:" in tool_output
                     ):
                         errors.append("Python tool error")
-                        # _print_python_tool_error_debug(
-                        #     function_name=function_name,
-                        #     tool_args=tool_args,
-                        #     arguments_str=arguments_str,
-                        #     tool_output=tool_output,
-                        # )
 
                     messages.append(
                         {
@@ -1854,47 +1415,13 @@ def run_deepseek32_attempt(
 
                 continue
 
-            # In the vLLM DeepSeek-V3.2 recipe, `tool_calls == []` means there are
-            # no parsed tool calls to execute, so the agent loop should stop and treat
-            # the returned content as this turn's final response.
-            #
-            # However, this does not guarantee the response is complete or well-formed:
-            # it may have stopped due to length, or raw DSML tool-call tags may have
-            # leaked into reasoning/content without being parsed.
-            if _looks_like_unparsed_deepseek_tool_call(combined_text):
-                errors.append(
-                    "Possible DeepSeek-V3.2 tool-call parser failure: raw DSML/tool-call "
-                    "tags appeared in reasoning/content while structured tool_calls was empty."
-                )
-
-            if finish_reason == "length":
-                errors.append("Model stopped because max_tokens/context limit was reached.")
-            elif finish_reason == "content_filter":
-                errors.append("Model output was stopped by content filtering.")
-            elif finish_reason == "function_call":
-                errors.append("Model used deprecated function_call finish_reason.")
-            elif finish_reason not in {None, "stop", "tool_calls"}:
-                errors.append(f"Unexpected finish_reason={finish_reason!r}")
-
             response_text = content or ""
-
             if not response_text and reasoning:
                 response_text = reasoning
-
-            if not response_text:
-                errors.append(
-                    f"No parsed tool calls, but also no final response text. "
-                    f"finish_reason={finish_reason!r}"
-                )
-
             break
 
         expected = (task.eval_config or {}).get("expected")
-        score, extracted_predicted, judge_result = compute_score(
-            response_text,
-            expected,
-            judge,
-        )
+        score, extracted_predicted, judge_result = compute_score(response_text, expected, judge)
 
         # ttft_ms is the task's time to FIRST token (first turn's prefill wait); the
         # accumulated prefill across all turns is prefill_total_s below — one field
@@ -1915,6 +1442,7 @@ def run_deepseek32_attempt(
             "score": score,
             "correct": score >= 1.0,
             "response": response_text,
+            "reasoning": reasoning_text,
             "tool_calls": tool_call_count,
             "num_requests": num_requests,
             "tool_latencies_ms": [],
@@ -1932,14 +1460,11 @@ def run_deepseek32_attempt(
             "judge_attempts": 1,
             "detailed_rows": detailed_rows,
             "total_cached_tokens": total_cached_tokens,
-            "finish_reason": last_finish_reason,
         }
 
     finally:
         with contextlib.suppress(Exception):
             backend.teardown()
-
-
 
 
 async def solve_one_task(
@@ -1949,9 +1474,8 @@ async def solve_one_task(
     base_url: str,
     max_turns: int,
     max_tokens: int,
-    context_tokens: int,
-    tokenizer: Any,
     temperature: float,
+    top_p: float,
     startup_timeout: float,
     exec_timeout: float,
     preload: str,
@@ -1959,24 +1483,21 @@ async def solve_one_task(
     seed: int,
     judge: OpenRouterEquivalenceJudge,
     enable_thinking: bool,
+    separate_reasoning: bool,
+    stream_reasoning: bool,
 ) -> Dict[str, Any]:
-    client = OpenAI(
-        base_url=base_url,
-        api_key="dummy",
-        timeout=600,
-    )
+    client = OpenAI(base_url=base_url, api_key="dummy", timeout=600)
 
     return await asyncio.to_thread(
-        run_deepseek32_attempt,
+        run_deepseek32_sglang_attempt,
         task=task,
         example_index=example_index,
         client=client,
         model=model,
         max_turns=max_turns,
         max_tokens=max_tokens,
-        context_tokens=context_tokens,
-        tokenizer=tokenizer,
         temperature=temperature,
+        top_p=top_p,
         startup_timeout=startup_timeout,
         exec_timeout=exec_timeout,
         preload=preload,
@@ -1984,12 +1505,14 @@ async def solve_one_task(
         seed=seed,
         judge=judge,
         enable_thinking=enable_thinking,
+        separate_reasoning=separate_reasoning,
+        stream_reasoning=stream_reasoning,
     )
 
 
 def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
     status = "✅" if result["correct"] else "❌"
-    print("\n" + "==============================================================================================================================")
+    print("\n" + "=" * 126)
     print(f"[{index}/{total}] {result['task_id']}  {status}")
     print(f"Name: {result['task_name']}")
     print(f"Expected:  {result['expected']}")
@@ -2000,8 +1523,7 @@ def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
         f"Latency: {result['latency_ms']:.1f} ms | "
         f"TTFT: {result['ttft_ms']:.1f} ms | "
         f"TPOT(avg): {result['tpot_ms_avg']:.1f} ms | "
-        f"Python calls: {result['tool_calls']} | "
-        f"finish_reason: {result.get('finish_reason')}"
+        f"Python calls: {result['tool_calls']}"
     )
     if result["errors"]:
         print(f"Errors: {result['errors']}")
@@ -2042,299 +1564,49 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
         for ans, cnt in answer_counter.most_common(10):
             print(f"  {ans}: {cnt}")
 
-<<<<<<< HEAD
-=======
-def wait_for_external_vllm_server(
-    host: str,
-    port: int,
-    timeout_s: int,
-    expected_model: Optional[str] = None,
-) -> None:
-    client_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
-    models_url = f"http://{client_host}:{port}/v1/models"
 
-    print(
-        f"Waiting for externally managed vLLM server at {models_url}...",
-        flush=True,
-    )
+def probe_sglang_endpoints(base_url: str) -> None:
+    base_url = base_url.rstrip("/")
+    print("\n" + "=" * 100, flush=True)
+    print("SGLang endpoint probe", flush=True)
+    print("=" * 100, flush=True)
+    print(f"Base URL: {base_url}", flush=True)
 
-    deadline = time.monotonic() + timeout_s
-    last_error: Optional[BaseException] = None
+    def _preview(text: str, limit: int = 1000) -> str:
+        text = text.replace("\n", "\\n")
+        return text[:limit] + "..." if len(text) > limit else text
 
-    while time.monotonic() < deadline:
+    def _request(method: str, path: str, json_body: Optional[Dict[str, Any]] = None) -> None:
+        url = f"{base_url}{path}"
         try:
-            response = requests.get(models_url, timeout=5)
-            response.raise_for_status()
-
-            payload = response.json()
-
-            model_ids = [
-                item.get("id")
-                for item in payload.get("data", [])
-                if isinstance(item, dict)
-            ]
-
-            print("External vLLM server is ready.", flush=True)
-            print(f"Models reported by server: {model_ids}", flush=True)
-
-            if expected_model and expected_model not in model_ids:
-                print(
-                    f"WARNING: requested model name {expected_model!r} was not "
-                    f"reported by /v1/models. Reported names: {model_ids}",
-                    flush=True,
-                )
-
-            return
-
+            response = requests.request(method, url, json=json_body, timeout=10)
+            content_type = response.headers.get("content-type", "")
+            print(
+                f"{method:7s} {path:30s} -> {response.status_code} {response.reason} "
+                f"content-type={content_type}",
+                flush=True,
+            )
+            body = response.text or ""
+            if body:
+                print(f"    body: {_preview(body)}", flush=True)
         except Exception as exc:
-            last_error = exc
-            time.sleep(1)
+            print(f"{method:7s} {path:30s} -> {type(exc).__name__}: {exc}", flush=True)
 
-    raise RuntimeError(
-        f"External vLLM server did not become ready within {timeout_s} seconds. "
-        f"Last error: {type(last_error).__name__}: {last_error}"
-    )
+    for path in ["/", "/health", "/health_generate", "/v1/models", "/get_model_info", "/docs", "/openapi.json"]:
+        _request("GET", path)
 
+    for path in ["/generate", "/v1/completions", "/v1/chat/completions", "/v1/responses"]:
+        _request("OPTIONS", path)
 
+    print("\nEmpty POST probes. 400/422 usually means route exists; 404 means absent.", flush=True)
+    for path in ["/generate", "/v1/completions", "/v1/chat/completions", "/v1/responses"]:
+        _request("POST", path, json_body={})
 
-def _read_jsonl(path: str) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line_number, line in enumerate(f, start=1):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"Invalid JSON in {path} at line {line_number}: {exc}"
-                ) from exc
-            if not isinstance(row, dict):
-                raise RuntimeError(
-                    f"Expected a JSON object in {path} at line {line_number}."
-                )
-            rows.append(row)
-    return rows
+    print("=" * 100 + "\n", flush=True)
 
 
-def _latest_detailed_attempt(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Keep the latest request-index sequence for one benchmark example."""
-    if not rows:
-        return []
-
-    attempt_starts = [
-        idx
-        for idx, row in enumerate(rows)
-        if int(row.get("request_index", 0)) == 0
-    ]
-    if len(attempt_starts) <= 1:
-        return rows
-
-    return rows[attempt_starts[-1] :]
-
-
-def load_existing_results_for_resume(
-    *,
-    tasks: List[Any],
-    output_paths: Dict[str, str],
-) -> tuple[List[Dict[str, Any]], set[str], float]:
-    output_rows = _read_jsonl(output_paths["output_data_path"])
-    detailed_rows = _read_jsonl(output_paths["detailed_results_path"])
-
-    details_by_example: Dict[int, List[Dict[str, Any]]] = {}
-    for row in detailed_rows:
-        example_index = int(row.get("example_index", -1))
-        details_by_example.setdefault(example_index, []).append(row)
-
-    indexed_results: List[tuple[int, Dict[str, Any]]] = []
-    completed_task_ids: set[str] = set()
-    seen_indexes: set[int] = set()
-    recovered_num_requests_count = 0
-
-    for row in output_rows:
-        index = int(row["index"])
-        task_id = str(row["task_id"])
-
-        if index in seen_indexes:
-            raise RuntimeError(
-                f"Duplicate completed output index {index} in "
-                f"{output_paths['output_data_path']}"
-            )
-        if task_id in completed_task_ids:
-            raise RuntimeError(
-                f"Duplicate completed task_id {task_id!r} in "
-                f"{output_paths['output_data_path']}"
-            )
-        if index < 0 or index >= len(tasks):
-            raise RuntimeError(
-                f"Stored result index {index} is outside the newly loaded task list "
-                f"of length {len(tasks)}. Use the same --num-tasks and --seed."
-            )
-
-        task = tasks[index]
-        if str(task.id) != task_id:
-            raise RuntimeError(
-                "Resume validation failed: the stored task order does not match "
-                "the newly loaded benchmark. "
-                f"At index {index}, stored task_id={task_id!r}, "
-                f"new task_id={str(task.id)!r}. "
-                "Use exactly the same --num-tasks and --seed as the original run."
-            )
-
-        task_details = sorted(
-            _latest_detailed_attempt(details_by_example.get(index, [])),
-            key=lambda item: int(item.get("request_index", 0)),
-        )
-
-        response_text = str(row.get("output_text") or "")
-        output_tokens = int(row.get("output_tokens", 0))
-        total_prefill_time_s = sum(
-            float(item.get("prefill_time_s", 0.0)) for item in task_details
-        )
-        total_decode_time_s = sum(
-            float(item.get("decode_time_s", 0.0)) for item in task_details
-        )
-        total_cached_tokens = sum(
-            int(item.get("cached_tokens", 0)) for item in task_details
-        )
-
-        raw_errors = row.get("errors", [])
-        if isinstance(raw_errors, list):
-            errors = [str(item) for item in raw_errors]
-        elif raw_errors in (None, ""):
-            errors = []
-        else:
-            errors = [str(raw_errors)]
-
-        score = float(row.get("eval_score", 0.0))
-        expected = (task.eval_config or {}).get("expected")
-        if row.get("num_requests") is None:
-            recovered_num_requests_count += 1
-        num_requests = recover_num_requests(
-            row,
-            task_details,
-            context=f"Resume output row for task_id={task_id!r} at index {index}",
-        )
-
-        result = {
-            "task_id": task.id,
-            "task_name": task.name,
-            "category": task.category,
-            "expected": expected,
-            "predicted": _scan_for_answer(response_text),
-            "score": score,
-            "correct": score >= 1.0,
-            "response": response_text,
-            "tool_calls": int(row.get("tool_call_count", 0)),
-            "num_requests": num_requests,
-            "tool_latencies_ms": [],
-            "input_tokens": int(row.get("input_tokens", 0)),
-            "output_tokens": output_tokens,
-            "latency_ms": float(row.get("e2e_latency_s", 0.0)) * 1000.0,
-            "ttft_ms": total_prefill_time_s * 1000.0,
-            "tpot_ms_avg": (
-                total_decode_time_s * 1000.0 / output_tokens
-                if output_tokens > 0
-                else 0.0
-            ),
-            "tpot_ms_p99": 0.0,
-            "errors": errors,
-            "judge_equivalent": bool(row.get("eval_passed", False)),
-            "judge_response": row.get("eval_details"),
-            "judge_status_code": None,
-            "judge_attempts": 1 if row.get("eval_details") is not None else 0,
-            "detailed_rows": task_details,
-            "total_cached_tokens": total_cached_tokens,
-            "finish_reason": row.get("finish_reason"),
-        }
-
-        indexed_results.append((index, result))
-        seen_indexes.add(index)
-        completed_task_ids.add(task_id)
-
-    indexed_results.sort(key=lambda item: item[0])
-    existing_results = [result for _, result in indexed_results]
-
-    if recovered_num_requests_count:
-        print(
-            "Recovered num_requests from detailed request indexes for "
-            f"{recovered_num_requests_count} legacy output row(s).",
-            flush=True,
-        )
-
-    prior_wall_time_s: Optional[float] = None
-    try:
-        with open(output_paths["metrics_path"], "r", encoding="utf-8") as f:
-            existing_metrics = json.load(f)
-        performance = existing_metrics.get("performance", {})
-        if isinstance(performance, dict) and "e2e_s" in performance:
-            prior_wall_time_s = float(performance["e2e_s"])
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        prior_wall_time_s = None
-
-    if prior_wall_time_s is None:
-        prior_wall_time_s = sum(
-            float(result["latency_ms"]) / 1000.0 for result in existing_results
-        )
-        print(
-            "WARNING: the crashed run did not contain a completed/checkpointed "
-            "overall wall-time metric. Using the sum of completed per-task "
-            f"latencies ({prior_wall_time_s:.2f}s) as the prior wall-time estimate.",
-            flush=True,
-        )
-
-    print(
-        f"Loaded {len(existing_results)} completed tasks from the resume directory.",
-        flush=True,
-    )
-
-    return existing_results, completed_task_ids, prior_wall_time_s
-
-def build_failed_task_result(
-    *,
-    task: Any,
-    error_message: str,
-    latency_ms: float,
-    finish_reason: str = "unhandled_task_exception",
-) -> Dict[str, Any]:
-    expected = (task.eval_config or {}).get("expected")
-
-    return {
-        "task_id": task.id,
-        "task_name": task.name,
-        "category": task.category,
-        "expected": expected,
-        "predicted": None,
-        "score": 0.0,
-        "correct": False,
-        "response": "",
-        "tool_calls": 0,
-        "num_requests": 0,
-        "tool_latencies_ms": [],
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "latency_ms": latency_ms,
-        "ttft_ms": 0.0,
-        "tpot_ms_avg": 0.0,
-        "tpot_ms_p99": 0.0,
-        "errors": [error_message],
-        "judge_equivalent": False,
-        "judge_response": f"Evaluation skipped: {error_message}",
-        "judge_status_code": None,
-        "judge_attempts": 0,
-        "detailed_rows": [],
-        "total_cached_tokens": 0,
-        "finish_reason": finish_reason,
-    }
->>>>>>> 33a60c5 (modified code to record engine version)
-
-async def async_main(
-    args: argparse.Namespace,
-    output_paths: Dict[str, str],
-    tokenizer: Any,
-) -> List[Dict[str, Any]]:
+async def async_main(args: argparse.Namespace, output_paths: Dict[str, str]) -> List[Dict[str, Any]]:
     judge = OpenRouterEquivalenceJudge(model_name=args.judge_model)
-
     tasks = load_benchmark("imo_answerbench", num_tasks=args.num_tasks, seed=args.seed)
     print(f"Loaded {len(tasks)} IMO AnswerBench tasks")
 
@@ -2347,9 +1619,8 @@ async def async_main(
             base_url=f"http://127.0.0.1:{args.port}/v1",
             max_turns=args.max_turns,
             max_tokens=args.max_tokens,
-            context_tokens=args.context_tokens,
-            tokenizer=tokenizer,
             temperature=args.temperature,
+            top_p=args.top_p,
             startup_timeout=args.startup_timeout,
             exec_timeout=args.exec_timeout,
             preload=args.preload,
@@ -2357,14 +1628,15 @@ async def async_main(
             seed=args.seed + index,
             judge=judge,
             enable_thinking=args.enable_thinking,
+            separate_reasoning=args.separate_reasoning,
+            stream_reasoning=args.stream_reasoning,
         )
-
 
         results.append(result)
         append_detailed_result_rows(result.get("detailed_rows", []), output_paths["detailed_results_path"])
         append_output_data_row(result, index, output_paths["output_data_path"])
         print_task_result(index, len(tasks), result)
-        print(f'[JUDGE RESPONSE]: {result["judge_response"]}', flush=True)
+        print(f"[JUDGE RESPONSE]: {result['judge_response']}", flush=True)
 
     return results
 
@@ -2372,111 +1644,124 @@ async def async_main(
 def main() -> None:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--model", type=str, default="gpt-oss")
-    parser.add_argument("--served-model-name", type=str, default="gpt-oss")
+    parser.add_argument("--model", type=str, default="deepseek-v32")
+    parser.add_argument("--served-model-name", type=str, default="deepseek-v32")
     parser.add_argument("--model-path", type=str, required=True)
+
     parser.add_argument(
         "--preload-model-weights",
         dest="preload_model_weights",
         action="store_true",
         default=False,
-        help=(
-            "Read all model files into the OS page cache before starting vLLM. "
-            "Disabled by default because DeepSeek-V3.2 weights are very large."
-        ),
+        help="Read all model files into OS page cache before starting SGLang.",
     )
-
-    parser.add_argument(
-        "--no-preload-model-weights",
-        dest="preload_model_weights",
-        action="store_false",
-        help="Disable model weight preloading before starting vLLM.",
-    )
+    parser.add_argument("--no-preload-model-weights", dest="preload_model_weights", action="store_false")
 
     parser.add_argument("--kv-cache-dtype", type=str, default="fp8_e4m3")
     parser.add_argument("--dtype", type=str, default="auto")
     parser.add_argument("--context-tokens", type=int, default=131072)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.88)
+    parser.add_argument("--mem-fraction-static", type=float, default=None)
 
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--data-parallel-size", type=int, default=1)
+    parser.add_argument("--expert-parallel-size", type=int, default=0)
     parser.add_argument("--enable-expert-parallel", action="store_true")
+    parser.add_argument("--enable-dp-attention", action="store_true", default=False)
 
-    parser.add_argument("--tokenizer-mode", type=str, default="deepseek_v32")
-    parser.add_argument("--tool-call-parser", type=str, default="deepseek_v32")
-    parser.add_argument("--reasoning-parser", type=str, default="deepseek_v3")
-    parser.add_argument("--enable-auto-tool-choice", action="store_true", default=True)
-    parser.add_argument("--disable-auto-tool-choice", dest="enable_auto_tool_choice", action="store_false")
+    parser.add_argument("--tool-call-parser", type=str, default="deepseekv32")
+    parser.add_argument("--reasoning-parser", type=str, default="deepseek-v3")
+    parser.add_argument("--chat-template", type=str, default=None)
+
     parser.add_argument("--enable-thinking", action="store_true", default=True)
     parser.add_argument("--disable-thinking", dest="enable_thinking", action="store_false")
+    parser.add_argument("--separate-reasoning", action="store_true", default=True)
+    parser.add_argument("--no-separate-reasoning", dest="separate_reasoning", action="store_false")
+    parser.add_argument("--stream-reasoning", action="store_true", default=True)
+    parser.add_argument("--no-stream-reasoning", dest="stream_reasoning", action="store_false")
 
     parser.add_argument("--num-tasks", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-turns", type=int, default=128)
     parser.add_argument("--max-tokens", type=int, default=131072)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--startup-timeout", type=float, default=30.0)
     parser.add_argument("--exec-timeout", type=float, default=5.0)
-    parser.add_argument(
-        "--preload",
-        type=str,
-        default="minimal",
-        choices=["none", "minimal", "full"],
-    )
+    parser.add_argument("--preload", type=str, default="minimal", choices=["none", "minimal", "full"])
     parser.add_argument("--auto-print-last-expr", action="store_true")
 
+    parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-
-
-    parser.add_argument("--stream-interval", type=int, default=1)
-
-
+    parser.add_argument("--log-level", type=str, default="warning")
     parser.add_argument("--server-timeout", type=int, default=3600)
     parser.add_argument("--preload-workers", type=int, default=8)
     parser.add_argument("--judge-model", type=str, default="openrouter/elephant-alpha")
 
+    parser.add_argument("--chunked-prefill-size", type=int, default=16384)
+    parser.add_argument("--cuda-graph-max-bs", type=int, default=8)
+    parser.add_argument("--max-running-requests", type=int, default=None)
+    parser.add_argument("--trust-remote-code", action="store_true", default=True)
+    parser.add_argument("--no-trust-remote-code", dest="trust_remote_code", action="store_false")
+    parser.add_argument("--allow-auto-truncate", action="store_true", default=True)
+    parser.add_argument("--no-allow-auto-truncate", dest="allow_auto_truncate", action="store_false")
+    parser.add_argument("--enable-metrics", action="store_true", default=False)
+    parser.add_argument("--extra-sglang-args", type=str, default="")
+
+    parser.add_argument("--probe-sglang-endpoints-and-exit", action="store_true")
+
     args = parser.parse_args()
+
+    if args.mem_fraction_static is None:
+        args.mem_fraction_static = args.gpu_memory_utilization
+
     args.model_path = resolve_model_path(args.model_path)
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_path,
-        trust_remote_code=True,
-    )
-    setattr(tokenizer, "_agentcap_model_path", args.model_path)
-    encoder_path = Path(args.model_path) / "encoding" / "encoding_dsv32.py"
-    print(f"[DeepSeek-V3.2 encoder] path={encoder_path}", flush=True)
-    print(f"[DeepSeek-V3.2 encoder] exists={encoder_path.is_file()}", flush=True)
-    print(f"[DeepSeek-V3.2 tokenizer] chat_template is None={tokenizer.chat_template is None}", flush=True)
     output_paths = initialize_output_files(args)
     t0 = time.time()
+    results: List[Dict[str, Any]] = []
 
     runtime_cfg = RuntimeConfig(
         served_model_name=args.served_model_name,
         model_path=args.model_path,
         port=args.port,
+        host=args.host,
         seed=args.seed,
         kv_cache_dtype=args.kv_cache_dtype,
         dtype=args.dtype,
-        stream_interval=args.stream_interval,
         context_tokens=args.context_tokens,
         batch_size=args.batch_size,
-        gpu_memory_utilization=args.gpu_memory_utilization,
+        mem_fraction_static=args.mem_fraction_static,
         tensor_parallel_size=args.tensor_parallel_size,
         data_parallel_size=args.data_parallel_size,
+        expert_parallel_size=args.expert_parallel_size,
         enable_expert_parallel=args.enable_expert_parallel,
-        tokenizer_mode=args.tokenizer_mode,
+        enable_dp_attention=args.enable_dp_attention,
         tool_call_parser=args.tool_call_parser,
         reasoning_parser=args.reasoning_parser,
-        enable_auto_tool_choice=args.enable_auto_tool_choice,
+        chat_template=args.chat_template,
         server_timeout=args.server_timeout,
         preload_workers=args.preload_workers,
         preload_model_weights=args.preload_model_weights,
+        log_level=args.log_level,
+        chunked_prefill_size=args.chunked_prefill_size,
+        cuda_graph_max_bs=args.cuda_graph_max_bs,
+        max_running_requests=args.max_running_requests,
+        trust_remote_code=args.trust_remote_code,
+        allow_auto_truncate=args.allow_auto_truncate,
+        enable_metrics=args.enable_metrics,
+        extra_sglang_args=args.extra_sglang_args,
     )
 
-    infra = VLLMInfraDeepSeek32(runtime_cfg)
+    infra = SGLangInfraDeepSeek32(runtime_cfg)
     try:
         infra.start()
-        results = asyncio.run(async_main(args, output_paths, tokenizer))
+
+        if args.probe_sglang_endpoints_and_exit:
+            probe_sglang_endpoints(f"http://127.0.0.1:{args.port}")
+            return
+
+        results = asyncio.run(async_main(args, output_paths))
     finally:
         infra.stop()
 

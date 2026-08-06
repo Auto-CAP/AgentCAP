@@ -111,3 +111,6 @@ logs/
 *.csv
 invalid_destination/
 server_sglang_*
+
+# codex files
+.codex
