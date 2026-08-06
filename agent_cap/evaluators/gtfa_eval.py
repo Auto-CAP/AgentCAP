@@ -139,8 +139,12 @@ Be rigorous but fair in your assessment. Focus on whether the response conveys t
                 {"role": "user", "content": prompt},
             ],
             "response_format": {
-                "type": "json_object",
-                "response_schema": get_single_claim_evaluation_schema(),
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "claim_evaluation",
+                    "schema": get_single_claim_evaluation_schema(),
+                    "strict": True,
+                },
             },
             "temperature": 0.0,
             "stream": False,
