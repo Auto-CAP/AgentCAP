@@ -47,8 +47,8 @@ def _swebench_image(instance_id: str, deployment: str, image_repo: str) -> str:
     if deployment in ("modal", "k8s"):
         return f"docker.io/swebench/sweb.eval.x86_64.{iid.replace('__', '_1776_')}:latest"
     if image_repo:
-        return f"swebench/sweb.eval.x86_64.{iid}"
-    return f"sweb.eval.x86_64.{iid}:latest"
+        return f"{image_repo.rstrip('/')}/sweb.eval.x86_64.{iid.replace('__', '_1776_')}:latest"
+    return f"swebench/sweb.eval.x86_64.{iid.replace('__', '_1776_')}:latest"
 
 
 # K8s sandbox provisioning lives in sandbox_providers (deployment side of

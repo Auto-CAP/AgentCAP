@@ -435,13 +435,8 @@ def write_teas_outputs(
             "sweagent_streaming_patch": None,
         } if is_mcp else {
             "inference_engine": engine,
-<<<<<<< HEAD
             "inference_engine_version": env("TEAS_ENGINE_VERSION", "unknown"),
             "base_url": env("TEAS_BASE_URL", "http://localhost:8000/v1"),
-=======
-            f"{engine}_version": engine_version,
-            "base_url": "http://localhost:8000/v1",
->>>>>>> e04aeae (modified code to record engine version)
             "is_local": True,
             "backend": env("TEAS_BACKEND", "swebench-k8s"),
             "dataset": dataset,
