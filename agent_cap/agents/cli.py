@@ -145,10 +145,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Path to swe-agent checkout (for --strategy sweagent)")
     p.add_argument("--sandbox-provider", default=None,
                    help="For --sweagent-deployment k8s: 'k8s' (built-in, "
-                        "default) or an http(s) URL of an external sandbox "
-                        "broker (POST /acquire {image,label} -> "
+                        "default), a dotted path 'module:Class' "
+                        "implementing acquire/release (e.g. TEASBench's "
+                        "teasbench.sandbox.k8s:InClusterK8sProvider), or "
+                        "an http(s) URL of an external sandbox broker "
+                        "(POST /acquire {image,label} -> "
                         "{host,port,auth_token,handle}; POST /release "
                         "{handle}), e.g. run by TEASBench")
+    p.add_argument("--exec-provider", default=None,
+                   help="For the swebench-k8s / swebench-remote evaluator: "
+                        "dotted path 'module:Class' implementing "
+                        "acquire_exec/release_exec, or 'k8s' (built-in, "
+                        "deprecated). Sets AGENTCAP_EXEC_PROVIDER for the "
+                        "evaluator's finalize() step.")
     p.add_argument("--sweagent-image-repo", default="",
                    help="Docker image registry prefix; empty = local sweb.eval images")
     p.add_argument("--sweagent-call-limit", type=int, default=200,
@@ -435,6 +444,12 @@ def _instantiate_strategy(args: argparse.Namespace):
 
 async def _run_async(args: argparse.Namespace) -> int:
     load_modules(args.load_module)
+
+    # Set early, before the evaluator is constructed: SWEBenchK8sEvaluator
+    # reads AGENTCAP_EXEC_PROVIDER (default "k8s") in finalize() to pick the
+    # exec-container provider (agent_cap.agents.sandbox_providers).
+    if args.exec_provider:
+        os.environ["AGENTCAP_EXEC_PROVIDER"] = args.exec_provider
 
     if args.list_strategies:
         for name in list_strategies():
