@@ -100,6 +100,9 @@ class HarmonyClient:
 
         harmony_messages: List[Any] = []
         system_used = False
+        # Tool-result messages may carry only a tool_call_id; map ids back to
+        # function names from the assistant tool calls that issued them.
+        call_id_to_name: Dict[str, str] = {}
         for m in messages:
             role = str(m.get("role", "")).lower()
             content = m.get("content", "")
@@ -115,6 +118,16 @@ class HarmonyClient:
             elif role == "assistant":
                 tool_calls = m.get("tool_calls") or []
                 if tool_calls:
+                    # Restore the chain-of-thought that preceded the call so
+                    # gpt-oss keeps its reasoning state across the tool loop
+                    # (Harmony drops CoT only for turns that ended in `final`).
+                    reasoning = m.get("reasoning_content")
+                    if isinstance(reasoning, str) and reasoning:
+                        analysis_msg = Message.from_role_and_content(
+                            Role.ASSISTANT, reasoning
+                        )
+                        analysis_msg.channel = "analysis"
+                        harmony_messages.append(analysis_msg)
                     if content:
                         harmony_messages.append(
                             Message.from_role_and_content(Role.ASSISTANT, content)
@@ -122,20 +135,43 @@ class HarmonyClient:
                     for call in tool_calls:
                         fn = (call or {}).get("function") or {}
                         tool_name = str(fn.get("name") or "python")
+                        call_id = (call or {}).get("id")
+                        if call_id:
+                            call_id_to_name[str(call_id)] = tool_name
                         args_str = fn.get("arguments", "")
                         if not isinstance(args_str, str):
                             args_str = json.dumps(args_str)
                         call_msg = Message.from_role_and_content(Role.ASSISTANT, args_str)
-                        call_msg.recipient = tool_name
+                        # Replay the call exactly as gpt-oss emits it
+                        # (commentary channel, functions.* recipient, json
+                        # constraint) -- the model imitates the transcript, so
+                        # a bare recipient here teaches it to emit later calls
+                        # in a form the decoder cannot recognise.
+                        call_msg.channel = "commentary"
+                        call_msg.recipient = (
+                            tool_name
+                            if tool_name == "python"
+                            else f"functions.{tool_name}"
+                        )
+                        call_msg.content_type = "<|constrain|>json"
                         harmony_messages.append(call_msg)
                 else:
                     harmony_messages.append(
                         Message.from_role_and_content(Role.ASSISTANT, content)
                     )
             elif role == "tool":
-                tool_name = str(m.get("name") or m.get("tool_call_id") or "python")
+                tool_name = str(
+                    m.get("name")
+                    or call_id_to_name.get(str(m.get("tool_call_id") or ""))
+                    or "python"
+                )
+                author_name = (
+                    tool_name if tool_name == "python" else f"functions.{tool_name}"
+                )
                 msg = Message.from_role_and_content(Role.TOOL, content)
-                msg.author = Author(role=Role.TOOL, name=tool_name)
+                msg.author = Author(role=Role.TOOL, name=author_name)
+                msg.channel = "commentary"
+                msg.recipient = "assistant"
                 harmony_messages.append(msg)
 
         if not system_used:
@@ -380,26 +416,55 @@ def _decode_harmony_response(
     if not parsed:
         return {"role": "assistant", "content": fallback_text}
 
+    analysis_parts: List[str] = []
+    final_parts: List[str] = []
+    for msg in parsed:
+        channel = str(getattr(msg, "channel", "") or "")
+        text = _stringify_harmony_content(msg)
+        if not text:
+            continue
+        if channel == "analysis":
+            analysis_parts.append(text)
+        elif channel == "final":
+            final_parts.append(text)
+    reasoning_text = "\n".join(analysis_parts)
+
     last = parsed[-1]
     recipient = getattr(last, "recipient", None)
     content_text = _stringify_harmony_content(last)
 
-    if recipient is not None and "python" in str(recipient).lower():
-        return {
+    if recipient is not None:
+        rec = str(recipient)
+        # A recipient means a tool call; anything else the model addresses is
+        # a function tool, whether or not it kept the functions namespace.
+        if rec.startswith("functions."):
+            name = rec.split(".", 1)[1]
+            arguments = content_text.strip() or "{}"
+        elif "python" in rec.lower():
+            name = "python"
+            arguments = json.dumps({"code": content_text})
+        else:
+            name = rec
+            arguments = content_text.strip() or "{}"
+        reply: Dict[str, Any] = {
             "role": "assistant",
             "content": "",
             "tool_calls": [
                 {
                     "id": f"call_{uuid.uuid4().hex[:8]}",
                     "type": "function",
-                    "function": {
-                        "name": "python",
-                        "arguments": json.dumps({"code": content_text}),
-                    },
+                    "function": {"name": name, "arguments": arguments},
                 }
             ],
         }
-    return {"role": "assistant", "content": content_text}
+        if reasoning_text:
+            reply["reasoning_content"] = reasoning_text
+        return reply
+
+    reply = {"role": "assistant", "content": "\n".join(final_parts) or content_text}
+    if reasoning_text:
+        reply["reasoning_content"] = reasoning_text
+    return reply
 
 
 def _stringify_harmony_content(msg: Any) -> str:
