@@ -141,20 +141,11 @@ class HarmonyClient:
                         args_str = fn.get("arguments", "")
                         if not isinstance(args_str, str):
                             args_str = json.dumps(args_str)
-                        call_msg = Message.from_role_and_content(Role.ASSISTANT, args_str)
-                        # Replay the call exactly as gpt-oss emits it
-                        # (commentary channel, functions.* recipient, json
-                        # constraint) -- the model imitates the transcript, so
-                        # a bare recipient here teaches it to emit later calls
-                        # in a form the decoder cannot recognise.
-                        call_msg.channel = "commentary"
-                        call_msg.recipient = (
-                            tool_name
-                            if tool_name == "python"
-                            else f"functions.{tool_name}"
+                        harmony_messages.append(
+                            _build_replay_call_message(
+                                tool_name, args_str, Message=Message, Role=Role
+                            )
                         )
-                        call_msg.content_type = "<|constrain|>json"
-                        harmony_messages.append(call_msg)
                 else:
                     harmony_messages.append(
                         Message.from_role_and_content(Role.ASSISTANT, content)
@@ -370,6 +361,40 @@ class HarmonyClient:
             return json.loads(text)
 
 
+def _build_replay_call_message(
+    tool_name: str,
+    args_str: str,
+    *,
+    Message: Any,
+    Role: Any,
+) -> Any:
+    """Render one historical tool call in the form gpt-oss natively emits it.
+
+    Replayed history conditions the model's next call -- replaying a form it
+    was never trained on teaches it to emit later calls in shapes the decoder
+    cannot recognise. The built-in python tool takes raw code on the analysis
+    channel with no json constraint; functions.* tools take constrained json
+    on the commentary channel.
+    """
+    if tool_name == "python":
+        code = args_str
+        try:
+            parsed_args = json.loads(args_str)
+            if isinstance(parsed_args, dict) and "code" in parsed_args:
+                code = str(parsed_args["code"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+        call_msg = Message.from_role_and_content(Role.ASSISTANT, code)
+        call_msg.channel = "analysis"
+        call_msg.recipient = "python"
+        return call_msg
+    call_msg = Message.from_role_and_content(Role.ASSISTANT, args_str)
+    call_msg.channel = "commentary"
+    call_msg.recipient = f"functions.{tool_name}"
+    call_msg.content_type = "<|constrain|>json"
+    return call_msg
+
+
 def _harmony_tool_config(
     tools: List[Dict[str, Any]],
     ToolNamespaceConfig: Any,
@@ -419,6 +444,13 @@ def _decode_harmony_response(
     analysis_parts: List[str] = []
     final_parts: List[str] = []
     for msg in parsed:
+        # A recipient means a tool call, not chain-of-thought -- gpt-oss emits
+        # built-in python calls on the analysis channel, and collecting their
+        # code into reasoning_content poisons the replayed transcript with
+        # analysis messages that end in bare code and no call, which the model
+        # then imitates (it stops calling its tools and the loop dies early).
+        if getattr(msg, "recipient", None):
+            continue
         channel = str(getattr(msg, "channel", "") or "")
         text = _stringify_harmony_content(msg)
         if not text:
