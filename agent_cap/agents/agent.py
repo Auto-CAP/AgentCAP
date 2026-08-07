@@ -113,6 +113,7 @@ class Agent:
             self.state.messages.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", ""),
+                "name": name,
                 "content": result,
             })
             record.tool_results.append({

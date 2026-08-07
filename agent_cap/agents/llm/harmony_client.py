@@ -100,6 +100,9 @@ class HarmonyClient:
 
         harmony_messages: List[Any] = []
         system_used = False
+        # Tool-result messages may carry only a tool_call_id; map ids back to
+        # function names from the assistant tool calls that issued them.
+        call_id_to_name: Dict[str, str] = {}
         for m in messages:
             role = str(m.get("role", "")).lower()
             content = m.get("content", "")
@@ -115,6 +118,16 @@ class HarmonyClient:
             elif role == "assistant":
                 tool_calls = m.get("tool_calls") or []
                 if tool_calls:
+                    # Restore the chain-of-thought that preceded the call so
+                    # gpt-oss keeps its reasoning state across the tool loop
+                    # (Harmony drops CoT only for turns that ended in `final`).
+                    reasoning = m.get("reasoning_content")
+                    if isinstance(reasoning, str) and reasoning:
+                        analysis_msg = Message.from_role_and_content(
+                            Role.ASSISTANT, reasoning
+                        )
+                        analysis_msg.channel = "analysis"
+                        harmony_messages.append(analysis_msg)
                     if content:
                         harmony_messages.append(
                             Message.from_role_and_content(Role.ASSISTANT, content)
@@ -122,6 +135,9 @@ class HarmonyClient:
                     for call in tool_calls:
                         fn = (call or {}).get("function") or {}
                         tool_name = str(fn.get("name") or "python")
+                        call_id = (call or {}).get("id")
+                        if call_id:
+                            call_id_to_name[str(call_id)] = tool_name
                         args_str = fn.get("arguments", "")
                         if not isinstance(args_str, str):
                             args_str = json.dumps(args_str)
@@ -144,7 +160,11 @@ class HarmonyClient:
                         Message.from_role_and_content(Role.ASSISTANT, content)
                     )
             elif role == "tool":
-                tool_name = str(m.get("name") or m.get("tool_call_id") or "python")
+                tool_name = str(
+                    m.get("name")
+                    or call_id_to_name.get(str(m.get("tool_call_id") or ""))
+                    or "python"
+                )
                 author_name = (
                     tool_name if tool_name == "python" else f"functions.{tool_name}"
                 )

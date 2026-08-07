@@ -184,10 +184,18 @@ class LLMJudgeEvaluator:
 class GTFAEvaluatorAdapter:
     """Wraps `agent_cap.evaluators.gtfa_eval.GTFAEvaluator`."""
 
-    def __init__(self, **_: Any) -> None:
+    def __init__(self, name: str = "", base_url: str = "", api_key: str = "", **_: Any) -> None:
+        import os
+
         from agent_cap.evaluators.gtfa_eval import GTFAEvaluator
 
-        self._impl = GTFAEvaluator()
+        # YAML loading does not expand env vars; expandvars here so both the
+        # YAML path (e.g. "${GEMINI_API_KEY}") and the CLI path work correctly.
+        self._impl = GTFAEvaluator(
+            judge_model=name or None,
+            judge_base_url=base_url or None,
+            judge_api_key=os.path.expandvars(api_key) if api_key else None,
+        )
 
     def evaluate(self, task_meta: Dict[str, Any], output_text: str) -> EvalResult:
         claims = task_meta.get("gtfa_claims") or (task_meta.get("eval_config") or {}).get("gtfa_claims") or []
