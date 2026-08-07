@@ -450,6 +450,13 @@ def _decode_harmony_response(
     analysis_parts: List[str] = []
     final_parts: List[str] = []
     for msg in parsed:
+        # A recipient means a tool call, not chain-of-thought -- gpt-oss emits
+        # built-in python calls on the analysis channel, and collecting their
+        # code into reasoning_content poisons the replayed transcript with
+        # analysis messages that end in bare code and no call, which the model
+        # then imitates (it stops calling its tools and the loop dies early).
+        if getattr(msg, "recipient", None):
+            continue
         channel = str(getattr(msg, "channel", "") or "")
         text = _stringify_harmony_content(msg)
         if not text:

@@ -122,3 +122,63 @@ def test_reasoning_content_replayed_as_analysis_before_call():
     analysis_idx = texts.index(("analysis", "Let me run some code."))
     call_idx = texts.index(("analysis", "print(1+1)"))
     assert analysis_idx < call_idx
+
+
+# ---------------------------------------------------------------------------
+# Decode: reasoning_content must contain only chain-of-thought, never the
+# tool call itself. gpt-oss emits built-in python calls on the analysis
+# channel, so a channel-only filter sweeps the call's code into
+# reasoning_content; replayed, that renders analysis messages ending in bare
+# code with no call -- the terminal shape the model then imitates, killing
+# the tool loop after a few turns.
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from agent_cap.agents.llm.harmony_client import _decode_harmony_response  # noqa: E402
+
+
+class _FakeEncoding:
+    def __init__(self, parsed):
+        self._parsed = parsed
+
+    def parse_messages_from_completion_tokens(self, token_ids, role):
+        return self._parsed
+
+
+def _decode(parsed):
+    return _decode_harmony_response(
+        encoding=_FakeEncoding(parsed),
+        token_ids=[1, 2, 3],
+        fallback_text="FALLBACK",
+        Role=Role,
+    )
+
+
+def test_decode_python_call_excludes_code_from_reasoning():
+    reply = _decode(
+        [
+            SimpleNamespace(channel="analysis", recipient=None, content="thinking hard"),
+            SimpleNamespace(channel="analysis", recipient="python", content="print(1+1)"),
+        ]
+    )
+
+    assert reply["tool_calls"][0]["function"]["name"] == "python"
+    assert json.loads(reply["tool_calls"][0]["function"]["arguments"]) == {
+        "code": "print(1+1)"
+    }
+    assert reply["reasoning_content"] == "thinking hard"
+    assert "print(1+1)" not in reply["reasoning_content"]
+
+
+def test_decode_final_answer_with_reasoning():
+    reply = _decode(
+        [
+            SimpleNamespace(channel="analysis", recipient=None, content="thinking hard"),
+            SimpleNamespace(channel="final", recipient=None, content="the answer is 3"),
+        ]
+    )
+
+    assert "tool_calls" not in reply
+    assert reply["content"] == "the answer is 3"
+    assert reply["reasoning_content"] == "thinking hard"
