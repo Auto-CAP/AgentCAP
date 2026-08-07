@@ -98,86 +98,9 @@ class HarmonyClient:
             if tool_cfg is not None:
                 sys_content = sys_content.with_tools(tool_cfg)
 
-        harmony_messages: List[Any] = []
-        system_used = False
-        # Tool-result messages may carry only a tool_call_id; map ids back to
-        # function names from the assistant tool calls that issued them.
-        call_id_to_name: Dict[str, str] = {}
-        for m in messages:
-            role = str(m.get("role", "")).lower()
-            content = m.get("content", "")
-            if not isinstance(content, str):
-                content = json.dumps(content) if content is not None else ""
-
-            if role == "system":
-                merged = sys_content.with_model_identity(content) if content else sys_content
-                harmony_messages.append(Message.from_role_and_content(Role.SYSTEM, merged))
-                system_used = True
-            elif role == "user":
-                harmony_messages.append(Message.from_role_and_content(Role.USER, content))
-            elif role == "assistant":
-                tool_calls = m.get("tool_calls") or []
-                if tool_calls:
-                    # Restore the chain-of-thought that preceded the call so
-                    # gpt-oss keeps its reasoning state across the tool loop
-                    # (Harmony drops CoT only for turns that ended in `final`).
-                    reasoning = m.get("reasoning_content")
-                    if isinstance(reasoning, str) and reasoning:
-                        analysis_msg = Message.from_role_and_content(
-                            Role.ASSISTANT, reasoning
-                        )
-                        analysis_msg.channel = "analysis"
-                        harmony_messages.append(analysis_msg)
-                    if content:
-                        harmony_messages.append(
-                            Message.from_role_and_content(Role.ASSISTANT, content)
-                        )
-                    for call in tool_calls:
-                        fn = (call or {}).get("function") or {}
-                        tool_name = str(fn.get("name") or "python")
-                        call_id = (call or {}).get("id")
-                        if call_id:
-                            call_id_to_name[str(call_id)] = tool_name
-                        args_str = fn.get("arguments", "")
-                        if not isinstance(args_str, str):
-                            args_str = json.dumps(args_str)
-                        call_msg = Message.from_role_and_content(Role.ASSISTANT, args_str)
-                        # Replay the call exactly as gpt-oss emits it
-                        # (commentary channel, functions.* recipient, json
-                        # constraint) -- the model imitates the transcript, so
-                        # a bare recipient here teaches it to emit later calls
-                        # in a form the decoder cannot recognise.
-                        call_msg.channel = "commentary"
-                        call_msg.recipient = (
-                            tool_name
-                            if tool_name == "python"
-                            else f"functions.{tool_name}"
-                        )
-                        call_msg.content_type = "<|constrain|>json"
-                        harmony_messages.append(call_msg)
-                else:
-                    harmony_messages.append(
-                        Message.from_role_and_content(Role.ASSISTANT, content)
-                    )
-            elif role == "tool":
-                tool_name = str(
-                    m.get("name")
-                    or call_id_to_name.get(str(m.get("tool_call_id") or ""))
-                    or "python"
-                )
-                author_name = (
-                    tool_name if tool_name == "python" else f"functions.{tool_name}"
-                )
-                msg = Message.from_role_and_content(Role.TOOL, content)
-                msg.author = Author(role=Role.TOOL, name=author_name)
-                msg.channel = "commentary"
-                msg.recipient = "assistant"
-                harmony_messages.append(msg)
-
-        if not system_used:
-            harmony_messages.insert(
-                0, Message.from_role_and_content(Role.SYSTEM, sys_content)
-            )
+        harmony_messages = _messages_to_harmony(
+            messages, sys_content, Message=Message, Role=Role, Author=Author
+        )
 
         conversation = Conversation.from_messages(harmony_messages)
         prompt_ids = encoding.render_conversation_for_completion(
@@ -368,6 +291,114 @@ class HarmonyClient:
             if resp.status >= 400:
                 raise RuntimeError(f"{label} failed ({resp.status}): {text[:500]}")
             return json.loads(text)
+
+
+def _messages_to_harmony(
+    messages: List[Dict[str, Any]],
+    sys_content: Any,
+    *,
+    Message: Any,
+    Role: Any,
+    Author: Any,
+) -> List[Any]:
+    """Convert an OpenAI-style message history into Harmony messages.
+
+    Module-level (rather than inline in `chat`) so the replay format can be
+    unit-tested without a live engine -- the transcript shape is what gpt-oss
+    conditions its next call on, so regressions here surface as the model
+    "forgetting" how to call its tools mid-run.
+    """
+    harmony_messages: List[Any] = []
+    system_used = False
+    # Tool-result messages may carry only a tool_call_id; map ids back to
+    # function names from the assistant tool calls that issued them.
+    call_id_to_name: Dict[str, str] = {}
+    for m in messages:
+        role = str(m.get("role", "")).lower()
+        content = m.get("content", "")
+        if not isinstance(content, str):
+            content = json.dumps(content) if content is not None else ""
+
+        if role == "system":
+            merged = sys_content.with_model_identity(content) if content else sys_content
+            harmony_messages.append(Message.from_role_and_content(Role.SYSTEM, merged))
+            system_used = True
+        elif role == "user":
+            harmony_messages.append(Message.from_role_and_content(Role.USER, content))
+        elif role == "assistant":
+            tool_calls = m.get("tool_calls") or []
+            if tool_calls:
+                # Restore the chain-of-thought that preceded the call so
+                # gpt-oss keeps its reasoning state across the tool loop
+                # (Harmony drops CoT only for turns that ended in `final`).
+                reasoning = m.get("reasoning_content")
+                if isinstance(reasoning, str) and reasoning:
+                    analysis_msg = Message.from_role_and_content(
+                        Role.ASSISTANT, reasoning
+                    )
+                    analysis_msg.channel = "analysis"
+                    harmony_messages.append(analysis_msg)
+                if content:
+                    harmony_messages.append(
+                        Message.from_role_and_content(Role.ASSISTANT, content)
+                    )
+                for call in tool_calls:
+                    fn = (call or {}).get("function") or {}
+                    tool_name = str(fn.get("name") or "python")
+                    call_id = (call or {}).get("id")
+                    if call_id:
+                        call_id_to_name[str(call_id)] = tool_name
+                    args_str = fn.get("arguments", "")
+                    if not isinstance(args_str, str):
+                        args_str = json.dumps(args_str)
+                    # Replay each call exactly as gpt-oss emits it -- the
+                    # model imitates the transcript, so replaying a form it
+                    # was never trained on teaches it to emit later calls
+                    # in shapes the decoder cannot recognise. The built-in
+                    # python tool takes raw code on the analysis channel
+                    # with no json constraint; functions.* tools take
+                    # constrained json on the commentary channel.
+                    if tool_name == "python":
+                        code = args_str
+                        try:
+                            parsed_args = json.loads(args_str)
+                            if isinstance(parsed_args, dict) and "code" in parsed_args:
+                                code = str(parsed_args["code"])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        call_msg = Message.from_role_and_content(Role.ASSISTANT, code)
+                        call_msg.channel = "analysis"
+                        call_msg.recipient = "python"
+                    else:
+                        call_msg = Message.from_role_and_content(Role.ASSISTANT, args_str)
+                        call_msg.channel = "commentary"
+                        call_msg.recipient = f"functions.{tool_name}"
+                        call_msg.content_type = "<|constrain|>json"
+                    harmony_messages.append(call_msg)
+            else:
+                harmony_messages.append(
+                    Message.from_role_and_content(Role.ASSISTANT, content)
+                )
+        elif role == "tool":
+            tool_name = str(
+                m.get("name")
+                or call_id_to_name.get(str(m.get("tool_call_id") or ""))
+                or "python"
+            )
+            author_name = (
+                tool_name if tool_name == "python" else f"functions.{tool_name}"
+            )
+            msg = Message.from_role_and_content(Role.TOOL, content)
+            msg.author = Author(role=Role.TOOL, name=author_name)
+            msg.channel = "commentary"
+            msg.recipient = "assistant"
+            harmony_messages.append(msg)
+
+    if not system_used:
+        harmony_messages.insert(
+            0, Message.from_role_and_content(Role.SYSTEM, sys_content)
+        )
+    return harmony_messages
 
 
 def _harmony_tool_config(
