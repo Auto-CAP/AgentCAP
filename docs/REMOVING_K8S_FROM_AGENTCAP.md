@@ -17,15 +17,15 @@ SWE-bench grading. It consumes exactly three things from its environment:
 scenario**, which is TEASBench's concern. The k8s implementation landed in AgentCAP only
 because EIDF was the first cluster to need it and there was nowhere else to put it.
 
-There is now somewhere else: `teasbench/sandbox/k8s.py` in TEASBench, offering
+There is now somewhere else: `pipeline/k8s/lib/k8s_pod_providers/providers.py` in TEASBench, offering
 `InClusterK8sProvider` (the default; talks to sandbox pod IPs directly) and
 `PortForwardK8sProvider` (a faithful port of the code below, for driving a run from a login
 node). AgentCAP reaches them through the dotted-path seam already added to
 `get_sandbox_provider` / `get_exec_provider`:
 
 ```
---sandbox-provider teasbench.sandbox.k8s:InClusterK8sProvider
---exec-provider    teasbench.sandbox.k8s:InClusterK8sProvider
+--sandbox-provider k8s_pod_providers:InClusterK8sProvider
+--exec-provider    k8s_pod_providers:InClusterK8sProvider
 ```
 
 Kubernetes is the *only* substrate that needs a provider at all: `docker` and `modal` are
@@ -38,7 +38,7 @@ native swe-rex deployment types, which is why no equivalent removal is needed fo
       run from the built-in provider (expect accuracy within run-to-run noise; expect
       per-task `e2e_latency_s` to *drop*, since the port-forward hop disappears).
 - [ ] `PortForwardK8sProvider` has been smoke-tested from a login node, since it is the
-      fallback if EIDF declines the RBAC in `eidf/rbac/teasbench-runner-rbac.yaml`.
+      fallback if EIDF declines the RBAC in `pipeline/k8s/rbac/teasbench-runner-rbac.yaml`.
 - [ ] Nothing in `scripts/` or `k8s/` still passes `--sweagent-deployment k8s` (see the
       deletion list below — those scripts go at the same time).
 - [ ] No external consumer depends on `SWEBENCH_K8S_NAMESPACE`, `SWEBENCH_K8S_AUTH_TOKEN`,
