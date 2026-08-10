@@ -6,7 +6,7 @@ Covers get_sandbox_provider / get_exec_provider: http(s) URL handling
 fallback, and that a bad path raises a clear ValueError naming the failing
 module/class. The dotted-path cases monkeypatch importlib.import_module so
 they can prove resolution against the real contract path
-(teasbench.sandbox.k8s:InClusterK8sProvider, see docs/REMOVING_K8S_FROM_AGENTCAP.md
+(k8s_pod_providers:InClusterK8sProvider, see docs/REMOVING_K8S_FROM_AGENTCAP.md
 and IMPLEMENTATION_SPEC.md section 2) without TEASBench actually being
 installed here. No kubectl, no cluster, no network.
 """
@@ -47,7 +47,7 @@ def test_sandbox_unknown_registry_name_raises_valueerror():
 
 
 def test_sandbox_dotted_path_resolves_class_and_kwargs():
-    """Proves the exact §2 contract path resolves: teasbench.sandbox.k8s
+    """Proves the exact §2 contract path resolves: k8s_pod_providers
     isn't installed here, so importlib.import_module is monkeypatched to
     return a stand-in module exposing the target class."""
 
@@ -61,8 +61,8 @@ def test_sandbox_dotted_path_resolves_class_and_kwargs():
     with mock.patch.object(sandbox_providers.importlib, "import_module",
                             return_value=fake_module) as m:
         p = sandbox_providers.get_sandbox_provider(
-            "teasbench.sandbox.k8s:InClusterK8sProvider", namespace="eidf230ns")
-        m.assert_called_once_with("teasbench.sandbox.k8s")
+            "k8s_pod_providers:InClusterK8sProvider", namespace="eidf230ns")
+        m.assert_called_once_with("k8s_pod_providers")
 
     assert isinstance(p, InClusterK8sProvider)
     assert p.kwargs == {"namespace": "eidf230ns"}
@@ -85,11 +85,11 @@ def test_sandbox_dotted_path_bad_class_raises_clear_error():
     with mock.patch.object(sandbox_providers.importlib, "import_module",
                             return_value=fake_module):
         try:
-            sandbox_providers.get_sandbox_provider("teasbench.sandbox.k8s:NoSuchClass")
+            sandbox_providers.get_sandbox_provider("k8s_pod_providers:NoSuchClass")
             assert False, "expected ValueError"
         except ValueError as exc:
             msg = str(exc)
-            assert "teasbench.sandbox.k8s:NoSuchClass" in msg
+            assert "k8s_pod_providers:NoSuchClass" in msg
             assert "NoSuchClass" in msg
 
 
@@ -124,8 +124,8 @@ def test_exec_dotted_path_resolves_class_and_kwargs():
     with mock.patch.object(sandbox_providers.importlib, "import_module",
                             return_value=fake_module) as m:
         p = sandbox_providers.get_exec_provider(
-            "teasbench.sandbox.k8s:InClusterK8sProvider", namespace="eidf230ns")
-        m.assert_called_once_with("teasbench.sandbox.k8s")
+            "k8s_pod_providers:InClusterK8sProvider", namespace="eidf230ns")
+        m.assert_called_once_with("k8s_pod_providers")
 
     assert isinstance(p, InClusterK8sProvider)
     assert p.kwargs == {"namespace": "eidf230ns"}

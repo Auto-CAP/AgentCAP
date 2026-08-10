@@ -146,8 +146,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--sandbox-provider", default=None,
                    help="For --sweagent-deployment k8s: 'k8s' (built-in, "
                         "default), a dotted path 'module:Class' "
-                        "implementing acquire/release (e.g. TEASBench's "
-                        "teasbench.sandbox.k8s:InClusterK8sProvider), or "
+                        "implementing acquire/release, where 'module' is any "
+                        "importable path including a bare top-level package "
+                        "(e.g. TEASBench's "
+                        "k8s_pod_providers:InClusterK8sProvider), or "
                         "an http(s) URL of an external sandbox broker "
                         "(POST /acquire {image,label} -> "
                         "{host,port,auth_token,handle}; POST /release "

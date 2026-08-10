@@ -21,9 +21,9 @@ swebench instance image + ``kubectl port-forward`` on an OS-assigned local
 port.
 
 DEPRECATED (retained as a fallback): the k8s implementation has moved to
-TEASBench (``teasbench.sandbox.k8s``), which owns deployment scenarios.
+TEASBench (``k8s_pod_providers``), which owns deployment scenarios.
 Select it with ``--sandbox-provider
-teasbench.sandbox.k8s:InClusterK8sProvider``. See
+k8s_pod_providers:InClusterK8sProvider``. See
 ``docs/REMOVING_K8S_FROM_AGENTCAP.md``. :func:`get_sandbox_provider` and
 :func:`get_exec_provider` also accept any other dotted path
 ``"package.module:ClassName"``, which is how TEASBench-owned providers are
@@ -91,7 +91,7 @@ class _K8sSidecar:
     """One swe-rex sidecar pod running the official swebench instance image.
 
     DEPRECATED (retained as a fallback): moved to TEASBench
-    (``teasbench.sandbox.k8s``). See ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
+    (``k8s_pod_providers``). See ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
     """
 
     def __init__(self, namespace: str, image: str, instance_id: str):
@@ -240,9 +240,9 @@ class K8sSandboxProvider(SandboxProvider):
     """EIDF k8s implementation: sidecar Job + port-forward per acquire().
 
     DEPRECATED (retained as a fallback): the k8s implementation has moved to
-    TEASBench (``teasbench.sandbox.k8s``), which owns deployment scenarios.
+    TEASBench (``k8s_pod_providers``), which owns deployment scenarios.
     Select it with ``--sandbox-provider
-    teasbench.sandbox.k8s:InClusterK8sProvider``. See
+    k8s_pod_providers:InClusterK8sProvider``. See
     ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
     """
 
@@ -325,7 +325,7 @@ def _resolve_dotted_path(name: str, **kwargs: Any) -> Any:
 
     Shared by :func:`get_sandbox_provider` and :func:`get_exec_provider` —
     this is how TEASBench-owned implementations (e.g.
-    ``teasbench.sandbox.k8s:InClusterK8sProvider``) are selected without
+    ``k8s_pod_providers:InClusterK8sProvider``) are selected without
     AgentCAP importing or depending on TEASBench.
     """
     module_name, _, class_name = name.partition(":")
@@ -356,7 +356,10 @@ def get_sandbox_provider(name: str, **kwargs: Any) -> SandboxProvider:
          ``"package.module:ClassName"``; the module is imported and the
          class instantiated with **kwargs (see :func:`_resolve_dotted_path`).
          This is how TEASBench's own providers (e.g.
-         ``teasbench.sandbox.k8s:InClusterK8sProvider``) are selected.
+         ``k8s_pod_providers:InClusterK8sProvider``) are selected. The left
+         side is any importable module path, so a top-level package with no
+         dot in it -- as that example is -- is valid and not a typo; the
+         class is then looked up on the package's ``__init__``.
       3. else -> ``_PROVIDERS`` registry lookup (built-in name, e.g. "k8s").
     """
     if name.startswith(("http://", "https://")):
@@ -414,8 +417,8 @@ class K8sExecContainer:
     """A pod from an instance image supporting cp/exec, for harness eval.
 
     DEPRECATED (retained as a fallback): the k8s implementation has moved to
-    TEASBench (``teasbench.sandbox.k8s``), which owns deployment scenarios.
-    Select it with ``--exec-provider teasbench.sandbox.k8s:InClusterK8sProvider``.
+    TEASBench (``k8s_pod_providers``), which owns deployment scenarios.
+    Select it with ``--exec-provider k8s_pod_providers:InClusterK8sProvider``.
     See ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
     """
 
@@ -487,8 +490,8 @@ class K8sExecProvider(ExecProvider):
     release_exec stops it.
 
     DEPRECATED (retained as a fallback): the k8s implementation has moved to
-    TEASBench (``teasbench.sandbox.k8s``), which owns deployment scenarios.
-    Select it with ``--exec-provider teasbench.sandbox.k8s:InClusterK8sProvider``.
+    TEASBench (``k8s_pod_providers``), which owns deployment scenarios.
+    Select it with ``--exec-provider k8s_pod_providers:InClusterK8sProvider``.
     See ``docs/REMOVING_K8S_FROM_AGENTCAP.md``.
     """
 
