@@ -1161,39 +1161,94 @@ class SGLangInfraDeepSeek32:
 
     def _wait_for_server(self) -> None:
         print("Waiting for SGLang server...", flush=True)
+    
         start_time = time.time()
+        deadline = start_time + self.cfg.server_timeout
         models_url = f"{self.openai_base_url}/models"
-
-        for i in range(self.cfg.server_timeout):
-            if i % 100 == 0:
-                print(f"waiting for server to start: poll count={i}", flush=True)
-
+    
+        last_log_time = 0.0
+    
+        while time.time() < deadline:
             if self.server_process is None:
                 raise RuntimeError("Server process was not created.")
-
+    
             return_code = self.server_process.poll()
+    
             if return_code is not None:
                 if self.log_file is not None:
                     self.log_file.flush()
-
-                with open("sglang_server_deepseek32.log", "r", encoding="utf-8", errors="ignore") as log_file:
+    
+                with open(
+                    "sglang_server_deepseek32.log",
+                    "r",
+                    encoding="utf-8",
+                    errors="ignore",
+                ) as log_file:
                     logs = log_file.read()
-
+    
                 raise RuntimeError(
-                    f"SGLang server died with code {return_code}. Full logs:\n{logs}\n"
+                    f"SGLang server died with code {return_code}. "
+                    f"Full logs:\n{logs}\n"
                 )
-
+    
             try:
                 response = requests.get(models_url, timeout=5)
+    
                 if response.status_code == 200:
                     elapsed = time.time() - start_time
-                    print(f"SGLang server is ready (took {elapsed:.2f} seconds).\n", flush=True)
+                    print(
+                        f"SGLang server is ready "
+                        f"(took {elapsed:.2f} seconds).\n",
+                        flush=True,
+                    )
                     return
-            except Exception:
-                time.sleep(1)
-
-        raise RuntimeError("SGLang server failed to start within timeout.")
-
+    
+                # Useful debugging: show what SGLang is returning,
+                # but don't spam the terminal.
+                now = time.time()
+                if now - last_log_time >= 10:
+                    print(
+                        f"Server HTTP status={response.status_code}; "
+                        f"still waiting... elapsed={now - start_time:.1f}s",
+                        flush=True,
+                    )
+                    last_log_time = now
+    
+            except requests.RequestException as exc:
+                now = time.time()
+    
+                if now - last_log_time >= 10:
+                    print(
+                        f"Server not reachable yet: "
+                        f"{type(exc).__name__}: {exc}; "
+                        f"elapsed={now - start_time:.1f}s",
+                        flush=True,
+                    )
+                    last_log_time = now
+    
+            # IMPORTANT: sleep regardless of whether HTTP connected successfully.
+            time.sleep(1)
+    
+        # If we really timed out, show the SGLang log.
+        if self.log_file is not None:
+            self.log_file.flush()
+    
+        try:
+            with open(
+                "sglang_server_deepseek32.log",
+                "r",
+                encoding="utf-8",
+                errors="ignore",
+            ) as log_file:
+                logs = log_file.read()
+        except Exception:
+            logs = "<Could not read SGLang log>"
+    
+        raise RuntimeError(
+            f"SGLang server failed to start within "
+            f"{self.cfg.server_timeout} seconds.\n"
+            f"Full SGLang logs:\n{logs}\n"
+        )
 
 def last_boxed_only_string(text: str) -> Optional[str]:
     positions = [m.start() for m in re.finditer(r"\\boxed\b", text)]
