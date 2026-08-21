@@ -29,9 +29,17 @@ import copy
 import importlib.util
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
+from agent_cap.imo_output import (
+    LLM_REQUEST_CONCURRENCY,
+    positive_int,
+    run_tasks_concurrently,
+    tracked_stream,
+    update_metadata_concurrency,
+    write_metrics_file as write_shared_metrics_file,
+)
 from agent_cap.runner.unified_runner import collect_hardware_info
 from agent_cap.utils.package_version import get_package_version
-from agent_cap.utils.resume import recover_num_requests
+from agent_cap.utils.precision import resolve_precision
 
 
 SYSTEM_PROMPT = """You are an elite mathematical problem solver with expertise at the International Mathematical Olympiad (IMO) level.
@@ -82,43 +90,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _find_config_value(config: Any, key: str) -> Any:
-    if isinstance(config, dict):
-        if key in config:
-            return config[key]
-        for value in config.values():
-            found = _find_config_value(value, key)
-            if found is not None:
-                return found
-    elif isinstance(config, list):
-        for item in config:
-            found = _find_config_value(item, key)
-            if found is not None:
-                return found
-    return None
-
-
-def infer_model_precision(model_path: str) -> str:
-    config_path = Path(model_path) / "config.json"
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            model_config = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return "unknown"
-
-    quant_method = _find_config_value(model_config, "quant_method")
-    if quant_method is not None:
-        quant_method_str = str(quant_method)
-        if re.search(r"\d", quant_method_str):
-            return quant_method_str
-
-    dtype = _find_config_value(model_config, "dtype")
-    if dtype is not None:
-        return str(dtype)
-
-    return "unknown"
-
-
 def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -152,7 +123,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         "hardware": hw_info,
         "model_config": {
             "model_name": _env_str("MODEL_NAME_FOR_METADATA", args.model_path),
-            "precision": infer_model_precision(args.model_path),
+            "precision": resolve_precision(args.model_path),
         },
         "system_environment": {
             "inference_engine": _env_str("INFERENCE_ENGINE", "vllm"),
@@ -163,6 +134,9 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
             "max_turns": args.max_turns,
             "max_tokens": args.max_tokens,
             "temperature": args.temperature,
+            "concurrency": args.concurrency,
+            "observed_max_concurrency": 0,
+            "observed_max_simultaneous_llm_requests": 0,
             "timestamp": timestamp,
         },
     }
@@ -200,172 +174,6 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         "output_data_path": str(output_data_path),
     }
 
-
-def _safe_mean(values: List[float]) -> float:
-    return statistics.mean(values) if values else 0.0
-
-
-def _safe_sum(values: List[float]) -> float:
-    return float(sum(values)) if values else 0.0
-
-
-def _p99(values: List[float]) -> float:
-    if not values:
-        return 0.0
-    if len(values) == 1:
-        return float(values[0])
-    return float(statistics.quantiles(values, n=100, method="inclusive")[98])
-
-
-def _max_input_tokens_by_task(detailed_results_path: str) -> Dict[int, int]:
-    """Largest single-request input length per task, from the per-request records.
-
-    The aggregation rows carry only per-task totals, so the maximum cannot be
-    derived from them: on a single-request task the two coincide, and on every
-    other task the total exceeds any individual request. Read the per-request
-    file this run already writes and take the real maximum. An empty mapping
-    means the field cannot be measured and must be published as null.
-    """
-    by_task: Dict[int, int] = {}
-    try:
-        with open(detailed_results_path, "r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if "request_index" not in row:
-                    return {}
-                task = row.get("example_index")
-                tokens = int(row.get("input_tokens") or 0)
-                if task is None:
-                    continue
-                if tokens > by_task.get(task, -1):
-                    by_task[task] = tokens
-    except OSError:
-        return {}
-    return by_task
-
-
-def write_metrics_file(
-    results: List[Dict[str, Any]],
-    wall_time_s: float,
-    output_paths: Dict[str, str],
-    args: argparse.Namespace,
-) -> None:
-    total_examples = len(results)
-
-    latencies_s = [float(r["latency_ms"]) / 1000.0 for r in results]
-    ttft_s = [float(r["ttft_ms"]) / 1000.0 for r in results]
-    tpot_s = [float(r["tpot_ms_avg"]) / 1000.0 for r in results]
-
-    input_tokens_list = [int(r["input_tokens"]) for r in results]
-    output_tokens_list = [int(r["output_tokens"]) for r in results]
-    tool_calls_list = [int(r["tool_calls"]) for r in results]
-
-    total_input_tokens = int(sum(input_tokens_list))
-    total_output_tokens = int(sum(output_tokens_list))
-    total_tool_calls = int(sum(tool_calls_list))
-
-    num_requests_list = [int(r.get("num_requests", 1)) for r in results]
-    total_requests = int(sum(num_requests_list))
-
-    input_tokens_per_request = []
-    output_tokens_per_request = []
-    max_input_tokens_per_request_list = []
-
-    for r in results:
-        reqs = 1
-        total_in = int(r["input_tokens"])
-        total_out = int(r["output_tokens"])
-
-        input_tokens_per_request.append(total_in / reqs)
-        output_tokens_per_request.append(total_out / reqs)
-        # max input per request is not derivable from a task total; filled in below
-
-    _max_by_task = _max_input_tokens_by_task(
-        output_paths.get("detailed_results_path", "")
-    )
-    # A task that recorded no requests contributed nothing to the token totals
-    # either, so it carries 0 here for the same reason. An empty mapping means
-    # the per-request records are absent entirely and the field is not measurable.
-    max_input_tokens_per_request_list = (
-        [float(_max_by_task.get(k, 0)) for k in range(len(results))]
-        if _max_by_task
-        else []
-    )
-
-    decode_time_s_list = [
-        (float(r["tpot_ms_avg"]) / 1000.0) * int(r["output_tokens"])
-        for r in results
-    ]
-    total_decode_time_s = float(sum(decode_time_s_list))
-
-    acc = (
-        float(sum(float(r["score"]) for r in results)) / total_examples
-        if total_examples > 0
-        else 0.0
-    )
-
-    metrics = {
-        "performance": {
-            "e2e_s": float(wall_time_s),
-            "avg_e2e_latency_s": _safe_mean(latencies_s),
-            "p50_e2e_latency_s": float(statistics.median(latencies_s)) if latencies_s else 0.0,
-            "p99_e2e_latency_s": _p99(latencies_s),
-            "examples_per_second": (float(total_examples) / wall_time_s) if wall_time_s > 0 else 0.0,
-            "ttft": _safe_mean(ttft_s),
-            "p99_ttft": _p99(ttft_s),
-            "tpot": _safe_mean(tpot_s),
-            "p99_tpot": _p99(tpot_s),
-            "decode_time_s": total_decode_time_s,
-            "p99_decode_time_s": _p99(decode_time_s_list),
-            "output_throughput_tok_s": (float(total_output_tokens) / total_decode_time_s)
-            if total_decode_time_s > 0
-            else 0.0,
-        },
-        "agentic": {
-            "avg_total_input_tokens": _safe_mean([float(x) for x in input_tokens_list]),
-            "avg_total_output_tokens": _safe_mean([float(x) for x in output_tokens_list]),
-            "avg_tool_call_count": _safe_mean([float(x) for x in tool_calls_list]),
-            "avg_num_requests": _safe_mean([float(x) for x in num_requests_list]),
-            "avg_input_tokens_per_request": _safe_mean(input_tokens_per_request),
-            "avg_output_tokens_per_request": _safe_mean(output_tokens_per_request),
-            "avg_max_input_tokens_per_request": (
-                _safe_mean(max_input_tokens_per_request_list)
-                if max_input_tokens_per_request_list
-                else None
-            ),
-            "total_input_tokens": total_input_tokens,
-            "total_output_tokens": total_output_tokens,
-            "total_cached_tokens": 0,
-            "avg_cache_hit_rate": 0.0,
-            "total_requests": total_requests,
-            "total_tool_calls": total_tool_calls,
-        },
-        "quality": {
-            "acc": acc,
-            "claim_coverage": "",
-            "eval_judge": args.judge_model,
-        },
-        "hardware": {
-            "gpu_type": _env_str("GPU_TYPE", "unknown"),
-            "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
-            "vllm_version": get_package_version("vllm"),
-            "avg_gpu_utilization_pct": "",
-            "peak_gpu_memory_used_mb": "",
-            "avg_cpu_utilization_pct": "",
-        },
-    }
-
-    metrics_path = output_paths["metrics_path"]
-    with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=4)
-
-    print(f"Wrote metrics file: {metrics_path}")
 
 def append_output_data_row(
     result: Dict[str, Any],
@@ -1523,7 +1331,9 @@ def stream_deepseek32_chat_completion(
     final_usage = None
     finish_reason = None
 
-    stream = client.chat.completions.create(**request_kwargs)
+    stream = tracked_stream(
+        lambda: client.chat.completions.create(**request_kwargs)
+    )
 
     try:
         for chunk in stream:
@@ -1670,7 +1480,7 @@ def run_deepseek32_attempt(
     total_output_tokens = 0
     total_decode_time_s = 0.0
     total_prefill_time_s = 0.0
-    first_turn_ttft_s = 0.0
+    first_turn_ttft_s: Optional[float] = None
     total_cached_tokens = 0
 
     tool_call_count = 0
@@ -1695,20 +1505,24 @@ def run_deepseek32_attempt(
         messages.extend(_task_message_to_openai(m) for m in task.messages)
 
         for turn_idx in range(max_turns):
-            num_requests += 1
+            try:
+                request_result = stream_deepseek32_chat_completion(
+                    client=client,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                    context_tokens=context_tokens,
+                    tokenizer=tokenizer,
+                    temperature=temperature,
+                    seed=seed,
+                    enable_thinking=enable_thinking,
+                )
+            except Exception as exc:
+                errors.append(f"vLLM request failed: {type(exc).__name__}: {exc}")
+                break
 
-            request_result = stream_deepseek32_chat_completion(
-                client=client,
-                model=model,
-                messages=messages,
-                tools=tools,
-                max_tokens=max_tokens,
-                context_tokens=context_tokens,
-                tokenizer=tokenizer,
-                temperature=temperature,
-                seed=seed,
-                enable_thinking=enable_thinking,
-            )
+            num_requests += 1
 
             content = request_result["content"]
             reasoning = request_result["reasoning"]
@@ -1742,7 +1556,7 @@ def run_deepseek32_attempt(
             cached_tokens_this_request = int(request_result["cached_tokens"])
 
             prefill_time_s_this_request = float(request_result["prefill_time_s"])
-            if first_turn_ttft_s == 0.0:
+            if first_turn_ttft_s is None:
                 first_turn_ttft_s = prefill_time_s_this_request
             decode_time_s_this_request = float(request_result["decode_time_s"])
 
@@ -1755,7 +1569,7 @@ def run_deepseek32_attempt(
             tpot_s_this_request = (
                 decode_time_s_this_request / output_tokens_this_request
                 if output_tokens_this_request > 0
-                else 0.0
+                else None
             )
 
             output_throughput_tok_s_this_request = (
@@ -1899,14 +1713,19 @@ def run_deepseek32_attempt(
         # ttft_ms is the task's time to FIRST token (first turn's prefill wait); the
         # accumulated prefill across all turns is prefill_total_s below — one field
         # cannot serve both readings.
-        avg_ttft_ms = 1000.0 * first_turn_ttft_s
+        avg_ttft_ms = (
+            1000.0 * first_turn_ttft_s
+            if first_turn_ttft_s is not None
+            else None
+        )
         avg_tpot_ms = (
             1000.0 * total_decode_time_s / total_output_tokens
             if total_output_tokens > 0
-            else 0.0
+            else None
         )
 
         return {
+            "example_index": example_index,
             "task_id": task.id,
             "task_name": task.name,
             "category": task.category,
@@ -1922,9 +1741,11 @@ def run_deepseek32_attempt(
             "output_tokens": total_output_tokens,
             "latency_ms": (time.time() - t0) * 1000.0,
             "ttft_ms": avg_ttft_ms,
-            "prefill_total_s": total_prefill_time_s,
+            "prefill_total_s": (
+                total_prefill_time_s if first_turn_ttft_s is not None else None
+            ),
             "tpot_ms_avg": avg_tpot_ms,
-            "tpot_ms_p99": 0.0,
+            "tpot_ms_p99": None,
             "errors": errors,
             "judge_equivalent": judge_result.get("equivalent", False),
             "judge_response": judge_result.get("raw_response"),
@@ -1995,11 +1816,19 @@ def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
     print(f"Expected:  {result['expected']}")
     print(f"Predicted: {result['predicted']}")
     print(f"Score:     {result['score']:.1f}")
+    ttft_display = (
+        f"{result['ttft_ms']:.1f} ms" if result.get("ttft_ms") is not None else "null"
+    )
+    tpot_display = (
+        f"{result['tpot_ms_avg']:.1f} ms"
+        if result.get("tpot_ms_avg") is not None
+        else "null"
+    )
     print(
         f"Tokens in/out: {result['input_tokens']}/{result['output_tokens']} | "
         f"Latency: {result['latency_ms']:.1f} ms | "
-        f"TTFT: {result['ttft_ms']:.1f} ms | "
-        f"TPOT(avg): {result['tpot_ms_avg']:.1f} ms | "
+        f"TTFT: {ttft_display} | "
+        f"TPOT(avg): {tpot_display} | "
         f"Python calls: {result['tool_calls']} | "
         f"finish_reason: {result.get('finish_reason')}"
     )
@@ -2018,8 +1847,10 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
     avg_in = statistics.mean([r["input_tokens"] for r in results]) if results else 0.0
     avg_out = statistics.mean([r["output_tokens"] for r in results]) if results else 0.0
     avg_latency = statistics.mean([r["latency_ms"] for r in results]) if results else 0.0
-    avg_ttft = statistics.mean([r["ttft_ms"] for r in results]) if results else 0.0
-    avg_tpot = statistics.mean([r["tpot_ms_avg"] for r in results]) if results else 0.0
+    ttft_values = [r["ttft_ms"] for r in results if r.get("ttft_ms") is not None]
+    tpot_values = [r["tpot_ms_avg"] for r in results if r.get("tpot_ms_avg") is not None]
+    avg_ttft = statistics.mean(ttft_values) if ttft_values else None
+    avg_tpot = statistics.mean(tpot_values) if tpot_values else None
 
     answer_counter = Counter(r["predicted"] for r in results if r["predicted"] is not None)
 
@@ -2033,300 +1864,14 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
     print(f"Avg input tokens:    {avg_in:.1f}")
     print(f"Avg output tokens:   {avg_out:.1f}")
     print(f"Avg latency:         {avg_latency:.1f} ms")
-    print(f"Avg TTFT:            {avg_ttft:.1f} ms")
-    print(f"Avg TPOT:            {avg_tpot:.1f} ms")
+    print(f"Avg TTFT:            {avg_ttft:.1f} ms" if avg_ttft is not None else "Avg TTFT:            null")
+    print(f"Avg TPOT:            {avg_tpot:.1f} ms" if avg_tpot is not None else "Avg TPOT:            null")
     print(f"Total python calls:  {total_tool_calls}")
 
     if answer_counter:
         print("\nMost common predicted answers:")
         for ans, cnt in answer_counter.most_common(10):
             print(f"  {ans}: {cnt}")
-
-<<<<<<< HEAD
-=======
-def wait_for_external_vllm_server(
-    host: str,
-    port: int,
-    timeout_s: int,
-    expected_model: Optional[str] = None,
-) -> None:
-    client_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
-    models_url = f"http://{client_host}:{port}/v1/models"
-
-    print(
-        f"Waiting for externally managed vLLM server at {models_url}...",
-        flush=True,
-    )
-
-    deadline = time.monotonic() + timeout_s
-    last_error: Optional[BaseException] = None
-
-    while time.monotonic() < deadline:
-        try:
-            response = requests.get(models_url, timeout=5)
-            response.raise_for_status()
-
-            payload = response.json()
-
-            model_ids = [
-                item.get("id")
-                for item in payload.get("data", [])
-                if isinstance(item, dict)
-            ]
-
-            print("External vLLM server is ready.", flush=True)
-            print(f"Models reported by server: {model_ids}", flush=True)
-
-            if expected_model and expected_model not in model_ids:
-                print(
-                    f"WARNING: requested model name {expected_model!r} was not "
-                    f"reported by /v1/models. Reported names: {model_ids}",
-                    flush=True,
-                )
-
-            return
-
-        except Exception as exc:
-            last_error = exc
-            time.sleep(1)
-
-    raise RuntimeError(
-        f"External vLLM server did not become ready within {timeout_s} seconds. "
-        f"Last error: {type(last_error).__name__}: {last_error}"
-    )
-
-
-
-def _read_jsonl(path: str) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line_number, line in enumerate(f, start=1):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"Invalid JSON in {path} at line {line_number}: {exc}"
-                ) from exc
-            if not isinstance(row, dict):
-                raise RuntimeError(
-                    f"Expected a JSON object in {path} at line {line_number}."
-                )
-            rows.append(row)
-    return rows
-
-
-def _latest_detailed_attempt(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Keep the latest request-index sequence for one benchmark example."""
-    if not rows:
-        return []
-
-    attempt_starts = [
-        idx
-        for idx, row in enumerate(rows)
-        if int(row.get("request_index", 0)) == 0
-    ]
-    if len(attempt_starts) <= 1:
-        return rows
-
-    return rows[attempt_starts[-1] :]
-
-
-def load_existing_results_for_resume(
-    *,
-    tasks: List[Any],
-    output_paths: Dict[str, str],
-) -> tuple[List[Dict[str, Any]], set[str], float]:
-    output_rows = _read_jsonl(output_paths["output_data_path"])
-    detailed_rows = _read_jsonl(output_paths["detailed_results_path"])
-
-    details_by_example: Dict[int, List[Dict[str, Any]]] = {}
-    for row in detailed_rows:
-        example_index = int(row.get("example_index", -1))
-        details_by_example.setdefault(example_index, []).append(row)
-
-    indexed_results: List[tuple[int, Dict[str, Any]]] = []
-    completed_task_ids: set[str] = set()
-    seen_indexes: set[int] = set()
-    recovered_num_requests_count = 0
-
-    for row in output_rows:
-        index = int(row["index"])
-        task_id = str(row["task_id"])
-
-        if index in seen_indexes:
-            raise RuntimeError(
-                f"Duplicate completed output index {index} in "
-                f"{output_paths['output_data_path']}"
-            )
-        if task_id in completed_task_ids:
-            raise RuntimeError(
-                f"Duplicate completed task_id {task_id!r} in "
-                f"{output_paths['output_data_path']}"
-            )
-        if index < 0 or index >= len(tasks):
-            raise RuntimeError(
-                f"Stored result index {index} is outside the newly loaded task list "
-                f"of length {len(tasks)}. Use the same --num-tasks and --seed."
-            )
-
-        task = tasks[index]
-        if str(task.id) != task_id:
-            raise RuntimeError(
-                "Resume validation failed: the stored task order does not match "
-                "the newly loaded benchmark. "
-                f"At index {index}, stored task_id={task_id!r}, "
-                f"new task_id={str(task.id)!r}. "
-                "Use exactly the same --num-tasks and --seed as the original run."
-            )
-
-        task_details = sorted(
-            _latest_detailed_attempt(details_by_example.get(index, [])),
-            key=lambda item: int(item.get("request_index", 0)),
-        )
-
-        response_text = str(row.get("output_text") or "")
-        output_tokens = int(row.get("output_tokens", 0))
-        total_prefill_time_s = sum(
-            float(item.get("prefill_time_s", 0.0)) for item in task_details
-        )
-        total_decode_time_s = sum(
-            float(item.get("decode_time_s", 0.0)) for item in task_details
-        )
-        total_cached_tokens = sum(
-            int(item.get("cached_tokens", 0)) for item in task_details
-        )
-
-        raw_errors = row.get("errors", [])
-        if isinstance(raw_errors, list):
-            errors = [str(item) for item in raw_errors]
-        elif raw_errors in (None, ""):
-            errors = []
-        else:
-            errors = [str(raw_errors)]
-
-        score = float(row.get("eval_score", 0.0))
-        expected = (task.eval_config or {}).get("expected")
-        if row.get("num_requests") is None:
-            recovered_num_requests_count += 1
-        num_requests = recover_num_requests(
-            row,
-            task_details,
-            context=f"Resume output row for task_id={task_id!r} at index {index}",
-        )
-
-        result = {
-            "task_id": task.id,
-            "task_name": task.name,
-            "category": task.category,
-            "expected": expected,
-            "predicted": _scan_for_answer(response_text),
-            "score": score,
-            "correct": score >= 1.0,
-            "response": response_text,
-            "tool_calls": int(row.get("tool_call_count", 0)),
-            "num_requests": num_requests,
-            "tool_latencies_ms": [],
-            "input_tokens": int(row.get("input_tokens", 0)),
-            "output_tokens": output_tokens,
-            "latency_ms": float(row.get("e2e_latency_s", 0.0)) * 1000.0,
-            "ttft_ms": total_prefill_time_s * 1000.0,
-            "tpot_ms_avg": (
-                total_decode_time_s * 1000.0 / output_tokens
-                if output_tokens > 0
-                else 0.0
-            ),
-            "tpot_ms_p99": 0.0,
-            "errors": errors,
-            "judge_equivalent": bool(row.get("eval_passed", False)),
-            "judge_response": row.get("eval_details"),
-            "judge_status_code": None,
-            "judge_attempts": 1 if row.get("eval_details") is not None else 0,
-            "detailed_rows": task_details,
-            "total_cached_tokens": total_cached_tokens,
-            "finish_reason": row.get("finish_reason"),
-        }
-
-        indexed_results.append((index, result))
-        seen_indexes.add(index)
-        completed_task_ids.add(task_id)
-
-    indexed_results.sort(key=lambda item: item[0])
-    existing_results = [result for _, result in indexed_results]
-
-    if recovered_num_requests_count:
-        print(
-            "Recovered num_requests from detailed request indexes for "
-            f"{recovered_num_requests_count} legacy output row(s).",
-            flush=True,
-        )
-
-    prior_wall_time_s: Optional[float] = None
-    try:
-        with open(output_paths["metrics_path"], "r", encoding="utf-8") as f:
-            existing_metrics = json.load(f)
-        performance = existing_metrics.get("performance", {})
-        if isinstance(performance, dict) and "e2e_s" in performance:
-            prior_wall_time_s = float(performance["e2e_s"])
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        prior_wall_time_s = None
-
-    if prior_wall_time_s is None:
-        prior_wall_time_s = sum(
-            float(result["latency_ms"]) / 1000.0 for result in existing_results
-        )
-        print(
-            "WARNING: the crashed run did not contain a completed/checkpointed "
-            "overall wall-time metric. Using the sum of completed per-task "
-            f"latencies ({prior_wall_time_s:.2f}s) as the prior wall-time estimate.",
-            flush=True,
-        )
-
-    print(
-        f"Loaded {len(existing_results)} completed tasks from the resume directory.",
-        flush=True,
-    )
-
-    return existing_results, completed_task_ids, prior_wall_time_s
-
-def build_failed_task_result(
-    *,
-    task: Any,
-    error_message: str,
-    latency_ms: float,
-    finish_reason: str = "unhandled_task_exception",
-) -> Dict[str, Any]:
-    expected = (task.eval_config or {}).get("expected")
-
-    return {
-        "task_id": task.id,
-        "task_name": task.name,
-        "category": task.category,
-        "expected": expected,
-        "predicted": None,
-        "score": 0.0,
-        "correct": False,
-        "response": "",
-        "tool_calls": 0,
-        "num_requests": 0,
-        "tool_latencies_ms": [],
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "latency_ms": latency_ms,
-        "ttft_ms": 0.0,
-        "tpot_ms_avg": 0.0,
-        "tpot_ms_p99": 0.0,
-        "errors": [error_message],
-        "judge_equivalent": False,
-        "judge_response": f"Evaluation skipped: {error_message}",
-        "judge_status_code": None,
-        "judge_attempts": 0,
-        "detailed_rows": [],
-        "total_cached_tokens": 0,
-        "finish_reason": finish_reason,
-    }
->>>>>>> 33a60c5 (modified code to record engine version)
 
 async def async_main(
     args: argparse.Namespace,
@@ -2338,11 +1883,12 @@ async def async_main(
     tasks = load_benchmark("imo_answerbench", num_tasks=args.num_tasks, seed=args.seed)
     print(f"Loaded {len(tasks)} IMO AnswerBench tasks")
 
-    results: List[Dict[str, Any]] = []
-    for index, task in enumerate(tasks, start=1):
-        result = await solve_one_task(
+    LLM_REQUEST_CONCURRENCY.reset()
+
+    async def run_one(index: int, task: Any) -> Dict[str, Any]:
+        return await solve_one_task(
             task=task,
-            example_index=index - 1,
+            example_index=index,
             model=args.model,
             base_url=f"http://127.0.0.1:{args.port}/v1",
             max_turns=args.max_turns,
@@ -2354,18 +1900,29 @@ async def async_main(
             exec_timeout=args.exec_timeout,
             preload=args.preload,
             auto_print_last_expr=args.auto_print_last_expr,
-            seed=args.seed + index,
+            seed=args.seed + index + 1,
             judge=judge,
             enable_thinking=args.enable_thinking,
         )
 
-
-        results.append(result)
+    def persist_one(index: int, result: Dict[str, Any]) -> None:
         append_detailed_result_rows(result.get("detailed_rows", []), output_paths["detailed_results_path"])
-        append_output_data_row(result, index, output_paths["output_data_path"])
-        print_task_result(index, len(tasks), result)
+        append_output_data_row(result, index + 1, output_paths["output_data_path"])
+        print_task_result(index + 1, len(tasks), result)
         print(f'[JUDGE RESPONSE]: {result["judge_response"]}', flush=True)
 
+    results, observed_tasks = await run_tasks_concurrently(
+        tasks,
+        args.concurrency,
+        run_one,
+        persist_one,
+    )
+    update_metadata_concurrency(
+        output_paths["metadata_path"],
+        concurrency=args.concurrency,
+        observed_max_concurrency=observed_tasks,
+        observed_max_simultaneous_llm_requests=LLM_REQUEST_CONCURRENCY.maximum,
+    )
     return results
 
 
@@ -2412,6 +1969,7 @@ def main() -> None:
     parser.add_argument("--disable-thinking", dest="enable_thinking", action="store_false")
 
     parser.add_argument("--num-tasks", type=int, default=5)
+    parser.add_argument("--concurrency", type=positive_int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-turns", type=int, default=128)
     parser.add_argument("--max-tokens", type=int, default=131072)
@@ -2482,7 +2040,14 @@ def main() -> None:
 
     wall_time_s = time.time() - t0
     print_summary(results, wall_time_s)
-    write_metrics_file(results, wall_time_s, output_paths, args)
+    write_shared_metrics_file(
+        results,
+        wall_time_s,
+        output_paths,
+        args,
+        engine="vllm",
+        engine_version=get_package_version("vllm"),
+    )
 
 
 if __name__ == "__main__":

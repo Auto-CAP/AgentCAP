@@ -27,8 +27,10 @@ from huggingface_hub import snapshot_download
 
 from agent_cap.benchmarks import load_benchmark
 from agent_cap.backends.math_python_backend import MathPythonBackend
+from agent_cap.imo_output import write_metrics_file as write_shared_metrics_file
 from agent_cap.runner.unified_runner import collect_hardware_info
 from agent_cap.utils.package_version import get_package_version
+from agent_cap.utils.precision import resolve_precision
 from openai_harmony import (
     HarmonyEncodingName,
     load_harmony_encoding,
@@ -91,42 +93,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-
-def _find_config_value(config: Any, key: str) -> Any:
-    if isinstance(config, dict):
-        if key in config:
-            return config[key]
-        for value in config.values():
-            found = _find_config_value(value, key)
-            if found is not None:
-                return found
-    elif isinstance(config, list):
-        for item in config:
-            found = _find_config_value(item, key)
-            if found is not None:
-                return found
-    return None
-
-
-def infer_model_precision(model_path: str) -> str:
-    config_path = Path(model_path) / "config.json"
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            model_config = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return "unknown"
-
-    quant_method = _find_config_value(model_config, "quant_method")
-    if quant_method is not None:
-        quant_method_str = str(quant_method)
-        if re.search(r"\d", quant_method_str):
-            return quant_method_str
-
-    dtype = _find_config_value(model_config, "dtype")
-    if dtype is not None:
-        return str(dtype)
-
-    return "unknown"
 
 def collect_hardware_info_rocm_fallback() -> Dict[str, Any]:
     try:
@@ -223,7 +189,7 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         "hardware": hw_info,
         "model_config": {
             "model_name": _env_str("MODEL_NAME_FOR_METADATA", args.model_path),
-            "precision": infer_model_precision(args.model_path),
+            "precision": resolve_precision(args.model_path),
         },
         "system_environment": {
             "inference_engine": _env_str("INFERENCE_ENGINE", "vllm"),
@@ -271,124 +237,6 @@ def initialize_output_files(args: argparse.Namespace) -> Dict[str, str]:
         "output_data_path": str(output_data_path),
     }
 
-
-def _safe_mean(values: List[float]) -> float:
-    return statistics.mean(values) if values else 0.0
-
-
-def _safe_sum(values: List[float]) -> float:
-    return float(sum(values)) if values else 0.0
-
-
-def _p99(values: List[float]) -> float:
-    if not values:
-        return 0.0
-    if len(values) == 1:
-        return float(values[0])
-    return float(statistics.quantiles(values, n=100, method="inclusive")[98])
-
-
-def write_metrics_file(
-    results: List[Dict[str, Any]],
-    wall_time_s: float,
-    output_paths: Dict[str, str],
-    args: argparse.Namespace,
-) -> None:
-    total_examples = len(results)
-
-    latencies_s = [float(r["latency_ms"]) / 1000.0 for r in results]
-    ttft_s = [float(r["ttft_ms"]) / 1000.0 for r in results]
-    tpot_s = [float(r["tpot_ms_avg"]) / 1000.0 for r in results]
-
-    input_tokens_list = [int(r["input_tokens"]) for r in results]
-    output_tokens_list = [int(r["output_tokens"]) for r in results]
-    tool_calls_list = [int(r["tool_calls"]) for r in results]
-
-    total_input_tokens = int(sum(input_tokens_list))
-    total_output_tokens = int(sum(output_tokens_list))
-    total_tool_calls = int(sum(tool_calls_list))
-
-    num_requests_list = [int(r["num_requests"]) for r in results]
-    total_requests = int(sum(num_requests_list))
-
-    input_tokens_per_request = []
-    output_tokens_per_request = []
-    max_input_tokens_per_request_list = []
-
-    for r in results:
-        reqs = int(r["num_requests"])
-        total_in = int(r["input_tokens"])
-        total_out = int(r["output_tokens"])
-
-        if reqs > 0:
-            input_tokens_per_request.append(total_in / reqs)
-            output_tokens_per_request.append(total_out / reqs)
-        max_input_tokens_per_request_list.append(float(total_in))
-
-    decode_time_s_list = [
-        (float(r["tpot_ms_avg"]) / 1000.0) * int(r["output_tokens"])
-        for r in results
-    ]
-    total_decode_time_s = float(sum(decode_time_s_list))
-
-    acc = (
-        float(sum(float(r["score"]) for r in results)) / total_examples
-        if total_examples > 0
-        else 0.0
-    )
-
-    metrics = {
-        "performance": {
-            "e2e_s": float(wall_time_s),
-            "avg_e2e_latency_s": _safe_mean(latencies_s),
-            "p50_e2e_latency_s": float(statistics.median(latencies_s)) if latencies_s else 0.0,
-            "p99_e2e_latency_s": _p99(latencies_s),
-            "examples_per_second": (float(total_examples) / wall_time_s) if wall_time_s > 0 else 0.0,
-            "ttft": _safe_mean(ttft_s),
-            "p99_ttft": _p99(ttft_s),
-            "tpot": _safe_mean(tpot_s),
-            "p99_tpot": _p99(tpot_s),
-            "decode_time_s": total_decode_time_s,
-            "p99_decode_time_s": _p99(decode_time_s_list),
-            "output_throughput_tok_s": (float(total_output_tokens) / total_decode_time_s)
-            if total_decode_time_s > 0
-            else 0.0,
-        },
-        "agentic": {
-            "avg_total_input_tokens": _safe_mean([float(x) for x in input_tokens_list]),
-            "avg_total_output_tokens": _safe_mean([float(x) for x in output_tokens_list]),
-            "avg_tool_call_count": _safe_mean([float(x) for x in tool_calls_list]),
-            "avg_num_requests": _safe_mean([float(x) for x in num_requests_list]),
-            "avg_input_tokens_per_request": _safe_mean(input_tokens_per_request),
-            "avg_output_tokens_per_request": _safe_mean(output_tokens_per_request),
-            "avg_max_input_tokens_per_request": _safe_mean(max_input_tokens_per_request_list),
-            "total_input_tokens": total_input_tokens,
-            "total_output_tokens": total_output_tokens,
-            "total_cached_tokens": 0,
-            "avg_cache_hit_rate": 0.0,
-            "total_requests": total_requests,
-            "total_tool_calls": total_tool_calls,
-        },
-        "quality": {
-            "acc": acc,
-            "claim_coverage": "",
-            "eval_judge": args.judge_model,
-        },
-        "hardware": {
-            "gpu_type": _env_str("GPU_TYPE", "unknown"),
-            "num_gpus": _env_int("NUM_GPUS", args.tensor_parallel_size),
-            "vllm_version": get_package_version("vllm"),
-            "avg_gpu_utilization_pct": "",
-            "peak_gpu_memory_used_mb": "",
-            "avg_cpu_utilization_pct": "",
-        },
-    }
-
-    metrics_path = output_paths["metrics_path"]
-    with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=4)
-
-    print(f"Wrote metrics file: {metrics_path}")
 
 def append_output_data_row(
     result: Dict[str, Any],
@@ -1165,7 +1013,7 @@ def run_harmony_attempt(
     total_output_tokens = 0
     total_decode_time_s = 0.0
     total_prefill_time_s = 0.0
-    first_turn_ttft_s = 0.0
+    first_turn_ttft_s: Optional[float] = None
     tool_call_count = 0
     errors: List[str] = []
     response_text = ""
@@ -1199,7 +1047,6 @@ def run_harmony_attempt(
 
         for turn_idx in range(max_turns):
             prompt_ids = encoding.render_conversation_for_completion(conversation, Role.ASSISTANT)
-            total_input_tokens += len(prompt_ids)
 
             remaining_ctx = min(max_tokens, 131072) - len(prompt_ids)
             if remaining_ctx <= 0:
@@ -1215,8 +1062,6 @@ def run_harmony_attempt(
                 "stop_token_ids": stop_token_ids,
                 "return_token_ids": True,
             }
-
-            num_requests += 1
 
             try:
                 stream = client.completions.create(
@@ -1246,7 +1091,6 @@ def run_harmony_attempt(
 
                     if new_tokens:
                         token_buffer.extend(new_tokens)
-                        total_output_tokens += len(new_tokens)
 
                     if new_text:
                         text_chunks.append(new_text)
@@ -1273,24 +1117,25 @@ def run_harmony_attempt(
                     stream.close()
 
             if first_token_time is None:
-                total_prefill_time_s += 0.0
-                total_decode_time_s += 0.0
                 errors.append("Model returned no streamed tokens.")
                 break
 
+            num_requests += 1
+            total_input_tokens += len(prompt_ids)
+            total_output_tokens += len(token_buffer)
             total_prefill_time_s += max(0.0, first_token_time - stream_start)
             total_decode_time_s += max(0.0, stream_end - first_token_time)
 
             input_tokens_this_request = len(prompt_ids)
             output_tokens_this_request = len(token_buffer)
             prefill_time_s_this_request = max(0.0, first_token_time - stream_start)
-            if first_turn_ttft_s == 0.0:
+            if first_turn_ttft_s is None:
                 first_turn_ttft_s = prefill_time_s_this_request
             decode_time_s_this_request = max(0.0, stream_end - first_token_time)
             tpot_s_this_request = (
                 decode_time_s_this_request / output_tokens_this_request
                 if output_tokens_this_request > 0
-                else 0.0
+                else None
             )
             output_throughput_tok_s_this_request = (
                 output_tokens_this_request / decode_time_s_this_request
@@ -1298,25 +1143,18 @@ def run_harmony_attempt(
                 else 0.0
             )
 
-            if not token_buffer:
-                errors.append("Empty token buffer.")
-                break
+            try:
+                parsed_messages = encoding.parse_messages_from_completion_tokens(
+                    token_buffer,
+                    Role.ASSISTANT,
+                )
+            except Exception as exc:
+                errors.append(
+                    f"Harmony response parsing failed: {type(exc).__name__}: {exc}"
+                )
+                parsed_messages = []
 
-            parsed_messages = encoding.parse_messages_from_completion_tokens(
-                token_buffer,
-                Role.ASSISTANT,
-            )
-
-            if not parsed_messages:
-                response_text = "".join(text_chunks)
-                final_answer = _scan_for_answer(response_text)
-                break
-
-            if hasattr(conversation, "messages"):
-                conversation.messages.extend(parsed_messages)
-
-            last_message = parsed_messages[-1]
-
+            last_message = parsed_messages[-1] if parsed_messages else None
             recipient = getattr(last_message, "recipient", None)
             has_tool_calls_this_request = recipient is not None and "python" in str(recipient)
             num_tool_calls_this_request = 1 if has_tool_calls_this_request else 0
@@ -1336,6 +1174,18 @@ def run_harmony_attempt(
                     "num_tool_calls": num_tool_calls_this_request,
                 }
             )
+
+            if not token_buffer:
+                errors.append("Empty token buffer.")
+                break
+
+            if not parsed_messages:
+                response_text = "".join(text_chunks)
+                final_answer = _scan_for_answer(response_text)
+                break
+
+            if hasattr(conversation, "messages"):
+                conversation.messages.extend(parsed_messages)
 
             if getattr(last_message, "channel", None) == "final":
                 content = getattr(last_message, "content", None) or []
@@ -1404,14 +1254,19 @@ def run_harmony_attempt(
         # ttft_ms is the task's time to FIRST token (first turn's prefill wait); the
         # accumulated prefill across all turns is prefill_total_s below — one field
         # cannot serve both readings.
-        avg_ttft_ms = 1000.0 * first_turn_ttft_s
+        avg_ttft_ms = (
+            1000.0 * first_turn_ttft_s
+            if first_turn_ttft_s is not None
+            else None
+        )
         avg_tpot_ms = (
             1000.0 * total_decode_time_s / total_output_tokens
             if total_output_tokens > 0
-            else 0.0
+            else None
         )
 
         return {
+            "example_index": example_index,
             "task_id": task.id,
             "task_name": task.name,
             "category": task.category,
@@ -1427,9 +1282,11 @@ def run_harmony_attempt(
             "output_tokens": total_output_tokens,
             "latency_ms": (time.time() - t0) * 1000.0,
             "ttft_ms": avg_ttft_ms,
-            "prefill_total_s": total_prefill_time_s,
+            "prefill_total_s": (
+                total_prefill_time_s if first_turn_ttft_s is not None else None
+            ),
             "tpot_ms_avg": avg_tpot_ms,
-            "tpot_ms_p99": 0.0,
+            "tpot_ms_p99": None,
             "errors": errors,
             "judge_equivalent": judge_result.get("equivalent", False),
             "judge_response": judge_result.get("raw_response"),
@@ -1495,11 +1352,19 @@ def print_task_result(index: int, total: int, result: Dict[str, Any]) -> None:
     print(f"Expected:  {result['expected']}")
     print(f"Predicted: {result['predicted']}")
     print(f"Score:     {result['score']:.1f}")
+    ttft_display = (
+        f"{result['ttft_ms']:.1f} ms" if result.get("ttft_ms") is not None else "null"
+    )
+    tpot_display = (
+        f"{result['tpot_ms_avg']:.1f} ms"
+        if result.get("tpot_ms_avg") is not None
+        else "null"
+    )
     print(
         f"Tokens in/out: {result['input_tokens']}/{result['output_tokens']} | "
         f"Latency: {result['latency_ms']:.1f} ms | "
-        f"TTFT: {result['ttft_ms']:.1f} ms | "
-        f"TPOT(avg): {result['tpot_ms_avg']:.1f} ms | "
+        f"TTFT: {ttft_display} | "
+        f"TPOT(avg): {tpot_display} | "
         f"Python calls: {result['tool_calls']}"
     )
     if result["errors"]:
@@ -1517,8 +1382,10 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
     avg_in = statistics.mean([r["input_tokens"] for r in results]) if results else 0.0
     avg_out = statistics.mean([r["output_tokens"] for r in results]) if results else 0.0
     avg_latency = statistics.mean([r["latency_ms"] for r in results]) if results else 0.0
-    avg_ttft = statistics.mean([r["ttft_ms"] for r in results]) if results else 0.0
-    avg_tpot = statistics.mean([r["tpot_ms_avg"] for r in results]) if results else 0.0
+    ttft_values = [r["ttft_ms"] for r in results if r.get("ttft_ms") is not None]
+    tpot_values = [r["tpot_ms_avg"] for r in results if r.get("tpot_ms_avg") is not None]
+    avg_ttft = statistics.mean(ttft_values) if ttft_values else None
+    avg_tpot = statistics.mean(tpot_values) if tpot_values else None
 
     answer_counter = Counter(r["predicted"] for r in results if r["predicted"] is not None)
 
@@ -1532,8 +1399,8 @@ def print_summary(results: List[Dict[str, Any]], wall_time_s: float) -> None:
     print(f"Avg input tokens:    {avg_in:.1f}")
     print(f"Avg output tokens:   {avg_out:.1f}")
     print(f"Avg latency:         {avg_latency:.1f} ms")
-    print(f"Avg TTFT:            {avg_ttft:.1f} ms")
-    print(f"Avg TPOT:            {avg_tpot:.1f} ms")
+    print(f"Avg TTFT:            {avg_ttft:.1f} ms" if avg_ttft is not None else "Avg TTFT:            null")
+    print(f"Avg TPOT:            {avg_tpot:.1f} ms" if avg_tpot is not None else "Avg TPOT:            null")
     print(f"Total python calls:  {total_tool_calls}")
 
     if answer_counter:
@@ -1642,7 +1509,14 @@ def main() -> None:
 
     wall_time_s = time.time() - t0
     print_summary(results, wall_time_s)
-    write_metrics_file(results, wall_time_s, output_paths, args)
+    write_shared_metrics_file(
+        results,
+        wall_time_s,
+        output_paths,
+        args,
+        engine="vllm",
+        engine_version=get_package_version("vllm"),
+    )
 
 
 if __name__ == "__main__":
