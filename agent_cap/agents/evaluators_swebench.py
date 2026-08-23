@@ -185,6 +185,48 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
             inst_dir = out_dir / "eval_k8s" / iid
             inst_dir.mkdir(parents=True, exist_ok=True)
 
+            # Reuse a completed grading of the identical patch.
+            #
+            # finalize() grades everything in _buffer, and a --resume pass
+            # re-feeds every already-finished row into the evaluator. Without
+            # this, a run that retries infrastructure failures re-grades all of
+            # its passing tasks on every attempt: a fresh pod and a full test
+            # suite each time, for a patch that has not changed and cannot
+            # produce a different answer for any legitimate reason.
+            #
+            # It also stops being merely wasteful. Instances whose tests call
+            # out to a public service -- psf/requests hits httpbin.org -- get
+            # rate-limited into 503s, so the same patch grades resolved on one
+            # attempt and unresolved on the next. Re-grading is what
+            # manufactures that flapping.
+            #
+            # Keyed on the patch text, so a retry that produces a *different*
+            # patch is always graded afresh. AGENTCAP_EVAL_NO_CACHE=1 forces a
+            # full re-grade.
+            #
+            # The key is graded_patch.diff, NOT patch.diff. patch.diff is
+            # written before grading starts, and grading can end without
+            # writing a report -- a patch that fails to apply returns early,
+            # and a crash or timeout can land anywhere. Keying on it would let
+            # this sequence serve a stale verdict: patch A graded, retry with
+            # patch B overwrites patch.diff, B fails to apply, report.json
+            # still holds A's result, and the next attempt matches B against
+            # B and returns A's verdict. graded_patch.diff is written only
+            # after report.json, so its presence means that report describes
+            # exactly this patch.
+            report_path = inst_dir / "report.json"
+            graded_patch_path = inst_dir / "graded_patch.diff"
+            if (os.environ.get("AGENTCAP_EVAL_NO_CACHE") != "1"
+                    and report_path.is_file() and graded_patch_path.is_file()):
+                try:
+                    if graded_patch_path.read_text() == patch:
+                        info = json.loads(report_path.read_text()).get(iid, {})
+                        if isinstance(info, dict) and isinstance(info.get("resolved"), bool):
+                            return {"resolved": bool(info["resolved"]),
+                                    "details": info, "cached": True}
+                except (OSError, ValueError):
+                    pass  # unreadable cache is not evidence: grade it properly
+
             box = None
             try:
                 try:
@@ -226,6 +268,10 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
                 )
                 info = report.get(iid, {})
                 (inst_dir / "report.json").write_text(json.dumps(report, indent=2))
+                # Written last, and only on the path that produced a report:
+                # this file is what marks the report as describing this exact
+                # patch. See the cache check above.
+                (inst_dir / "graded_patch.diff").write_text(patch)
                 return {"resolved": bool(info.get("resolved")), "details": info}
             except Exception as exc:
                 return {"resolved": False, "details": {"error": str(exc)[:300]}}
@@ -246,7 +292,9 @@ class SWEBenchK8sEvaluator(SWEBenchEvaluator):
                     results[iid] = {"resolved": False, "details": {"error": str(exc)[:300]}}
                 done += 1
                 n_res = sum(1 for v in results.values() if v.get("resolved"))
-                print(f"[swebench-k8s eval] {done}/{len(futs)} graded, "
-                      f"{n_res} resolved — {iid}", file=sys.stderr, flush=True)
+                n_cached = sum(1 for v in results.values() if v.get("cached"))
+                print(f"[swebench-k8s eval] {done}/{len(futs)} graded "
+                      f"({n_cached} reused), {n_res} resolved — {iid}",
+                      file=sys.stderr, flush=True)
         (out_dir / "eval_k8s_results.json").write_text(json.dumps(results, indent=2))
         return results
