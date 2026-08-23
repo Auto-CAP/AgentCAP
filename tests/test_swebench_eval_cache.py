@@ -16,16 +16,22 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+_UNSET = object()
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from agent_cap.agents.evaluators_swebench import SWEBenchK8sEvaluator  # noqa: E402
 
 
-def _seed(out_dir: Path, iid: str, patch_text: str, resolved, raw_report=None):
-    """Write what a completed grading of `patch_text` leaves behind.
+def _seed(out_dir: Path, iid: str, patch_text: str, resolved, raw_report=None,
+          graded_patch=_UNSET):
+    """Write what a *completed* grading of `patch_text` leaves behind.
 
-    `raw_report` writes the report file verbatim, for the malformed-cache case.
+    `graded_patch` overrides the post-report marker independently of
+    patch.diff, so a test can reproduce a directory where grading started on
+    one patch and the report belongs to another. `raw_report` writes the report
+    file verbatim, for the malformed-cache case.
     """
     d = out_dir / "eval_k8s" / iid
     d.mkdir(parents=True)
@@ -33,6 +39,9 @@ def _seed(out_dir: Path, iid: str, patch_text: str, resolved, raw_report=None):
     (d / "report.json").write_text(
         raw_report if raw_report is not None
         else json.dumps({iid: {"resolved": resolved}}))
+    marker = patch_text if graded_patch is _UNSET else graded_patch
+    if marker is not None:
+        (d / "graded_patch.diff").write_text(marker)
 
 
 class EvalCacheTests(unittest.TestCase):
@@ -98,6 +107,28 @@ class EvalCacheTests(unittest.TestCase):
         graded, _ = self._run(
             buffer={"a": "PATCH-A"}, seeds={"a": ("PATCH-A", True)},
             env={"AGENTCAP_EVAL_NO_CACHE": "1"})
+        self.assertEqual(graded, ["a"])
+
+    def test_report_from_a_different_patch_is_not_served(self):
+        """The sequence the marker exists to stop.
+
+        Patch A grades and leaves a report. A retry with patch B overwrites
+        patch.diff, then fails to apply and returns before writing a report --
+        so report.json still describes A. Keying the cache on patch.diff would
+        match B against B and hand back A's verdict.
+        """
+        graded, _ = self._run(
+            buffer={"a": "PATCH-B"},
+            seeds={"a": ("PATCH-B", True, None, "PATCH-A")})
+        self.assertEqual(graded, ["a"], "a report for a different patch is not evidence")
+
+    def test_report_without_the_marker_is_graded(self):
+        """Grading that was interrupted after the report but before the marker
+        -- or a directory written by a version that had neither -- must not be
+        trusted."""
+        graded, _ = self._run(
+            buffer={"a": "PATCH-A"},
+            seeds={"a": ("PATCH-A", True, None, None)})
         self.assertEqual(graded, ["a"])
 
     def test_malformed_report_is_graded_rather_than_trusted(self):
