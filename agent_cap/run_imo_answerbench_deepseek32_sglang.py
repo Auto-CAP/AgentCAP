@@ -825,6 +825,131 @@ def _safe_json_loads_arguments(arguments: Optional[str]) -> Dict[str, Any]:
     except Exception:
         return {"code": arguments}
 
+def _looks_like_unparsed_deepseek_tool_call(text: str) -> bool:
+    """
+    Detect cases where DeepSeek-V3.2 emitted raw DSML/tool-call markup,
+    but SGLang did not parse it into structured tool_calls.
+    """
+    if not text:
+        return False
+
+    markers = [
+        "<｜DSML｜function_calls>",
+        "<｜DSML｜invoke",
+        "<｜DSML｜channel",
+        "<｜DSML｜tool",
+        "<function_calls>",
+        "</function_calls>",
+        "<tool_call>",
+        "</tool_call>",
+    ]
+    return any(marker in text for marker in markers)
+
+
+_DSML_TOKEN = "｜DSML｜"
+
+
+def _coerce_dsml_param(value: str, string_attr: Optional[str]) -> Any:
+    if string_attr == "true":
+        return value
+
+    value_stripped = value.strip()
+
+    if string_attr == "false":
+        try:
+            return json.loads(value_stripped)
+        except Exception:
+            pass
+
+        lowered = value_stripped.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        if lowered == "null":
+            return None
+
+        try:
+            return int(value_stripped)
+        except Exception:
+            pass
+
+        try:
+            return float(value_stripped)
+        except Exception:
+            pass
+
+    return value
+
+
+def parse_raw_deepseek32_dsml_tool_calls(text: str) -> List[Dict[str, Any]]:
+    """
+    Recover DeepSeek-V3.2 DSML tool calls when SGLang leaks them into
+    content/reasoning instead of returning structured tool_calls.
+    """
+    if not text:
+        return []
+
+    dsml = re.escape(_DSML_TOKEN)
+
+    invoke_re = re.compile(
+        rf"<(?:{dsml})?invoke\s+name=[\"']([^\"']+)[\"']\s*>\s*(.*?)\s*</(?:{dsml})?invoke>",
+        re.DOTALL,
+    )
+
+    param_re = re.compile(
+        rf"<(?:{dsml})?parameter\s+name=[\"']([^\"']+)[\"'](?:\s+string=[\"'](true|false)[\"'])?\s*>\s*(.*?)\s*</(?:{dsml})?parameter>",
+        re.DOTALL,
+    )
+
+    recovered: List[Dict[str, Any]] = []
+
+    for idx, invoke_match in enumerate(invoke_re.finditer(text)):
+        function_name = invoke_match.group(1).strip()
+        invoke_body = invoke_match.group(2)
+
+        args: Dict[str, Any] = {}
+
+        for param_match in param_re.finditer(invoke_body):
+            param_name = param_match.group(1).strip()
+            string_attr = param_match.group(2)
+            param_value = param_match.group(3)
+
+            args[param_name] = _coerce_dsml_param(
+                param_value,
+                string_attr,
+            )
+
+        recovered.append(
+            {
+                "id": f"call_raw_dsml_{idx}",
+                "type": "function",
+                "function": {
+                    "name": function_name,
+                    "arguments": json.dumps(
+                        args,
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        )
+
+    return recovered
+
+
+def strip_raw_deepseek32_dsml_blocks(text: str) -> str:
+    if not text:
+        return text
+
+    dsml = re.escape(_DSML_TOKEN)
+
+    pattern = re.compile(
+        rf"<(?:{dsml})?function_calls>\s*.*?\s*</(?:{dsml})?function_calls>",
+        re.DOTALL,
+    )
+
+    return pattern.sub("", text).strip()
+
 
 def _get_usage_int(usage: Any, name: str, default: int = 0) -> int:
     value = getattr(usage, name, None)
@@ -1130,7 +1255,48 @@ def run_deepseek32_sglang_attempt(
             content = request_result["content"]
             reasoning = request_result["reasoning"]
             tool_calls = request_result["tool_calls"]
-
+            
+            # ------------------------------------------------------------------
+            # DeepSeek-V3.2 broken/raw DSML tool-call recovery
+            # ------------------------------------------------------------------
+            combined_text = "\n".join(
+                x for x in [reasoning, content] if x
+            )
+            
+            if (
+                not tool_calls
+                and _looks_like_unparsed_deepseek_tool_call(combined_text)
+            ):
+                recovered_tool_calls = parse_raw_deepseek32_dsml_tool_calls(
+                    combined_text
+                )
+            
+                if recovered_tool_calls:
+                    errors.append(
+                        "Recovered raw DeepSeek-V3.2 DSML tool call after "
+                        "SGLang returned tool_calls=[]."
+                    )
+            
+                    print(
+                        f"[raw DSML recovery] recovered "
+                        f"{len(recovered_tool_calls)} tool call(s)",
+                        flush=True,
+                    )
+            
+                    tool_calls = recovered_tool_calls
+            
+                    # Remove the raw DSML markup from visible assistant content,
+                    # since it is now represented by structured tool_calls.
+                    content = (
+                        strip_raw_deepseek32_dsml_blocks(content or "")
+                        or None
+                    )
+                else:
+                    errors.append(
+                        "Raw DeepSeek-V3.2 DSML/tool-call tags appeared, "
+                        "but fallback parser failed."
+                    )
+            
             input_tokens_this_request = int(request_result["prompt_tokens"])
             output_tokens_this_request = int(request_result["completion_tokens"])
             cached_tokens_this_request = int(request_result["cached_tokens"])
@@ -1191,24 +1357,35 @@ def run_deepseek32_sglang_attempt(
                     "tool_calls": tool_calls,
                 }
                 messages.append(assistant_message)
-
+            
                 for tool_call in tool_calls:
                     function_name = tool_call["function"]["name"]
-                    arguments_str = tool_call["function"].get("arguments", "{}")
+                    arguments_str = tool_call["function"].get(
+                        "arguments",
+                        "{}",
+                    )
                     tool_args = _safe_json_loads_arguments(arguments_str)
-
+            
                     try:
-                        tool_output = backend.execute_tool(function_name, tool_args)
+                        tool_output = backend.execute_tool(
+                            function_name,
+                            tool_args,
+                        )
                     except Exception as exc:
-                        tool_output = f"[ERROR] Tool execution failed: {type(exc).__name__}: {exc}"
-
+                        tool_output = (
+                            f"[ERROR] Tool execution failed: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+            
                     tool_call_count += 1
+            
                     print(
                         f"[run_imo_answerbench_deepseek32_sglang.py] "
-                        f"tool called {tool_call_count} times: {function_name}",
+                        f"tool called {tool_call_count} times: "
+                        f"{function_name}",
                         flush=True,
                     )
-
+            
                     if "[ERROR] Execution timed out" in tool_output:
                         errors.append("Python tool timeout")
                     elif (
@@ -1217,7 +1394,7 @@ def run_deepseek32_sglang_attempt(
                         or "Error:" in tool_output
                     ):
                         errors.append("Python tool error")
-
+            
                     messages.append(
                         {
                             "role": "tool",
@@ -1225,12 +1402,24 @@ def run_deepseek32_sglang_attempt(
                             "content": tool_output,
                         }
                     )
-
+            
                 continue
-
+            
+            
+            # There were no structured or recovered tool calls.
+            # Check whether suspicious DSML still remains.
+            if _looks_like_unparsed_deepseek_tool_call(combined_text):
+                errors.append(
+                    "Possible DeepSeek-V3.2 tool-call parser failure: "
+                    "raw DSML/tool-call tags appeared in reasoning/content "
+                    "while structured tool_calls was empty."
+                )
+            
             response_text = content or ""
+            
             if not response_text and reasoning:
                 response_text = reasoning
+            
             break
 
         expected = (task.eval_config or {}).get("expected")
