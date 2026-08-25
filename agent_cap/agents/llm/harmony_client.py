@@ -28,9 +28,10 @@ Auto-routes on model names matching `(?i)gpt-?oss`. Override with
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 import aiohttp
 
@@ -326,20 +327,16 @@ class HarmonyClient:
             if resp.status >= 400:
                 text = await resp.text()
                 raise RuntimeError(f"{label} failed ({resp.status}): {text[:500]}")
-            async for raw_line in resp.content:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line:
-                    continue
-                data_str = line[len("data:"):].strip() if line.startswith("data:") else line
+            async for data_str in _iter_sse_data(resp.content):
                 if data_str == "[DONE]":
                     break
-                if first_chunk_s is None:
-                    first_chunk_s = time.perf_counter() - t0
                 try:
                     chunk = json.loads(data_str)
                 except json.JSONDecodeError:
                     continue
                 if isinstance(chunk, dict):
+                    if first_chunk_s is None:
+                        first_chunk_s = time.perf_counter() - t0
                     latest = chunk
 
         if not latest:
@@ -359,6 +356,44 @@ class HarmonyClient:
             if resp.status >= 400:
                 raise RuntimeError(f"{label} failed ({resp.status}): {text[:500]}")
             return json.loads(text)
+
+
+async def _iter_sse_data(content: Any) -> AsyncIterator[str]:
+    """Yield complete SSE data payloads without StreamReader line limits."""
+    buffered = bytearray()
+    async for chunk in content.iter_any():
+        if not chunk:
+            continue
+        buffered.extend(chunk)
+        while True:
+            boundary = re.search(br"\r?\n\r?\n", buffered)
+            if boundary is None:
+                break
+            event = bytes(buffered[:boundary.start()])
+            del buffered[:boundary.end()]
+            data = _sse_event_data(event)
+            if data is not None:
+                yield data
+    if buffered:
+        data = _sse_event_data(bytes(buffered))
+        if data is not None:
+            yield data
+
+
+def _sse_event_data(event: bytes) -> Optional[str]:
+    data_lines: List[bytes] = []
+    for line in event.splitlines():
+        if line.startswith(b":"):
+            continue
+        field, separator, value = line.partition(b":")
+        if not separator or field != b"data":
+            continue
+        if value.startswith(b" "):
+            value = value[1:]
+        data_lines.append(value)
+    if not data_lines:
+        return None
+    return b"\n".join(data_lines).decode("utf-8", errors="replace").strip()
 
 
 def _build_replay_call_message(

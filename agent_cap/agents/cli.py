@@ -30,6 +30,7 @@ import asyncio
 import copy
 import glob
 import json
+import math
 import os
 import sys
 import time
@@ -51,7 +52,11 @@ from agent_cap.agents.registry import (
 )
 from agent_cap.agents.strategies import SequentialStrategy
 from agent_cap.agents.tools import LocalToolRegistry, build_demo_tools
-from agent_cap.agents.types import AgentSpec, ModelEndpoint, Task
+from agent_cap.agents.types import AgentSpec, ModelEndpoint, RunResult, Task
+
+
+DEFAULT_MCP_TASK_TIMEOUT_S = 600.0
+RUNTIME_OBSERVATION_FILENAME = "runtime-observation.json"
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -132,6 +137,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         "Use with --mcp-server-url")
     p.add_argument("--mcp-server-url", default=None,
                    help="MCP server URL for --tool-backend mcp")
+    p.add_argument("--task-timeout", type=float, default=None,
+                   help="Per-task deadline in seconds (default: 600 for MCP; "
+                        "unbounded for other backends)")
     p.add_argument("--dataset", default=None,
                    help="Dataset name passed to unified_runner._load_dataset_tasks")
     p.add_argument("--task-indices", default=None,
@@ -501,7 +509,10 @@ async def _run_async(args: argparse.Namespace) -> int:
         results_path = out_dir / "results.jsonl"
         output_data_path = out_dir / "output-data.jsonl"
         if args.resume and results_path.exists():
-            done = _load_resume(results_path)
+            done = _load_resume(
+                results_path,
+                retry_errors=_uses_mcp_backend(args, config_data),
+            )
             print(f"resume: {len(done)} task(s) already complete in {results_path}",
                   file=sys.stderr)
 
@@ -514,14 +525,24 @@ async def _run_async(args: argparse.Namespace) -> int:
         "output_dir": str(out_dir) if out_dir else "/tmp/sweagent_out",
     }
     requested_concurrency = max(1, int(args.concurrency))
+    task_timeout_s = _resolve_task_timeout(args, config_data)
     sem = asyncio.Semaphore(requested_concurrency)
     observed_max_concurrency = 0
     write_lock = asyncio.Lock()
+    if out_dir is not None:
+        _write_runtime_observation(
+            out_dir,
+            requested_task_concurrency=requested_concurrency,
+            observed_max_task_concurrency=0,
+            resume=args.resume,
+        )
 
     async def run_all(llm, session=None) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = [None] * len(tasks)  # type: ignore
         sess = session if session is not None else getattr(llm, "_session", None)
         tools: Any = await _resolve_tools(args, config_data, session=sess)
+        if results_path and args.resume:
+            _compact_resume_results(results_path, tasks, done)
         res_f = results_path.open("a", encoding="utf-8") if results_path else None
         out_f = output_data_path.open("w", encoding="utf-8") if output_data_path else None
 
@@ -529,7 +550,6 @@ async def _run_async(args: argparse.Namespace) -> int:
             nonlocal observed_max_concurrency
             if task.task_id in done:
                 row = done[task.task_id]
-                results[i] = row
                 # Re-buffer resumed outputs into batch evaluators (e.g.
                 # swebench finalize()) — otherwise resumed tasks are never
                 # graded and the final accuracy silently drops them.
@@ -539,7 +559,12 @@ async def _run_async(args: argparse.Namespace) -> int:
                         evaluator.evaluate(_eval_meta(task), row.get("output_text", "") or "")
                     except Exception:
                         pass
-                _emit_progress(i, task, row)
+                async with write_lock:
+                    if out_f:
+                        out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                        out_f.flush()
+                    results[i] = row
+                    _emit_progress(i, task, row)
                 return
             async with sem:
                 # The semaphore value has already been decremented on entry.
@@ -547,10 +572,15 @@ async def _run_async(args: argparse.Namespace) -> int:
                 # concurrency was actually reached, rather than merely
                 # preserving the CLI argument in metadata.
                 active_now = requested_concurrency - sem._value
-                observed_max_concurrency = max(
-                    observed_max_concurrency,
-                    active_now,
-                )
+                if active_now > observed_max_concurrency:
+                    observed_max_concurrency = active_now
+                    if out_dir is not None:
+                        _write_runtime_observation(
+                            out_dir,
+                            requested_task_concurrency=requested_concurrency,
+                            observed_max_task_concurrency=active_now,
+                            resume=True,
+                        )
                 if hasattr(tools, "set_task_allowlist"):
                     unified = (task.metadata or {}).get("_unified_task")
                     et = getattr(unified, "enabled_tools", None) if unified else None
@@ -569,18 +599,21 @@ async def _run_async(args: argparse.Namespace) -> int:
                             ag.state.messages.insert(0, {"role": "system", "content": task_sys})
                         else:
                             ag.state.messages[0] = {"role": "system", "content": task_sys}
+                task_started_at = time.perf_counter()
                 try:
-                    run_res = await strategy.run(task, agents, tools)
-                    row = _serialize_result(run_res, args.verbose)
+                    run_res = await _run_with_timeout(
+                        strategy.run(task, agents, tools), task_timeout_s
+                    )
                 except Exception as exc:
-                    row = {
-                        "task_id": task.task_id,
-                        "strategy": args.strategy,
-                        "output_text": "",
-                        "e2e_latency_s": 0.0,
-                        "errors": [f"{type(exc).__name__}: {exc}"[:500]],
-                        "num_turns": 0,
-                    }
+                    run_res = _partial_failure_result(
+                        task=task,
+                        strategy_name=args.strategy,
+                        agents=agents,
+                        elapsed_s=time.perf_counter() - task_started_at,
+                        exc=exc,
+                        timeout_s=task_timeout_s,
+                    )
+                row = _serialize_result(run_res, args.verbose)
                 if evaluator is not None and not row.get("errors"):
                     ev = evaluator.evaluate(_eval_meta(task), row.get("output_text", "") or "")
                     row["eval_passed"] = ev.passed
@@ -612,7 +645,7 @@ async def _run_async(args: argparse.Namespace) -> int:
                     await tools.teardown()
                 except Exception:
                     pass
-        return [r for r in results if r is not None]
+        return _require_complete_results(tasks, results)
 
     run_started_at = time.perf_counter()
     if args.mock:
@@ -732,7 +765,9 @@ def _eval_meta(task: Task) -> Dict[str, Any]:
     return meta
 
 
-def _load_resume(path: Path) -> Dict[str, Dict[str, Any]]:
+def _load_resume(
+    path: Path, *, retry_errors: bool = False
+) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -745,8 +780,139 @@ def _load_resume(path: Path) -> Dict[str, Dict[str, Any]]:
                 continue
             tid = row.get("task_id")
             if isinstance(tid, str) and tid:
-                out[tid] = row
+                if retry_errors and row.get("errors"):
+                    out.pop(tid, None)
+                else:
+                    out[tid] = row
     return out
+
+
+def _uses_mcp_backend(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
+    backend = str(args.tool_backend or config.get("tool_backend") or "").lower()
+    return backend in ("mcp", "mcp-atlas")
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _compact_resume_results(
+    path: Path,
+    tasks: List[Task],
+    done: Dict[str, Dict[str, Any]],
+) -> None:
+    text = "".join(
+        json.dumps(done[task.task_id], ensure_ascii=False) + "\n"
+        for task in tasks
+        if task.task_id in done
+    )
+    _atomic_write_text(path, text)
+
+
+def _resolve_task_timeout(
+    args: argparse.Namespace, config: Dict[str, Any]
+) -> Optional[float]:
+    raw = args.task_timeout
+    if raw is None:
+        raw = config.get("task_timeout")
+    if raw is None and _uses_mcp_backend(args, config):
+        raw = DEFAULT_MCP_TASK_TIMEOUT_S
+    if raw is None:
+        return None
+    timeout_s = float(raw)
+    if not math.isfinite(timeout_s) or timeout_s <= 0:
+        raise ValueError("task_timeout must be a finite positive number")
+    return timeout_s
+
+
+async def _run_with_timeout(awaitable: Any, timeout_s: Optional[float]) -> Any:
+    if timeout_s is None:
+        return await awaitable
+    return await asyncio.wait_for(awaitable, timeout=timeout_s)
+
+
+def _partial_failure_result(
+    *,
+    task: Task,
+    strategy_name: str,
+    agents: Dict[str, Agent],
+    elapsed_s: float,
+    exc: Exception,
+    timeout_s: Optional[float],
+) -> RunResult:
+    if isinstance(exc, asyncio.TimeoutError) and timeout_s is not None:
+        detail = f"task exceeded {timeout_s:g}s deadline"
+    else:
+        detail = str(exc) or "operation timed out"
+    partial_output = ""
+    for agent in reversed(list(agents.values())):
+        partial_output = agent.final_text()
+        if partial_output:
+            break
+    turns = [turn for agent in agents.values() for turn in agent.state.turns]
+    return RunResult(
+        task_id=task.task_id,
+        strategy=strategy_name,
+        output_text=partial_output,
+        e2e_latency_s=max(0.0, elapsed_s),
+        per_role_usage={role: agent.state.usage for role, agent in agents.items()},
+        turns=turns,
+        errors=[f"{type(exc).__name__}: {detail}"[:500]],
+    )
+
+
+def _require_complete_results(
+    tasks: List[Task], results: List[Optional[Dict[str, Any]]]
+) -> List[Dict[str, Any]]:
+    missing = [task.task_id for task, result in zip(tasks, results) if result is None]
+    if missing:
+        raise RuntimeError(
+            "task runner completed without result rows for: " + ", ".join(missing)
+        )
+    return [result for result in results if result is not None]
+
+
+def _write_runtime_observation(
+    out_dir: Path,
+    *,
+    requested_task_concurrency: int,
+    observed_max_task_concurrency: int,
+    resume: bool,
+) -> Path:
+    path = out_dir / RUNTIME_OBSERVATION_FILENAME
+    previous: Dict[str, Any] = {}
+    if resume and path.exists():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"cannot preserve runtime observation from {path}") from exc
+        if not isinstance(previous, dict):
+            raise RuntimeError(f"runtime observation is not a JSON object: {path}")
+    payload = {
+        "schema_version": 1,
+        "publishable": False,
+        "requested_task_concurrency": max(
+            int(previous.get("requested_task_concurrency") or 0),
+            int(requested_task_concurrency),
+        ),
+        "observed_max_task_concurrency": max(
+            int(previous.get("observed_max_task_concurrency") or 0),
+            int(observed_max_task_concurrency),
+        ),
+    }
+    _atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+    )
+    return path
 
 
 def _emit_progress(i: int, task: Task, row: Dict[str, Any]) -> None:
