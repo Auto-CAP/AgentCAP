@@ -243,6 +243,12 @@ class HarmonyClient:
             "temperature": float(endpoint.temperature),
             "top_p": float(endpoint.top_p),
             "stop_token_ids": list(self._stop_token_ids),
+            # Harmony decoding needs the response token ids. vLLM leaves
+            # choices[].token_ids null unless this is asked for, and the null
+            # silently degrades into the fallback text path below -- no
+            # tool_calls, no analysis/final split. Matches the same request in
+            # runner/llm_client.py and run_imo_answerbench_4.py.
+            "return_token_ids": True,
         }
         if endpoint.seed is not None:
             payload["seed"] = int(endpoint.seed)
