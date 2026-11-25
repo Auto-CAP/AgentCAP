@@ -100,6 +100,66 @@ No LLM, no GPU — sanity check the framework:
 python -m agent_cap.agents --mock --strategy plan-execute --task "compute 1+1"
 ```
 
+### Run on Harbor — IMO-AnswerBench and NL2Repo
+
+[Harbor](https://github.com/harbor-framework/harbor) builds a container per task
+and grades the result; AgentCAP's `CAPAgent` runs the strategy (single,
+plan-execute, ...) on this machine and executes its tool calls inside that
+container. Needs Python ≥ 3.12 and Docker.
+
+```bash
+pip install -e ".[harbor]"
+```
+
+**1. Turn a benchmark into Harbor tasks** (once):
+
+```bash
+# IMO-AnswerBench: the first N problems, same order as python -m agent_cap.agents
+python -m agent_cap.harbor adapt imo-answerbench --out datasets/imo-answerbench --limit 25
+
+# NL2Repo: from a checkout of upstream NL2RepoBench (104 tasks)
+git clone https://github.com/multimodal-art-projection/NL2RepoBench
+python -m agent_cap.harbor adapt nl2repo --source NL2RepoBench --out datasets/nl2repo
+```
+
+**2. Run a team.** Give one `--role` per role; the fields are the same as
+`--agent` in `python -m agent_cap.agents` (`name`, `base_url`, `api_key`,
+`protocol`, `max_tokens`, `temperature`, ...). Quote the spec so `${VAR}`
+stays unexpanded; it is resolved at run time and never written to job files.
+
+```bash
+# one agent, IMO-AnswerBench, 4 tasks in parallel
+python -m agent_cap.harbor run \
+  --benchmark imo-answerbench --dataset datasets/imo-answerbench \
+  --role 'agent=name=Qwen/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=EMPTY' \
+  --concurrency 4
+
+# planner + executor on one NL2Repo task
+python -m agent_cap.harbor run \
+  --benchmark nl2repo --dataset datasets/nl2repo --task-names math-verify \
+  --strategy plan-execute \
+  --role 'planner=name=gpt-5.4,base_url=https://api.openai.com/v1,api_key=${OPENAI_API_KEY}' \
+  --role 'executor=name=Qwen/Qwen3.5-27B,base_url=http://localhost:30000/v1,api_key=EMPTY'
+```
+
+A TEASBench agent config can replace the `--role` flags:
+`--teas-agent-yaml pipeline/configs/agents/imo-answerbench_gptoss_sglang.yaml`.
+For IMO answers that math-verify rejects, set `IMO_JUDGE_BASE_URL`,
+`IMO_JUDGE_API_KEY` and `IMO_JUDGE_MODEL` (or `OPENROUTER_API_KEY`) before
+`run`; without them only math-verify grades.
+
+**3. Read the results** in `results/harbor/<job>/`:
+
+| File | Contents |
+|---|---|
+| `results.jsonl` | one row per task: reward, pass/fail, tokens per role, per-request TTFT/decode time |
+| `metrics_*.json`, `metadata_*.json`, `detailed-results_*.jsonl`, `output-data_*.jsonl` | the four TEAS files, as read by TEASBench's cost scripts |
+
+Harbor's own trial logs are in `jobs/<job>/` (browse them with `harbor view jobs`).
+To re-export a finished job:
+`python -m agent_cap.harbor export --job-dir jobs/<job> --dataset imo-answerbench --out results/<job>`.
+Details, grading rules and caveats: [docs/harbor.md](docs/harbor.md).
+
 ## Documentation
 
 | File | Topic |
