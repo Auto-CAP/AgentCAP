@@ -116,6 +116,22 @@ python -m agent_cap.agents --mock --strategy plan-execute --task "compute 1+1"
 | [docs/agents/extending.md](docs/agents/extending.md) | Recipes for custom strategies, protocols, tools, evaluators |
 | [docs/harbor.md](docs/harbor.md) | Run AgentCAP on Harbor: `CAPAgent`, IMO-AnswerBench and NL2Repo adapters, TEAS export |
 
+## Citation
+
+If you use AgentCARD, please cite:
+
+```bibtex
+@misc{jiang2026agentcard,
+  title         = {Specialize Roles, Mix Deployments: Pushing the Cost-Accuracy Frontier of {LLM} Agent Teams},
+  author        = {Jiang, Yinsicheng and Cheng, Liang and Huang, Yeqi and Zhao, Yufan and Lu, Zhan and Dong, Li and Li, Wenda and Ponti, Edoardo and Mai, Luo},
+  year          = {2026},
+  eprint        = {2606.20629},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.MA},
+  url           = {https://arxiv.org/abs/2606.20629}
+}
+```
+
 ## Acknowledgement
 
 This project is supported by the Advanced Research and Invention Agency (ARIA)'s
