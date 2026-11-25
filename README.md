@@ -114,6 +114,7 @@ python -m agent_cap.agents --mock --strategy plan-execute --task "compute 1+1"
 | [docs/agents/protocols.md](docs/agents/protocols.md) | LLM protocols (openai default, harmony opt-in, mock) |
 | [docs/agents/serving.md](docs/agents/serving.md) | vLLM / sglang launch flags per model family |
 | [docs/agents/extending.md](docs/agents/extending.md) | Recipes for custom strategies, protocols, tools, evaluators |
+| [docs/harbor.md](docs/harbor.md) | Run AgentCAP on Harbor: `CAPAgent`, IMO-AnswerBench and NL2Repo adapters, TEAS export |
 
 ## Acknowledgement
 

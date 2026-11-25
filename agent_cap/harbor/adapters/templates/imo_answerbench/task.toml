@@ -1,0 +1,42 @@
+schema_version = "1.4"
+source = "IMO-AnswerBench (Hwilner/imo-answerbench, via agent_cap.harbor.adapters)"
+
+[task]
+name = @@TASK_NAME@@
+description = @@DESCRIPTION@@
+keywords = ["math", "imo-answerbench", "agentcard", "teasbench"]
+
+[metadata]
+benchmark = "imo-answerbench"
+problem_id = @@PROBLEM_ID@@
+category = @@CATEGORY@@
+dataset_index = @@DATASET_INDEX@@
+# CAPAgent writes its final message here; tests/grade_imo.py grades it.
+answer_file = "/workspace/answer.txt"
+# Dataset-level system prompt used by AgentCAP for this benchmark. Harbor passes
+# only instruction.md to agents, so CAPAgent receives this through its kwargs.
+system_prompt = @@SYSTEM_PROMPT@@
+
+[agent]
+timeout_sec = @@AGENT_TIMEOUT_SEC@@
+
+[verifier]
+timeout_sec = 600
+network_mode = "public"
+
+[verifier.env]
+# Judge used when math-verify does not accept the answer (same order as
+# AgentCAP's imo evaluator). Resolved from the host environment at grading time.
+IMO_JUDGE_BASE_URL = "${IMO_JUDGE_BASE_URL:-}"
+IMO_JUDGE_API_KEY = "${IMO_JUDGE_API_KEY:-}"
+IMO_JUDGE_MODEL = "${IMO_JUDGE_MODEL:-gemini-3.1-flash-lite}"
+OPENROUTER_API_KEY = "${OPENROUTER_API_KEY:-}"
+IMO_JUDGE_OPENROUTER_MODEL = "${IMO_JUDGE_OPENROUTER_MODEL:-openrouter/elephant-alpha}"
+
+[environment]
+build_timeout_sec = 1200
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+workdir = "/workspace"

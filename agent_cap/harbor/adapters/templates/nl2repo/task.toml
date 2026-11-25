@@ -1,0 +1,49 @@
+schema_version = "1.4"
+source = "NL2RepoBench (multimodal-art-projection/NL2RepoBench, via agent_cap.harbor.adapters)"
+
+# The agent's /workspace is handed to a separate verifier container built from
+# tests/Dockerfile (the official evaluation image with its reference files moved
+# out of /workspace). Hidden tests never exist in the agent's container.
+artifacts = [
+  "/logs/verifier/reward.json",
+  "/logs/verifier/grade.json",
+  { source = "/workspace", exclude = [".venv", "venv", "__pycache__", "*.pyc", "node_modules", ".git"] },
+]
+
+[task]
+name = @@TASK_NAME@@
+description = @@DESCRIPTION@@
+keywords = ["nl2repo", "repository-generation", "agentcard"]
+
+[metadata]
+benchmark = "nl2repo"
+nl2repo_task = @@TASK@@
+upstream_commit = @@UPSTREAM_COMMIT@@
+eval_image = @@EVAL_IMAGE_JSON@@
+test_case_count = @@TEST_CASE_COUNT@@
+
+[agent]
+timeout_sec = @@AGENT_TIMEOUT_SEC@@
+
+[verifier]
+timeout_sec = @@VERIFIER_TIMEOUT_SEC@@
+user = "root"
+environment_mode = "separate"
+# `pip install -e .` in the test commands fetches build backends from PyPI.
+network_mode = "public"
+
+[verifier.environment]
+build_timeout_sec = 1800
+cpus = 4
+memory_mb = 8192
+storage_mb = 20480
+gpus = 0
+workdir = "/workspace"
+
+[environment]
+build_timeout_sec = 1200
+cpus = 4
+memory_mb = 8192
+storage_mb = 20480
+gpus = 0
+workdir = "/workspace"

@@ -114,3 +114,4 @@ server_sglang_*
 
 # codex files
 .codex
+.venv-*/

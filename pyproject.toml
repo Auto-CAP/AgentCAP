@@ -43,6 +43,11 @@ swebench = [
     "boto3>=1.34",
 ]
 viz = ["plotly>=5.0.0"]
+# Harbor execution backend (python -m agent_cap.harbor). Harbor needs Python >= 3.12.
+harbor = [
+    "harbor==0.26.0; python_version >= '3.12'",
+    "agent-cap[imo]",
+]
 cuda = ["torch>=2.0.0"]
 dev = [
     "pytest>=7.0.0",
@@ -60,6 +65,11 @@ agent-cap = "agent_cap.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["agent_cap*"]
+
+[tool.setuptools.package-data]
+"agent_cap.harbor.adapters" = ["templates/**/*", "templates/**/.*"]
+# SWE-agent editor script + registry shim (uploaded into task containers).
+"agent_cap.backends" = ["swe_agent_tools/*"]
 
 [tool.black]
 line-length = 100
