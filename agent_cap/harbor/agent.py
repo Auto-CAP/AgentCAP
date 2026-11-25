@@ -1,6 +1,6 @@
 """CAPAgent: run an AgentCAP strategy as a Harbor agent.
 
-Harbor loads this class by import path::
+Harbor loads this class by import path. Either give every role explicitly::
 
     agents:
       - import_path: agent_cap.harbor.agent:CAPAgent
@@ -9,6 +9,12 @@ Harbor loads this class by import path::
           tool_backend: math-python   # none | shell | math-python
           roles:
             agent: {name: gpt-oss, base_url: http://127.0.0.1:8000, protocol: harmony}
+
+or use Harbor's standard model connection, as for any other Harbor agent; every
+role of the strategy then uses that one endpoint::
+
+    harbor run --agent agent_cap.harbor:CAPAgent --model Qwen/Qwen3.5-4B \
+        --base-url http://127.0.0.1:30000/v1 --ak strategy=plan-execute ...
 
 The strategy loop and every LLM request run on the host, exactly as in
 ``python -m agent_cap.agents``; tool calls execute inside the Harbor task
@@ -30,8 +36,10 @@ from typing import Any, Dict, Mapping, Optional
 
 import aiohttp
 from harbor.agents.base import BaseAgent
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from harbor.models.model_api_format import ModelApiFormat
 
 import agent_cap
 from agent_cap.agents.cli import (
@@ -43,11 +51,23 @@ from agent_cap.agents.cli import (
 from agent_cap.agents.registry import get_strategy
 from agent_cap.agents.types import AgentSpec, Task
 from agent_cap.harbor import RESULT_FILENAME
+from agent_cap.harbor.connection import connection_spec, resolve_endpoint
 from agent_cap.harbor.tools import HarborTools
+
+# Roles each built-in strategy reads; used when the team comes from --model.
+DEFAULT_ROLES = {
+    "single": ["agent"],
+    "plan-execute": ["planner", "executor"],
+    "supervisor": ["supervisor", "worker"],
+}
 
 
 class CAPAgent(BaseAgent):
     """Runs an AgentCAP strategy on the host; tool calls run in the Harbor environment."""
+
+    # Harbor's --model/--base-url/--api-key-name; AgentCAP clients speak chat completions.
+    capabilities = AgentCapabilities(base_url=True)
+    MODEL_CONNECTION = connection_spec(ModelApiFormat.OPENAI_CHAT_COMPLETIONS)
 
     def __init__(
         self,
@@ -56,6 +76,8 @@ class CAPAgent(BaseAgent):
         *,
         strategy: str = "single",
         roles: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        role_names: Optional[list] = None,
+        role_options: Optional[Mapping[str, Any]] = None,
         tool_backend: str = "none",
         max_turns: int = 20,
         system_prompt: Optional[str] = None,
@@ -68,16 +90,16 @@ class CAPAgent(BaseAgent):
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir, model_name, **kwargs)
-        if not roles:
+        if not roles and not model_name:
             raise ValueError(
-                "CAPAgent needs `roles` in its kwargs, e.g. "
-                "{agent: {name: ..., base_url: ..., api_key: ...}}"
+                "CAPAgent needs a model: Harbor's --model (with --base-url/--api-key-name), "
+                "or `roles` in its kwargs, e.g. {agent: {name: ..., base_url: ..., api_key: ...}}"
             )
         self.strategy_name = strategy
-        self.specs: Dict[str, AgentSpec] = {
-            str(role): AgentSpec.from_dict(str(role), _expand_env(dict(data)))
-            for role, data in roles.items()
-        }
+        self._roles = {str(r): dict(d) for r, d in (roles or {}).items()}
+        self.role_names = [str(r) for r in role_names] if role_names else None
+        self.role_options = dict(role_options or {})
+        self._specs: Optional[Dict[str, AgentSpec]] = None
         self.tool_backend = tool_backend
         self.max_turns = int(max_turns)
         self.system_prompt = system_prompt or ""
@@ -92,6 +114,33 @@ class CAPAgent(BaseAgent):
     @staticmethod
     def name() -> str:
         return "capagent"
+
+    @property
+    def specs(self) -> Dict[str, AgentSpec]:
+        """Role -> AgentSpec: the `roles` kwarg, else every strategy role on Harbor's connection."""
+        if self._specs is None:
+            if self._roles:
+                roles = self._roles
+            else:
+                endpoint = resolve_endpoint(self)
+                names = self.role_names or self._default_role_names()
+                shared = {
+                    "use_streaming": True,  # TTFT and decode time need a stream (as in configs/agents_*.yaml)
+                    **self.role_options,
+                    "name": endpoint.model,
+                    "base_url": endpoint.base_url or "http://localhost:30000/v1",
+                    "api_key": endpoint.api_key or "EMPTY",
+                }
+                roles = {name: dict(shared) for name in names}
+            self._specs = {
+                role: AgentSpec.from_dict(role, _expand_env(dict(data))) for role, data in roles.items()
+            }
+        return self._specs
+
+    def _default_role_names(self) -> list:
+        if self.strategy_name == "sequential" and self.sequence:
+            return list(dict.fromkeys(str(r) for r in self.sequence))
+        return list(DEFAULT_ROLES.get(self.strategy_name, ["agent"]))
 
     def version(self) -> Optional[str]:
         return agent_cap.__version__
@@ -206,4 +255,4 @@ def _trial_task_id(logs_dir: Path) -> str:
     return trial.rsplit("__", 1)[0] if "__" in trial else trial
 
 
-__all__ = ["CAPAgent", "RESULT_FILENAME"]
+__all__ = ["CAPAgent", "DEFAULT_ROLES", "RESULT_FILENAME"]

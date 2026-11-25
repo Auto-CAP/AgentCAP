@@ -100,12 +100,13 @@ No LLM, no GPU — sanity check the framework:
 python -m agent_cap.agents --mock --strategy plan-execute --task "compute 1+1"
 ```
 
-### Run on Harbor — IMO-AnswerBench and NL2Repo
+### Run on Harbor — any harness, IMO-AnswerBench and NL2Repo
 
 [Harbor](https://github.com/harbor-framework/harbor) builds a container per task
-and grades the result; AgentCAP's `CAPAgent` runs the strategy (single,
-plan-execute, ...) on this machine and executes its tool calls inside that
-container. Needs Python ≥ 3.12 and Docker.
+and grades the result. Every harness runs through it with the same flags:
+AgentCAP's strategies (`capagent`), DeepSeek Harness (`dsh`), and all of Harbor's
+agents (`codex`, `claude-code`, `openhands`, `mini-swe-agent`, `gemini-cli`,
+`opencode`, ...). Needs Python ≥ 3.12 and Docker.
 
 ```bash
 pip install -e ".[harbor]"
@@ -122,74 +123,70 @@ git clone https://github.com/multimodal-art-projection/NL2RepoBench
 python -m agent_cap.harbor adapt nl2repo --source NL2RepoBench --out datasets/nl2repo
 ```
 
-**2. Run a team.** Give one `--role` per role; the fields are the same as
-`--agent` in `python -m agent_cap.agents` (`name`, `base_url`, `api_key`,
-`protocol`, `max_tokens`, `temperature`, ...). Quote the spec so `${VAR}`
-stays unexpanded; it is resolved at run time and never written to job files.
+**2. Run a harness.** Pick it with `--harness` and the model with Harbor's
+connection flags; they mean the same for every harness:
 
 ```bash
-# one agent, IMO-AnswerBench, 4 tasks in parallel
-python -m agent_cap.harbor run \
-  --benchmark imo-answerbench --dataset datasets/imo-answerbench \
-  --role 'agent=name=Qwen/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=EMPTY' \
-  --concurrency 4
+# Codex
+python -m agent_cap.harbor run --harness codex \
+  --benchmark nl2repo --dataset datasets/nl2repo --model openai/gpt-5.4
 
-# planner + executor on one NL2Repo task
-python -m agent_cap.harbor run \
-  --benchmark nl2repo --dataset datasets/nl2repo --task-names math-verify \
-  --strategy plan-execute \
-  --role 'planner=name=gpt-5.4,base_url=https://api.openai.com/v1,api_key=${OPENAI_API_KEY}' \
-  --role 'executor=name=Qwen/Qwen3.5-27B,base_url=http://localhost:30000/v1,api_key=EMPTY'
-```
+# Claude Code
+python -m agent_cap.harbor run --harness claude-code \
+  --benchmark nl2repo --dataset datasets/nl2repo --model anthropic/claude-sonnet-4-5
 
-**DeepSeek Harness instead of CAPAgent** (`--harness dsh`). DeepSeek Harness
-runs inside the task container (setup installs Node and `@deepseek-ai/dsh`
-there), so `--dsh-base-url` must be reachable from the container; for a model
-server on this machine use the machine's IP, not `localhost`.
-
-```bash
-export DEEPSEEK_API_KEY=...
+# DeepSeek Harness, Agent Team (lead + 2 teammates)
 python -m agent_cap.harbor run --harness dsh \
+  --benchmark nl2repo --dataset datasets/nl2repo --model deepseek/deepseek-chat --ak teammates=2
+
+# AgentCAP plan-execute, both roles on a local vLLM/SGLang server
+python -m agent_cap.harbor run --harness capagent --strategy plan-execute \
   --benchmark nl2repo --dataset datasets/nl2repo \
-  --dsh-model deepseek-chat --dsh-base-url https://api.deepseek.com/v1 \
-  --dsh-api-key-env DEEPSEEK_API_KEY \
-  --dsh-teammates 2
+  --model Qwen/Qwen3.5-27B --base-url http://localhost:30000/v1
 ```
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--dsh-model` | required | model id accepted by the endpoint |
-| `--dsh-base-url` | required | API base URL, reachable from the task container |
-| `--dsh-api-key-env` | `DSH_API_KEY` | env var holding the API key; its value goes to `dsh` at run time and is never written to files |
-| `--dsh-protocol` | `openai-completions` | `openai-completions`, `openai-responses`, `anthropic-messages`, `deepseek-messages` |
-| `--dsh-teammates` | `0` | `0`: one agent. `K`: an Agent Team, a lead plus K teammates sharing `/workspace` |
-| `--dsh-context-window` | `131072` | model context size in tokens |
-| `--dsh-max-tokens` | `16384` | output limit per request |
-| `--dsh-reasoning-effort` | provider default | e.g. `high` |
-| `--dsh-version` | `0.2.0-rc.2` | `@deepseek-ai/dsh` version installed in the container |
+| Flag | Meaning |
+|---|---|
+| `--harness` | `capagent` (default), `dsh`, any Harbor agent name, or `module:Class` |
+| `--model` | `openai/gpt-5.4`, `anthropic/...`, `deepseek/deepseek-chat`, or any id served at `--base-url` |
+| `--base-url` | inference endpoint (e.g. a local vLLM server) |
+| `--api-key-name` | name of the env var holding the API key (default: the provider's, e.g. `OPENAI_API_KEY`); the value is never written to files |
+| `--api-format` | `openai_chat_completions`, `openai_responses`, `anthropic_messages`, ... |
+| `--effort` | reasoning effort, where the harness supports it |
+| `--ak KEY=VALUE` | harness option, e.g. `teammates=2` (dsh), `version=0.172.0` (codex) |
+| `--ae KEY=VALUE` | env var for the harness |
+| `--meter` / `--no-meter` | per-request metering through AgentCAP's host proxy; on by default for Harbor's agents |
+| `--concurrency`, `--attempts`, `--task-names`, `--n-tasks`, `--env` | concurrent trials, attempts per task, task filter, task count, Harbor environment |
 
-The general flags (`--concurrency`, `--task-names`, `--attempts`, `--env`, ...)
-work the same way. In DSH 0.2.0-rc.2 teammates use the lead's model. Results
-report usage per role (`lead`, then each teammate by name) and a team summary
-(teammates spawned and completed).
+These are Harbor's own `harbor run` flags, so plain Harbor runs the same
+agents: `harbor run -p datasets/nl2repo --agent agent_cap.harbor.metered:codex --model openai/gpt-5.4`
+(also `agent_cap.harbor:DSHAgent`, `agent_cap.harbor:CAPAgent`), followed by
+`python -m agent_cap.harbor export`.
 
-A TEASBench agent config can replace the `--role` flags:
-`--teas-agent-yaml pipeline/configs/agents/imo-answerbench_gptoss_sglang.yaml`.
-For IMO answers that math-verify rejects, set `IMO_JUDGE_BASE_URL`,
-`IMO_JUDGE_API_KEY` and `IMO_JUDGE_MODEL` (or `OPENROUTER_API_KEY`) before
-`run`; without them only math-verify grades.
+Every harness reports per-request TTFT, decode time and tokens:
+CAPAgent from its own clients, DSH from its session logs (per lead and
+teammate), and Harbor's agents through the metering proxy, which forwards each
+request to the real endpoint and times it on this host. The original flags
+still work: `--role` / `--teas-agent-yaml` for CAPAgent teams, `--dsh-model`,
+`--dsh-base-url`, ... for DSH.
+
+For IMO-AnswerBench, CAPAgent and DSH write the final answer to
+`/workspace/answer.txt` for the grader; for Harbor's agents, adapt with
+`--answer-file-instruction`. For answers that math-verify rejects, set
+`IMO_JUDGE_BASE_URL`, `IMO_JUDGE_API_KEY` and `IMO_JUDGE_MODEL` (or
+`OPENROUTER_API_KEY`) before `run`; without them only math-verify grades.
 
 **3. Read the results** in `results/harbor/<job>/`:
 
 | File | Contents |
 |---|---|
-| `results.jsonl` | one row per task: reward, pass/fail, tokens per role, per-request TTFT/decode time |
+| `results.jsonl` | one row per task: reward, pass/fail, tokens per role, per-request TTFT/decode time, how it was metered |
 | `metrics_*.json`, `metadata_*.json`, `detailed-results_*.jsonl`, `output-data_*.jsonl` | the four TEAS files, as read by TEASBench's cost scripts |
 
 Harbor's own trial logs are in `jobs/<job>/` (browse them with `harbor view jobs`).
 To re-export a finished job:
-`python -m agent_cap.harbor export --job-dir jobs/<job> --dataset imo-answerbench --out results/<job>`.
-Details, grading rules and caveats: [docs/harbor.md](docs/harbor.md).
+`python -m agent_cap.harbor export --job-dir jobs/<job> --dataset nl2repo --out results/<job>`.
+Details, metering, grading rules and caveats: [docs/harbor.md](docs/harbor.md).
 
 ## Documentation
 
@@ -205,7 +202,7 @@ Details, grading rules and caveats: [docs/harbor.md](docs/harbor.md).
 | [docs/agents/protocols.md](docs/agents/protocols.md) | LLM protocols (openai default, harmony opt-in, mock) |
 | [docs/agents/serving.md](docs/agents/serving.md) | vLLM / sglang launch flags per model family |
 | [docs/agents/extending.md](docs/agents/extending.md) | Recipes for custom strategies, protocols, tools, evaluators |
-| [docs/harbor.md](docs/harbor.md) | Run AgentCAP on Harbor: `CAPAgent`, IMO-AnswerBench and NL2Repo adapters, TEAS export |
+| [docs/harbor.md](docs/harbor.md) | Any harness on Harbor (CAPAgent, DeepSeek Harness, Codex, Claude Code, ...): one set of flags, metering proxy, IMO-AnswerBench and NL2Repo, TEAS export |
 
 ## Citation
 

@@ -1,6 +1,14 @@
 """DeepSeek Harness (DSH) as a Harbor agent, alone or as an Agent Team.
 
-Harbor loads ``agent_cap.harbor.dsh:DSHAgent``. Unlike CAPAgent, DSH is a full
+Harbor loads ``agent_cap.harbor.dsh:DSHAgent`` (or ``agent_cap.harbor:DSHAgent``).
+The model comes from Harbor's standard connection, as for Codex or Claude Code::
+
+    harbor run --agent agent_cap.harbor:DSHAgent --model deepseek/deepseek-chat \
+        --ak teammates=2 -p datasets/nl2repo
+
+(``--base-url``, ``--api-key-name``, ``--api-format`` and ``--effort`` work as for
+any Harbor agent), or from the older ``model``/``endpoint_url``/``api_key_env``
+kwargs. Unlike CAPAgent, DSH is a full
 coding harness that runs *inside* the task container: setup installs Node and
 ``@deepseek-ai/dsh`` there, run writes a DSH profile and calls
 ``dsh --profile agentcard --json <prompt>`` in the task's working directory. The
@@ -20,8 +28,9 @@ per-role usage, per-request ``turn_stats`` with TTFT and decode time from DSH's
 stream timestamps), so ``agent_cap.harbor.export_teas`` works unchanged.
 
 The API key is never written to files: the profile names an environment
-variable, and its value is read from this process's environment
-(``api_key_env``) and passed to ``dsh`` through ``environment.exec(env=...)``.
+variable, and its value is read from this process's environment (Harbor's
+``--api-key-name``, or ``api_key_env``) and passed to ``dsh`` through
+``environment.exec(env=...)``.
 """
 
 from __future__ import annotations
@@ -35,15 +44,24 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Mapping, Optional
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from harbor.models.model_api_format import ModelApiFormat
 
 from agent_cap.harbor import RESULT_FILENAME
+from agent_cap.harbor.connection import connection_spec, resolve_endpoint
 
 DSH_VERSION = "0.2.0-rc.2"
 PROFILE = "agentcard"
 PROTOCOLS = ("openai-completions", "openai-responses", "anthropic-messages", "deepseek-messages")
 KEY_ENV_IN_CONTAINER = "AGENTCARD_DSH_API_KEY"
+# Harbor --api-format -> DSH route api
+FORMAT_TO_PROTOCOL = {
+    ModelApiFormat.OPENAI_CHAT_COMPLETIONS: "openai-completions",
+    ModelApiFormat.OPENAI_RESPONSES: "openai-responses",
+    ModelApiFormat.ANTHROPIC_MESSAGES: "anthropic-messages",
+}
 BASE_BUNDLES = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"]
 TEAM_BUNDLE = "@deepseek-ai/dsh-experimental-agent-team-profile"
 # Plugins a batch run does not need (session titles, the DeepSeek account route,
@@ -290,6 +308,9 @@ def final_text_from_stdout(stdout_jsonl: str) -> str:
 class DSHAgent(BaseAgent):
     """DeepSeek Harness inside the task container; optional Agent Teams."""
 
+    capabilities = AgentCapabilities(base_url=True, reasoning_effort=True)
+    MODEL_CONNECTION = connection_spec(*FORMAT_TO_PROTOCOL)
+
     def __init__(
         self,
         logs_dir: Path,
@@ -298,14 +319,15 @@ class DSHAgent(BaseAgent):
         model: Optional[str] = None,
         endpoint_url: Optional[str] = None,
         api_key_env: str = "DSH_API_KEY",
-        protocol: str = "openai-completions",
+        protocol: Optional[str] = None,
         context_window: int = 131072,
         max_tokens: int = 16384,
         reasoning_effort: Optional[str] = None,
         compat: Optional[Mapping[str, Any]] = None,
         reasoning_efforts: Any = None,
         teammates: int = 0,
-        dsh_version: str = DSH_VERSION,
+        dsh_version: Optional[str] = None,
+        version: Optional[str] = None,
         workdir: str = "/workspace",
         answer_file: Optional[str] = None,
         team_prompt: Optional[str] = None,
@@ -314,12 +336,15 @@ class DSHAgent(BaseAgent):
         task_id: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        # The endpoint is a DSH profile setting. It is not called `base_url`, which
-        # Harbor reserves for its own model-connection override.
+        # Two ways to pick the model: Harbor's connection (model_name, base_url,
+        # model_api_key_name, model_api_format), or the `model`/`endpoint_url`/
+        # `api_key_env` kwargs (`base_url` itself is Harbor's field).
         super().__init__(logs_dir, model_name, **kwargs)
-        if not model or not endpoint_url:
-            raise ValueError("DSHAgent needs `model` and `endpoint_url` kwargs")
-        if protocol not in PROTOCOLS:
+        if model and not endpoint_url:
+            raise ValueError("DSHAgent: `model` needs `endpoint_url` (or use Harbor's --model/--base-url)")
+        if not model and not model_name:
+            raise ValueError("DSHAgent needs a model: Harbor's --model, or the `model` and `endpoint_url` kwargs")
+        if protocol is not None and protocol not in PROTOCOLS:
             raise ValueError(f"protocol must be one of {PROTOCOLS}")
         if int(teammates) < 0:
             raise ValueError("teammates must be >= 0")
@@ -333,7 +358,7 @@ class DSHAgent(BaseAgent):
         self.compat = dict(compat) if compat else None
         self.reasoning_efforts = reasoning_efforts
         self.teammates = int(teammates)
-        self.dsh_version = dsh_version
+        self.dsh_version = dsh_version or version or DSH_VERSION
         self.workdir = workdir
         self.answer_file = answer_file
         self.team_prompt = team_prompt if team_prompt is not None else TEAM_PROMPT
@@ -391,6 +416,28 @@ class DSHAgent(BaseAgent):
             if res.return_code != 0 or (res.stdout or "").strip().splitlines()[-1:] != [self.dsh_version]:
                 raise RuntimeError(f"DSH install failed: {(res.stderr or res.stdout or '')[-2000:]}")
 
+    def endpoint(self) -> Dict[str, Any]:
+        """``{model, base_url, protocol, api_key}`` for the DSH profile and the dsh process."""
+        if self.model:  # legacy kwargs; Harbor's base_url (set by the meter) takes precedence
+            return {
+                "model": self.model,
+                "base_url": self._base_url or self.dsh_base_url,
+                "protocol": self.protocol or "openai-completions",
+                "api_key": os.environ.get(self.api_key_env, ""),
+            }
+        ep = resolve_endpoint(self)
+        if not ep.base_url:
+            raise ValueError(f"DSHAgent: no endpoint for model {self.model_name!r}; pass --base-url")
+        protocol = self.protocol or FORMAT_TO_PROTOCOL.get(ep.api_format, "openai-completions")
+        return {"model": ep.model, "base_url": ep.base_url, "protocol": protocol, "api_key": ep.api_key or ""}
+
+    def upstream_base_url(self) -> Optional[str]:
+        """The endpoint before any metering proxy (used by agent_cap.harbor.metered)."""
+        if self.model:
+            return self.dsh_base_url
+        ep = resolve_endpoint(self)
+        return ep.base_url if ep else None
+
     def _path_env(self) -> Dict[str, str]:
         if not self._path_prefix:
             return {}
@@ -405,10 +452,11 @@ class DSHAgent(BaseAgent):
         home = self._env_home
         profile_dir = home / "profiles" / PROFILE
         sessions_root = home / "sessions"
+        endpoint = self.endpoint()
         files = build_profile(
-            model=self.model,
-            base_url=self.dsh_base_url,
-            protocol=self.protocol,
+            model=endpoint["model"],
+            base_url=endpoint["base_url"],
+            protocol=endpoint["protocol"],
             teammates=self.teammates,
             sessions_root=str(sessions_root),
             context_window=self.context_window,
@@ -424,7 +472,7 @@ class DSHAgent(BaseAgent):
                 local.write_text(json.dumps(content, indent=1), encoding="utf-8")
                 await environment.upload_file(local, str(profile_dir / name))
 
-        key = os.environ.get(self.api_key_env, "")
+        key = endpoint["api_key"]
         run_env = {
             **self._path_env(),
             "DSH_HOME": str(home),
@@ -449,10 +497,10 @@ class DSHAgent(BaseAgent):
                 errors.append(f"dsh exited with status {result.return_code}")
         except BaseException as exc:  # Harbor cancels run() on agent timeout
             errors.append(f"{type(exc).__name__}: {exc}"[:500])
-            self._finish(context, started, errors)
+            self._finish(context, started, errors, endpoint)
             raise
         await self._ensure_logs_on_host(environment)
-        output_text = self._finish(context, started, errors)
+        output_text = self._finish(context, started, errors, endpoint)
         if self.answer_file:
             await self._write_answer(environment, output_text)
 
@@ -466,7 +514,7 @@ class DSHAgent(BaseAgent):
         except Exception as exc:  # keep going: the row records the missing logs
             self.logger.warning("could not download DSH logs: %s", exc)
 
-    def _finish(self, context: AgentContext, started: float, errors: List[str]) -> str:
+    def _finish(self, context: AgentContext, started: float, errors: List[str], endpoint: Mapping[str, Any]) -> str:
         host_logs = Path(self.logs_dir)
         stdout = host_logs / "dsh-stdout.jsonl"
         output_text = final_text_from_stdout(stdout.read_text(encoding="utf-8")) if stdout.exists() else ""
@@ -478,8 +526,8 @@ class DSHAgent(BaseAgent):
             "dsh_version": self.dsh_version,
             "strategy": "dsh-agent-team" if self.teammates > 0 else "dsh-single",
             "teammates": self.teammates,
-            "protocol": self.protocol,
-            "roles": {"lead": self.model, **({"teammates": self.model} if self.teammates > 0 else {})},
+            "protocol": endpoint["protocol"],
+            "roles": {"lead": endpoint["model"], **({"teammates": endpoint["model"]} if self.teammates > 0 else {})},
         }
         row = sessions_to_row(
             sessions,

@@ -1,9 +1,13 @@
-"""Build Harbor job configs for AgentCAP runs.
+"""Build Harbor job configs for any harness.
 
-A job runs CAPAgent with one team (roles -> endpoints) over a local Harbor
-dataset written by ``agent_cap.harbor.adapters``. Benchmark presets carry the
-per-benchmark agent settings AgentCAP uses today (tool backend, system prompt,
-step limit), so a TEASBench agent YAML maps onto the same job.
+A job runs one harness over a local Harbor dataset written by
+``agent_cap.harbor.adapters``. The harness is a Harbor agent entry
+(:func:`agent_entry`): CAPAgent, DSHAgent, any Harbor agent (``codex``,
+``claude-code``, ...), or any ``module:Class``; the model always comes from
+Harbor's connection fields (``model_name``, ``base_url``, ``model_api_key_name``,
+``model_api_format``). Benchmark presets carry the per-benchmark settings
+AgentCAP's own harnesses need (tool backend, system prompt, step limit, answer
+file), so a TEASBench agent YAML maps onto the same job.
 
 Secrets stay out of job files: role fields such as ``api_key: ${OPENROUTER_API_KEY}``
 are written as-is and expanded by CAPAgent at run time; judge keys reach the
@@ -21,6 +25,8 @@ import yaml
 
 AGENT_IMPORT_PATH = "agent_cap.harbor.agent:CAPAgent"
 DSH_IMPORT_PATH = "agent_cap.harbor.dsh:DSHAgent"
+METERED_MODULE = "agent_cap.harbor.metered"
+OWN_HARNESSES = {"capagent": AGENT_IMPORT_PATH, "dsh": DSH_IMPORT_PATH}
 
 
 def _imo_preset() -> Dict[str, Any]:
@@ -75,6 +81,71 @@ def dsh_kwargs(benchmark: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
         if not kwargs.get(required):
             raise ValueError(f"DeepSeek Harness needs `{required}`")
     return kwargs
+
+
+def harness_kwargs(harness: str, benchmark: str) -> Dict[str, Any]:
+    """Benchmark preset kwargs for a harness (Harbor's own agents take none)."""
+    if harness == "capagent":
+        return preset(benchmark)
+    if harness == "dsh":
+        if benchmark not in DSH_PRESETS:
+            raise ValueError(f"unknown benchmark {benchmark!r}; known: {sorted(DSH_PRESETS)}")
+        return dict(DSH_PRESETS[benchmark])
+    return {}
+
+
+def known_harbor_agents() -> List[str]:
+    from harbor.models.agent.name import AgentName
+
+    return sorted(AgentName.values())
+
+
+def check_harness(harness: str) -> None:
+    if harness in OWN_HARNESSES or ":" in harness:
+        return
+    known = known_harbor_agents()
+    if harness not in known:
+        raise ValueError(
+            f"unknown harness {harness!r}: use capagent, dsh, a Harbor agent ({', '.join(known)}) "
+            "or an import path module:Class"
+        )
+
+
+def agent_entry(
+    harness: str,
+    *,
+    kwargs: Optional[Mapping[str, Any]] = None,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+    api_key_name: Optional[str] = None,
+    api_format: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+    meter: bool = False,
+) -> Dict[str, Any]:
+    """One Harbor ``agents:`` entry for ``harness``.
+
+    ``meter=True`` wraps the harness in ``agent_cap.harbor.metered`` so a
+    host-side proxy records every model request (not needed for CAPAgent,
+    which meters on the host already).
+    """
+    check_harness(harness)
+    entry: Dict[str, Any] = {}
+    if meter and harness != "capagent":
+        entry["import_path"] = f"{METERED_MODULE}:{harness}"
+    elif harness in OWN_HARNESSES:
+        entry["import_path"] = OWN_HARNESSES[harness]
+    elif ":" in harness:
+        entry["import_path"] = harness
+    else:
+        entry["name"] = harness
+    for key, value in (("model_name", model), ("base_url", base_url),
+                       ("model_api_key_name", api_key_name), ("model_api_format", api_format)):
+        if value:
+            entry[key] = value
+    entry["kwargs"] = dict(kwargs or {})
+    if env:
+        entry["env"] = dict(env)
+    return entry
 
 
 def preset(benchmark: str) -> Dict[str, Any]:
@@ -146,8 +217,13 @@ def build_job_config(
     n_tasks: Optional[int] = None,
     agent_env: Optional[Mapping[str, str]] = None,
     agent_import_path: str = AGENT_IMPORT_PATH,
+    agent: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """A Harbor JobConfig (as a plain dict, ready for YAML)."""
+    """A Harbor JobConfig (as a plain dict, ready for YAML).
+
+    ``agent`` is a full entry from :func:`agent_entry`; without it the entry is
+    ``agent_import_path`` with ``agent_kwargs`` and ``agent_env``.
+    """
     dataset: Dict[str, Any] = {"path": str(Path(dataset_path))}
     if task_names:
         dataset["task_names"] = list(task_names)
@@ -156,9 +232,10 @@ def build_job_config(
     env_cfg: Dict[str, Any] = {"type": environment}
     if environment_import_path:
         env_cfg = {"import_path": environment_import_path}
-    agent: Dict[str, Any] = {"import_path": agent_import_path, "kwargs": dict(agent_kwargs)}
-    if agent_env:
-        agent["env"] = dict(agent_env)
+    if agent is None:
+        agent = {"import_path": agent_import_path, "kwargs": dict(agent_kwargs)}
+        if agent_env:
+            agent["env"] = dict(agent_env)
     return {
         "job_name": job_name,
         "jobs_dir": str(jobs_dir),
@@ -167,7 +244,7 @@ def build_job_config(
         "skip_credential_checks": True,
         "environment": env_cfg,
         "datasets": [dataset],
-        "agents": [agent],
+        "agents": [dict(agent)],
     }
 
 
@@ -193,7 +270,13 @@ __all__ = [
     "AGENT_IMPORT_PATH",
     "DSH_IMPORT_PATH",
     "DSH_PRESETS",
+    "OWN_HARNESSES",
+    "METERED_MODULE",
     "dsh_kwargs",
+    "harness_kwargs",
+    "check_harness",
+    "known_harbor_agents",
+    "agent_entry",
     "PRESETS",
     "preset",
     "parse_role",

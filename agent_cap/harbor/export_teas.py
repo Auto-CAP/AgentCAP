@@ -1,10 +1,19 @@
-"""Turn a Harbor job directory into TEAS files and AgentCAP result rows.
+"""Turn a Harbor job directory into TEAS files and AgentCAP result rows, for any harness.
 
 Each Harbor trial directory holds ``result.json`` (task name, verifier rewards,
-timing, exceptions) and, for CAPAgent trials, ``agent/capagent_result.json``
-(the AgentCAP per-task row with per-request ``turn_stats``). This module joins
-the two and hands the rows to ``agent_cap.agents.teas_output.write_teas_outputs``,
-so the four TEAS files have exactly the fields TEASBench's cost scripts read.
+agent token totals, timing, exceptions). The agent's usage row comes from the
+best source the trial has, recorded in ``agentcard.metering``:
+
+* ``agentcap-host`` / ``dsh-session``: ``agent/capagent_result.json`` written
+  by CAPAgent or DSHAgent (per role, per request);
+* ``meter-proxy``: ``agent/meter_result.json`` from ``agent_cap.harbor.metered``
+  (per request, measured on the host);
+* ``harbor-context``: otherwise, Harbor's own totals plus per-step tokens from
+  the agent's ATIF ``trajectory.json`` (no TTFT or decode time).
+
+The rows are joined with the verifier rewards and handed to
+``agent_cap.agents.teas_output.write_teas_outputs``, so the four TEAS files have
+exactly the fields TEASBench's cost scripts read.
 """
 
 from __future__ import annotations
@@ -14,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from agent_cap.harbor import RESULT_FILENAME
+from agent_cap.harbor import METER_FILENAME, RESULT_FILENAME
 
 
 def iter_trial_dirs(job_dir: Path) -> List[Path]:
@@ -77,6 +86,112 @@ def _empty_row(task_id: str, error: str) -> Dict[str, Any]:
     }
 
 
+def _agent_identity(result: Mapping[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    info = result.get("agent_info") or {}
+    agent_cfg = ((result.get("config") or {}).get("agent")) or {}
+    model = agent_cfg.get("model_name") or ((info.get("model_info") or {}).get("name") if isinstance(info.get("model_info"), Mapping) else None)
+    return info.get("name"), model
+
+
+def _atif_steps(trial_dir: Path) -> List[Dict[str, Any]]:
+    """Agent steps with token metrics from agent/trajectory.json, subagents included."""
+    traj = _load_json(trial_dir / "agent" / "trajectory.json")
+    steps: List[Dict[str, Any]] = []
+
+    def walk(t: Mapping[str, Any], role: str) -> None:
+        for step in t.get("steps") or []:
+            metrics = step.get("metrics") or {}
+            if step.get("source") != "agent" or not metrics:
+                continue
+            steps.append({
+                "role": role,
+                "model": step.get("model_name"),
+                "timestamp": step.get("timestamp"),
+                "input_tokens": int(metrics.get("prompt_tokens") or 0),
+                "output_tokens": int(metrics.get("completion_tokens") or 0),
+                "completion_tokens": int(metrics.get("completion_tokens") or 0),
+                "reasoning_tokens": int(((metrics.get("extra") or {}).get("reasoning_tokens")) or 0),
+                "cached_tokens": int(metrics.get("cached_tokens") or 0),
+                "num_tool_calls": len(step.get("tool_calls") or []),
+            })
+        for i, sub in enumerate(t.get("subagent_trajectories") or []):
+            name = ((sub.get("agent") or {}).get("name")) or f"subagent-{i}"
+            walk(sub, f"subagent:{name}")
+
+    if isinstance(traj, Mapping):
+        walk(traj, "agent")
+    return steps
+
+
+def harbor_context_row(trial_dir: Path, result: Mapping[str, Any], task_id: str, note: Optional[str]) -> Dict[str, Any]:
+    """Row from Harbor's agent context and ATIF trajectory (any Harbor agent)."""
+    agent, model = _agent_identity(result)
+    ctx = result.get("agent_result") or {}
+    steps = _atif_steps(trial_dir)
+    row = _empty_row(task_id, note or "")
+    row["errors"] = [note] if note else []
+    total = {
+        "input_tokens": int(ctx.get("n_input_tokens") or 0),
+        "output_tokens": int(ctx.get("n_output_tokens") or 0),
+        "completion_tokens": int(ctx.get("n_output_tokens") or 0),
+        "reasoning_tokens": sum(s["reasoning_tokens"] for s in steps),
+        "cached_tokens": int(ctx.get("n_cache_tokens") or 0),
+        "requests": len(steps),
+    }
+    per_role: Dict[str, Dict[str, int]] = {}
+    for st in steps:
+        u = per_role.setdefault(st["role"], {k: 0 for k in total})
+        for k in ("input_tokens", "output_tokens", "completion_tokens", "reasoning_tokens", "cached_tokens"):
+            u[k] += st[k]
+        u["requests"] += 1
+    if not per_role:
+        per_role = {"agent": dict(total)}
+    start, end = _parse_time((result.get("agent_execution") or {}).get("started_at")), _parse_time(
+        (result.get("agent_execution") or {}).get("finished_at"))
+    row.update({
+        "strategy": agent or "unknown",
+        "e2e_latency_s": round((end - start).total_seconds(), 4) if start and end else 0.0,
+        "per_role_usage": per_role,
+        "total_usage": total,
+        "num_turns": len(steps),
+        "tool_calls": sum(s["num_tool_calls"] for s in steps),
+        "turn_stats": [{**s, "latency_s": 0.0, "ttft_s": 0.0, "decode_s": 0.0} for s in steps],
+        "agentcard": {"agent": agent, "strategy": agent, "model": model, "metering": "harbor-context",
+                      "roles": {"agent": model}, "cost_usd": ctx.get("cost_usd")},
+    })
+    return row
+
+
+def _agent_row(trial_dir: Path, result: Mapping[str, Any], task_id: str) -> Dict[str, Any]:
+    own = _load_json(trial_dir / "agent" / RESULT_FILENAME)
+    meter = _load_json(trial_dir / "agent" / METER_FILENAME)
+    metered = isinstance(meter, dict) and meter.get("metered")
+    if metered and not (meter.get("total_usage") or {}).get("requests") and not isinstance(own, dict):
+        # Proxy in place but no request it could parse (e.g. another protocol): Harbor's totals.
+        meter = {"metered": False, "reason": "the proxy recognised no model requests"}
+        metered = False
+    if isinstance(own, dict):
+        card = own.setdefault("agentcard", {})
+        card.setdefault("metering", "dsh-session" if card.get("agent") == "deepseek-harness" else "agentcap-host")
+        if metered:  # DSH run behind the proxy too: keep both views
+            card["meter"] = {"requests": meter.get("total_usage", {}).get("requests"),
+                             "turn_stats": meter.get("turn_stats")}
+        return own
+    if metered:
+        row = {k: v for k, v in meter.items() if k not in ("metered", "requests_raw")}
+        agent, model = _agent_identity(result)
+        card = row.setdefault("agentcard", {})
+        card.setdefault("agent", agent)
+        card.setdefault("model", model)
+        ctx = result.get("agent_result") or {}
+        card["harbor_context"] = {k: ctx.get(k) for k in ("n_input_tokens", "n_cache_tokens", "n_output_tokens", "cost_usd")}
+        return row
+    if result.get("agent_result") or (trial_dir / "agent" / "trajectory.json").exists():
+        note = meter.get("reason") if isinstance(meter, dict) else None
+        return harbor_context_row(trial_dir, result, task_id, f"unmetered: {note}" if note else None)
+    return _empty_row(task_id, f"missing agent/{RESULT_FILENAME} (agent did not report)")
+
+
 def trial_row(trial_dir: Path, *, pass_threshold: float = 1.0) -> Dict[str, Any]:
     """One AgentCAP result row for a Harbor trial, with eval fields from the verifier."""
     trial_dir = Path(trial_dir)
@@ -84,9 +199,7 @@ def trial_row(trial_dir: Path, *, pass_threshold: float = 1.0) -> Dict[str, Any]
     harbor_task = _task_name(result, trial_dir)
     # Harbor names tasks "<benchmark>/<id>"; AgentCAP/TEAS rows use the bare id.
     task_id = harbor_task.split("/", 1)[-1]
-    row = _load_json(trial_dir / "agent" / RESULT_FILENAME)
-    if not isinstance(row, dict):
-        row = _empty_row(task_id, f"missing agent/{RESULT_FILENAME} (agent did not report)")
+    row = _agent_row(trial_dir, result, task_id)
     row["task_id"] = task_id
 
     rewards = _rewards(result)
@@ -210,6 +323,9 @@ def _stamp_harbor_provenance(metrics_path: Path, job_dir: Path, rows: List[Mappi
         "environment": (job_config.get("environment") or {}).get("type"),
         "n_trials": len(rows),
         "agent": first.get("agent"),
+        "agent_import_path": ((job_config.get("agents") or [{}])[0] or {}).get("import_path"),
+        "model": first.get("model") or _first_model(rows),
+        "metering": sorted({str((r.get("agentcard") or {}).get("metering")) for r in rows}),
         "strategy": first.get("strategy"),
         "tool_backend": first.get("tool_backend"),
         "roles": first.get("roles"),
@@ -217,4 +333,4 @@ def _stamp_harbor_provenance(metrics_path: Path, job_dir: Path, rows: List[Mappi
     meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-__all__ = ["export_job", "job_rows", "trial_row", "iter_trial_dirs", "job_wall_time_s"]
+__all__ = ["export_job", "job_rows", "trial_row", "harbor_context_row", "iter_trial_dirs", "job_wall_time_s"]
