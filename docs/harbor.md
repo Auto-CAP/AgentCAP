@@ -29,7 +29,7 @@ pip install -e ".[harbor]"
 | Harbor concept | AgentCAP implementation |
 |---|---|
 | Task directory | `agent_cap/harbor/adapters/` (`imo_answerbench.py`, `nl2repo.py`, templates) |
-| Agent (`import_path`) | `agent_cap.harbor.agent:CAPAgent` |
+| Agent (`import_path`) | `agent_cap.harbor.agent:CAPAgent`; `agent_cap.harbor.dsh:DSHAgent` (DeepSeek Harness) |
 | Tools inside the environment | `agent_cap/harbor/tools.py` (`shell`, `math-python`) |
 | Job config | `agent_cap/harbor/jobspec.py`, `python -m agent_cap.harbor job` |
 | Trial outputs | `agent_cap/harbor/export_teas.py` |
@@ -53,6 +53,42 @@ with Harbor's verifier reward and calls `write_teas_outputs`, so `metadata_*`,
 `metrics_*`, `detailed-results_*` and `output-data_*` have the fields
 TEASBench's cost scripts read. `metadata_*.json` gains a `harbor` section
 (Harbor version, job, environment, agent, strategy, roles).
+
+## DeepSeek Harness (`--harness dsh`)
+
+`agent_cap.harbor.dsh:DSHAgent` runs
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) in the task
+container instead of an AgentCAP strategy:
+
+1. **setup**: installs Node 24 with nvm if the container has no Node >= 22
+   (and curl first if needed), then `npm install @deepseek-ai/dsh@<version>`
+   under `/opt/agentcard-dsh`. Skipped when that version is already installed,
+   so an image with DSH baked in starts faster.
+2. **run**: writes a profile to `/logs/agent/dsh-home/profiles/agentcard/` and
+   runs `dsh --profile agentcard --json "<instruction>"` in `/workspace`, with
+   `DSH_PERMISSION_MODE=danger-full-access` and telemetry off.
+   * bundles: `dsh-base` + `dsh-headless`; with `--dsh-teammates K`, also
+     `dsh-experimental-agent-team-profile` and `maxMembers = maxActiveSubagents = K`;
+   * the model route uses the pi-ai adapter for `openai-*` and
+     `anthropic-messages`, and DSH's own adapter for `deepseek-messages`;
+   * session titles, the DeepSeek account route, web search and fetch, workflow
+     delegation and package inventory are disabled;
+   * the API key reaches `dsh` as an environment variable of the exec call;
+     the profile names only the variable.
+3. In team mode the prompt asks for exactly K teammates, a shared task board,
+   file ownership in the shared workspace, and `wait_agent` on every teammate
+   before finishing (DSH stops teammates when the lead finishes). Override it
+   with the `team_prompt` agent kwarg (`{teammates}` and `{workdir}` are filled in).
+4. **after the run**: every agent's `session.v4.jsonl` is parsed into the same
+   row CAPAgent writes. Usage is split by role (`lead`, teammates by name), and
+   each request's TTFT and decode time come from DSH's stream timestamps.
+   Because DSH runs in the container, these are measured there, not on the host.
+   `agentcard.team` records teammates expected, spawned and completed.
+
+For IMO-AnswerBench, DSH's final message is written to `/workspace/answer.txt`
+and graded as for CAPAgent. The model endpoint must be reachable from the
+container. In DSH 0.2.0-rc.2, `spawn_teammate` has no model argument, so a team
+is homogeneous.
 
 ## Benchmarks
 

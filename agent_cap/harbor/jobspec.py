@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import yaml
 
 AGENT_IMPORT_PATH = "agent_cap.harbor.agent:CAPAgent"
+DSH_IMPORT_PATH = "agent_cap.harbor.dsh:DSHAgent"
 
 
 def _imo_preset() -> Dict[str, Any]:
@@ -54,6 +55,26 @@ PRESETS = {
 _TEAS_DIRECT_KEYS = ("strategy", "max_turns", "tool_backend", "sequence")
 # judge block -> verifier env vars read by tests/grade_imo.py
 _JUDGE_ENV = {"base_url": "IMO_JUDGE_BASE_URL", "api_key": "IMO_JUDGE_API_KEY", "name": "IMO_JUDGE_MODEL"}
+
+
+# DeepSeek Harness runs its own tools inside the container; per-benchmark settings
+# only say where the task lives and where an answer must be written.
+DSH_PRESETS = {
+    "imo-answerbench": {"workdir": "/workspace", "answer_file": "/workspace/answer.txt"},
+    "nl2repo": {"workdir": "/workspace"},
+}
+
+
+def dsh_kwargs(benchmark: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
+    """DSHAgent kwargs: the benchmark preset plus the given (non-None) settings."""
+    if benchmark not in DSH_PRESETS:
+        raise ValueError(f"unknown benchmark {benchmark!r}; known: {sorted(DSH_PRESETS)}")
+    kwargs = dict(DSH_PRESETS[benchmark])
+    kwargs.update({k: v for k, v in settings.items() if v is not None})
+    for required in ("model", "endpoint_url"):
+        if not kwargs.get(required):
+            raise ValueError(f"DeepSeek Harness needs `{required}`")
+    return kwargs
 
 
 def preset(benchmark: str) -> Dict[str, Any]:
@@ -124,6 +145,7 @@ def build_job_config(
     task_names: Optional[Sequence[str]] = None,
     n_tasks: Optional[int] = None,
     agent_env: Optional[Mapping[str, str]] = None,
+    agent_import_path: str = AGENT_IMPORT_PATH,
 ) -> Dict[str, Any]:
     """A Harbor JobConfig (as a plain dict, ready for YAML)."""
     dataset: Dict[str, Any] = {"path": str(Path(dataset_path))}
@@ -134,7 +156,7 @@ def build_job_config(
     env_cfg: Dict[str, Any] = {"type": environment}
     if environment_import_path:
         env_cfg = {"import_path": environment_import_path}
-    agent: Dict[str, Any] = {"import_path": AGENT_IMPORT_PATH, "kwargs": dict(agent_kwargs)}
+    agent: Dict[str, Any] = {"import_path": agent_import_path, "kwargs": dict(agent_kwargs)}
     if agent_env:
         agent["env"] = dict(agent_env)
     return {
@@ -169,6 +191,9 @@ def roles_from_specs(specs: List[str]) -> Dict[str, Dict[str, Any]]:
 
 __all__ = [
     "AGENT_IMPORT_PATH",
+    "DSH_IMPORT_PATH",
+    "DSH_PRESETS",
+    "dsh_kwargs",
     "PRESETS",
     "preset",
     "parse_role",

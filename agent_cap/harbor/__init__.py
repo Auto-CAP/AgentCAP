@@ -5,6 +5,8 @@ team strategies, per-request metering and the TEAS output files.
 
 * ``agent_cap.harbor.agent.CAPAgent`` - Harbor agent that runs an AgentCAP
   strategy on the host and executes tool calls in the task container.
+* ``agent_cap.harbor.dsh.DSHAgent`` - DeepSeek Harness (single agent or Agent
+  Team) running inside the task container.
 * ``agent_cap.harbor.tools`` - tool providers over ``environment.exec``.
 * ``agent_cap.harbor.adapters`` - benchmark -> Harbor task directories
   (imo-answerbench, nl2repo).

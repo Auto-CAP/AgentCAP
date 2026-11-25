@@ -142,6 +142,37 @@ python -m agent_cap.harbor run \
   --role 'executor=name=Qwen/Qwen3.5-27B,base_url=http://localhost:30000/v1,api_key=EMPTY'
 ```
 
+**DeepSeek Harness instead of CAPAgent** (`--harness dsh`). DeepSeek Harness
+runs inside the task container (setup installs Node and `@deepseek-ai/dsh`
+there), so `--dsh-base-url` must be reachable from the container; for a model
+server on this machine use the machine's IP, not `localhost`.
+
+```bash
+export DEEPSEEK_API_KEY=...
+python -m agent_cap.harbor run --harness dsh \
+  --benchmark nl2repo --dataset datasets/nl2repo \
+  --dsh-model deepseek-chat --dsh-base-url https://api.deepseek.com/v1 \
+  --dsh-api-key-env DEEPSEEK_API_KEY \
+  --dsh-teammates 2
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dsh-model` | required | model id accepted by the endpoint |
+| `--dsh-base-url` | required | API base URL, reachable from the task container |
+| `--dsh-api-key-env` | `DSH_API_KEY` | env var holding the API key; its value goes to `dsh` at run time and is never written to files |
+| `--dsh-protocol` | `openai-completions` | `openai-completions`, `openai-responses`, `anthropic-messages`, `deepseek-messages` |
+| `--dsh-teammates` | `0` | `0`: one agent. `K`: an Agent Team, a lead plus K teammates sharing `/workspace` |
+| `--dsh-context-window` | `131072` | model context size in tokens |
+| `--dsh-max-tokens` | `16384` | output limit per request |
+| `--dsh-reasoning-effort` | provider default | e.g. `high` |
+| `--dsh-version` | `0.2.0-rc.2` | `@deepseek-ai/dsh` version installed in the container |
+
+The general flags (`--concurrency`, `--task-names`, `--attempts`, `--env`, ...)
+work the same way. In DSH 0.2.0-rc.2 teammates use the lead's model. Results
+report usage per role (`lead`, then each teammate by name) and a team summary
+(teammates spawned and completed).
+
 A TEASBench agent config can replace the `--role` flags:
 `--teas-agent-yaml pipeline/configs/agents/imo-answerbench_gptoss_sglang.yaml`.
 For IMO answers that math-verify rejects, set `IMO_JUDGE_BASE_URL`,

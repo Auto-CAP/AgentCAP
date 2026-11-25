@@ -28,9 +28,23 @@ from agent_cap.harbor import jobspec
 def _add_job_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--benchmark", required=True, choices=sorted(jobspec.PRESETS))
     p.add_argument("--dataset", required=True, help="local Harbor dataset dir from `adapt`")
-    team = p.add_mutually_exclusive_group(required=True)
-    team.add_argument("--teas-agent-yaml", help="TEASBench agent YAML (pipeline/configs/agents/*.yaml)")
-    team.add_argument("--role", action="append", help="ROLE=name=...,base_url=...,api_key=... (repeatable)")
+    p.add_argument("--harness", choices=["capagent", "dsh"], default="capagent",
+                   help="capagent: AgentCAP strategies on the host; dsh: DeepSeek Harness in the container")
+    team = p.add_mutually_exclusive_group()
+    team.add_argument("--teas-agent-yaml", help="capagent: TEASBench agent YAML (pipeline/configs/agents/*.yaml)")
+    team.add_argument("--role", action="append", help="capagent: ROLE=name=...,base_url=...,api_key=... (repeatable)")
+    dsh = p.add_argument_group("DeepSeek Harness (--harness dsh)")
+    dsh.add_argument("--dsh-model", help="model id accepted by the endpoint")
+    dsh.add_argument("--dsh-base-url", help="API base URL, reachable from inside the task container")
+    dsh.add_argument("--dsh-api-key-env", default="DSH_API_KEY",
+                     help="name of the env var holding the API key (default DSH_API_KEY); the value is not written to files")
+    dsh.add_argument("--dsh-protocol", default="openai-completions",
+                     choices=["openai-completions", "openai-responses", "anthropic-messages", "deepseek-messages"])
+    dsh.add_argument("--dsh-teammates", type=int, default=0, help="0 = one agent; K = Agent Team with K teammates")
+    dsh.add_argument("--dsh-context-window", type=int, default=131072)
+    dsh.add_argument("--dsh-max-tokens", type=int, default=16384)
+    dsh.add_argument("--dsh-reasoning-effort", help="provider effort id, e.g. high")
+    dsh.add_argument("--dsh-version", default="0.2.0-rc.2", help="@deepseek-ai/dsh version installed in the container")
     p.add_argument("--strategy", help="override the preset strategy (single, plan-execute, ...)")
     p.add_argument("--max-turns", type=int)
     p.add_argument("--task-timeout-s", type=float, help="per-task deadline inside the agent")
@@ -45,6 +59,10 @@ def _add_job_args(p: argparse.ArgumentParser) -> None:
 
 
 def _job_from_args(args: argparse.Namespace):
+    if args.harness == "dsh":
+        return _dsh_job_from_args(args)
+    if not (args.teas_agent_yaml or args.role):
+        raise SystemExit("--harness capagent needs --role ... or --teas-agent-yaml")
     overrides: Dict[str, Any] = {
         "strategy": args.strategy,
         "max_turns": args.max_turns,
@@ -72,6 +90,43 @@ def _job_from_args(args: argparse.Namespace):
         n_tasks=args.n_tasks,
     )
     return config, verifier_env
+
+
+def _dsh_job_from_args(args: argparse.Namespace):
+    if not (args.dsh_model and args.dsh_base_url):
+        raise SystemExit("--harness dsh needs --dsh-model and --dsh-base-url")
+    kwargs = jobspec.dsh_kwargs(
+        args.benchmark,
+        {
+            "model": args.dsh_model,
+            "endpoint_url": args.dsh_base_url,
+            "api_key_env": args.dsh_api_key_env,
+            "protocol": args.dsh_protocol,
+            "teammates": args.dsh_teammates,
+            "context_window": args.dsh_context_window,
+            "max_tokens": args.dsh_max_tokens,
+            "reasoning_effort": args.dsh_reasoning_effort,
+            "dsh_version": args.dsh_version,
+        },
+    )
+    mode = f"dsh-team{args.dsh_teammates}" if args.dsh_teammates else "dsh"
+    job_name = args.job_name or f"{args.benchmark}-{mode}-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    config = jobspec.build_job_config(
+        dataset_path=Path(args.dataset).resolve(),
+        agent_kwargs=kwargs,
+        job_name=job_name,
+        jobs_dir=Path(args.jobs_dir).resolve(),
+        environment=args.env,
+        environment_import_path=args.env_import_path,
+        n_concurrent=args.concurrency,
+        n_attempts=args.attempts,
+        task_names=[t for t in (args.task_names or "").split(",") if t] or None,
+        n_tasks=args.n_tasks,
+        agent_import_path=jobspec.DSH_IMPORT_PATH,
+    )
+    if not os.environ.get(args.dsh_api_key_env):
+        print(f"note: ${args.dsh_api_key_env} is not set; DSH will send the key 'EMPTY'", file=sys.stderr)
+    return config, {}
 
 
 def cmd_adapt(args: argparse.Namespace) -> int:
