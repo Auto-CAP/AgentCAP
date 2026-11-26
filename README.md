@@ -23,7 +23,7 @@ The Harbor quick start below needs Python ≥ 3.12 and Docker. For the
 
 Harbor builds a container for each task, runs the agent against it, and grades
 the result in a separate container. Every run below has the same shape: a
-benchmark, a team (or another harness), and a model.
+benchmark, a harness (DeepSeek Harness, AgentCAP's own teams, Codex, ...), and a model.
 
 ### 1. Serve a model
 
@@ -44,24 +44,60 @@ git clone https://github.com/multimodal-art-projection/NL2RepoBench
 python -m agent_cap.harbor adapt nl2repo --source NL2RepoBench --out datasets/nl2repo
 ```
 
-This writes 104 Harbor tasks: the agent gets only `start.md` (the
-specification) and builds the repository; a separate verifier, built from the
-task's official evaluation image (pulled from ghcr.io on first use), runs the
-hidden tests and scores the fraction that pass.
+This writes 104 Harbor tasks, one per directory in `datasets/nl2repo/`. Each
+task is named after the open-source Python project the agent has to rebuild
+from a written specification (`start.md`); the original code is not in the container.
+A separate verifier container, built from the task's official evaluation image
+(pulled from ghcr.io on first use), runs the project's own tests and scores the
+fraction that pass.
 
-### 3. Single agent
+The examples use one task, **`math-verify`**: rebuild Hugging Face's
+[Math-Verify](https://github.com/huggingface/Math-Verify), a library that
+parses math answers (LaTeX or plain text) and checks whether two of them are
+equivalent. It has 192 tests. `--task-names` picks tasks by name
+(`ls datasets/nl2repo` lists them); without it, all 104 run, and
+`--concurrency 4` runs four at a time.
+
+### 3. DeepSeek Harness
+
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) runs inside the
+task container; setup installs Node and DSH there. `--meter` sends its model
+requests through AgentCAP's metering proxy on this machine, so the container
+reaches `localhost` and every request's tokens, TTFT and decode time are
+recorded.
+
+One DSH agent:
+
+```bash
+python -m agent_cap.harbor run --harness dsh --meter \
+  --benchmark nl2repo --dataset datasets/nl2repo --task-names math-verify \
+  --model Qwen/Qwen3.5-4B --base-url http://localhost:30000/v1
+```
+
+An Agent Team (a lead plus 2 teammates that share the workspace):
+
+```bash
+python -m agent_cap.harbor run --harness dsh --meter --ak teammates=2 \
+  --benchmark nl2repo --dataset datasets/nl2repo --task-names math-verify \
+  --model Qwen/Qwen3.5-4B --base-url http://localhost:30000/v1
+```
+
+With the DeepSeek API instead of a local server, the key is read from `DEEPSEEK_API_KEY`:
+`--model deepseek/deepseek-chat` (no `--base-url`). DSH options (`--dsh-version`,
+`--effort`, `--ak context_window=...`) are in [docs/harbor.md](docs/harbor.md#deepseek-harness---harness-dsh).
+
+### 4. AgentCAP single agent
+
+`--harness capagent` (the default) runs AgentCAP's own strategies. The agent
+loop and every model request run on this machine, and its `bash` and
+`str_replace_editor` calls run in the task container:
 
 ```bash
 python -m agent_cap.harbor run --benchmark nl2repo --dataset datasets/nl2repo --task-names math-verify \
   --model Qwen/Qwen3.5-4B --base-url http://localhost:30000/v1
 ```
 
-The agent loop and every model request run on this machine (so `localhost`
-works); its `bash` and `str_replace_editor` calls run in the task container.
-Drop `--task-names` to run all 104 tasks, and add `--concurrency 4` to run four
-at once.
-
-### 4. Plan-execute
+### 5. Plan-execute
 
 Both roles on the same endpoint:
 
@@ -83,7 +119,7 @@ python -m agent_cap.harbor run --benchmark nl2repo --dataset datasets/nl2repo --
   --role 'executor=name=Qwen/Qwen3.5-4B,base_url=http://localhost:30000/v1,api_key=EMPTY,use_streaming=true'
 ```
 
-### 5. Supervisor with workers
+### 6. Supervisor with workers
 
 The supervisor delegates each round to a worker by name (`DELEGATE coder: ...`)
 and stops with `DONE: ...`; workers have the tools:
@@ -97,11 +133,11 @@ python -m agent_cap.harbor run --benchmark nl2repo --dataset datasets/nl2repo --
 `--strategy sequential` and custom strategies work the same way; see
 [docs/agents/strategies.md](docs/agents/strategies.md).
 
-### 6. Other harnesses, same flags
+### 7. Other harnesses, same flags
 
-`--harness` swaps AgentCAP's strategies for another agent harness; the model
-flags stay the same. These harnesses run inside the task container, and
-AgentCAP's metering proxy on this machine records each of their model requests.
+Any agent Harbor ships runs the same way; like DSH, it runs in the task
+container, and the metering proxy (on by default for these) records each model
+request.
 
 ```bash
 # Codex
@@ -111,18 +147,12 @@ python -m agent_cap.harbor run --harness codex \
 # Claude Code
 python -m agent_cap.harbor run --harness claude-code \
   --benchmark nl2repo --dataset datasets/nl2repo --task-names math-verify --model anthropic/claude-sonnet-4-5
-
-# DeepSeek Harness as an Agent Team (lead + 2 teammates) on the local server
-python -m agent_cap.harbor run --harness dsh --ak teammates=2 --meter \
-  --benchmark nl2repo --dataset datasets/nl2repo --task-names math-verify \
-  --model Qwen/Qwen3.5-4B --base-url http://localhost:30000/v1
 ```
 
-Any agent Harbor ships works: `openhands`, `mini-swe-agent`, `gemini-cli`,
-`opencode`, ... (`harbor run --help` lists them). With `--meter`, requests go
-through the proxy on this machine, so `localhost` works for DeepSeek Harness too.
+Also `openhands`, `mini-swe-agent`, `gemini-cli`, `opencode`, ...
+(`harbor run --help` lists them).
 
-### 7. Results
+### 8. Results
 
 Each run writes `results/harbor/<job>/`:
 
